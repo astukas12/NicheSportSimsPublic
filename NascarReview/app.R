@@ -6,7 +6,7 @@ library(tidyverse)
 library(stringr)
 library(plotly)
 library(shinyjs)
-options(shiny.maxRequestSize = 30*1024^2)
+options(shiny.maxRequestSize = 40*1024^2)
 
 
 # Define UI
