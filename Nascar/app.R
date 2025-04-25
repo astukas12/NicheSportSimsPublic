@@ -156,7 +156,7 @@ process_input_data <- function(input_data) {
     # Calculate ProcessedRank
     dom_dt[, ProcessedRank := {
       ifelse(Rank == "Strategy", 0,
-             ifelse(Rank == "DomDead", -1,
+             ifelse(Rank == "DomDead", 999,
                     as.numeric(Rank)))
     }]
     
