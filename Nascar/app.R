@@ -173,7 +173,7 @@ process_input_data <- function(input_data) {
     # Calculate ProcessedRank
     fd_dom_dt[, ProcessedRank := {
       ifelse(Rank == "Strategy", 0, 
-             ifelse(Rank == "DomDead", -1, 
+             ifelse(Rank == "DomDead", 999, 
                     as.numeric(Rank)))
     }]
     
@@ -636,7 +636,7 @@ assign_fd_dominator_points <- function(race_results, fd_dominator_data, total_do
   if("Rank" %in% names(fd_dominator_data)) {
     fd_dominator_data[, ProcessedRank := {
       ifelse(Rank == "Strategy", 0,
-             ifelse(Rank == "DomDead", -1,
+             ifelse(Rank == "DomDead", 999,
                     as.numeric(Rank)))
     }]
     fd_dominator_data[, OriginalRank := Rank]
@@ -3302,7 +3302,7 @@ server <- function(input, output, session) {
               fluidRow(
                 column(6,
                        selectizeInput("dk_excluded_drivers", "Exclude Drivers:",
-                                      choices = NULL,
+                                      choices = NULL,  # This will be populated when lineups are calculated
                                       multiple = TRUE,
                                       options = list(
                                         plugins = list('remove_button'),
@@ -3393,15 +3393,14 @@ server <- function(input, output, session) {
                 )
               ),
               fluidRow(
-                column(6,
-                       selectizeInput("fd_excluded_drivers", "Exclude Drivers:",
-                                      choices = NULL,
-                                      multiple = TRUE,
-                                      options = list(
-                                        plugins = list('remove_button'),
-                                        placeholder = 'Click to select drivers to exclude'
-                                      ))
-                ),
+                selectizeInput("fd_excluded_drivers", "Exclude Drivers:",
+                               choices = NULL,  # This will be populated when lineups are calculated
+                               multiple = TRUE,
+                               options = list(
+                                 plugins = list('remove_button'),
+                                 placeholder = 'Click to select drivers to exclude'
+                               ))
+              ,
                 column(6,
                        numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", 
                                     value = 20, min = 1, max = 150)
@@ -3964,13 +3963,12 @@ server <- function(input, output, session) {
       # Create choices with names
       driver_choices <- setNames(driver_ids, driver_labels)
       
-      # Update the select input with choices - force server=FALSE
+      # Update the select input with choices
       updateSelectizeInput(
         session = session,
         inputId = "dk_excluded_drivers",
         choices = driver_choices,
-        selected = NULL,
-        server = FALSE  # Try setting this to FALSE
+        selected = character(0)  # Empty selection initially
       )
       
       
@@ -4120,13 +4118,12 @@ server <- function(input, output, session) {
       # Create choices with names
       driver_choices <- setNames(driver_ids, driver_labels)
       
-      # Update the select input with choices - force server=FALSE
+      # Update the select input with choices
       updateSelectizeInput(
         session = session,
         inputId = "fd_excluded_drivers",
         choices = driver_choices,
-        selected = NULL,
-        server = FALSE  # Try setting this to FALSE
+        selected = character(0)  # Empty selection initially
       )
       
 
@@ -4630,6 +4627,38 @@ server <- function(input, output, session) {
         ))
       }
     })
+  })
+  
+  observe({
+    # Update DraftKings excluded drivers whenever we visit the lineup builder tab
+    if(input$sidebar_menu == "lineup_builder" && !is.null(rv$dk_driver_exposure)) {
+      driver_data <- rv$dk_driver_exposure
+      driver_names <- driver_data$Name
+      driver_ids <- driver_data$DKName
+      driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
+      driver_choices <- setNames(driver_ids, driver_labels)
+      
+      updateSelectizeInput(
+        session = session,
+        inputId = "dk_excluded_drivers",
+        choices = driver_choices
+      )
+    }
+    
+    # Update FanDuel excluded drivers whenever we visit the lineup builder tab
+    if(input$sidebar_menu == "lineup_builder" && !is.null(rv$fd_driver_exposure)) {
+      driver_data <- rv$fd_driver_exposure
+      driver_names <- driver_data$Name
+      driver_ids <- driver_data$FDName
+      driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
+      driver_choices <- setNames(driver_ids, driver_labels)
+      
+      updateSelectizeInput(
+        session = session,
+        inputId = "fd_excluded_drivers",
+        choices = driver_choices
+      )
+    }
   })
   
   # Generate random FanDuel lineups
