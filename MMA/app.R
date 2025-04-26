@@ -11,7 +11,6 @@ library(data.table)
 library(lpSolve)
 library(memoise)
 library(webshot)
-library(memoise)
 
 
 cached_read_excel <- memoise(read_excel)
@@ -51,30 +50,18 @@ optimize_datatable <- function(dt, page_length = 25, class = "compact") {
 aggressive_gc <- function(verbose = FALSE) {
   # Free any large objects in global environment
   large_objects <- sapply(ls(envir = .GlobalEnv), function(x) {
-    objsize <- try(object.size(get(x, envir = .GlobalEnv)), silent = TRUE)
-    if(inherits(objsize, "try-error")) return(0)
-    return(objsize)
+    object.size(get(x, envir = .GlobalEnv))
   })
   
-  # Identify large objects (> 100MB) for targeted cleanup
-  large_obj_names <- names(large_objects)[large_objects > 1e8]
-  if(length(large_obj_names) > 0 && verbose) {
-    message("Large objects found: ", paste(large_obj_names, collapse=", "))
+  # Run garbage collection multiple times
+  for (i in 1:3) {
+    gc(verbose = verbose, full = TRUE, reset = TRUE)
   }
-  
-  # Run garbage collection multiple times with different settings
-  gc(verbose = verbose, full = TRUE, reset = TRUE)
-  Sys.sleep(0.1)  # Short pause to allow memory release
-  gc(verbose = verbose, full = TRUE)
   
   # On Linux/Unix systems (like ShinyApps.io), try to force memory release
   if (.Platform$OS.type == "unix") {
     try(system("sync", intern = TRUE), silent = TRUE)
   }
-  
-  # Return amount of memory freed in MB
-  mem_info <- gc()
-  return(invisible(NULL))
 }
 
 # Schedule more frequent memory cleanup
@@ -238,7 +225,7 @@ read_input_file <- function(file_path) {
       stop("FanDuel data must have a 'FDOwn' column")
     }
     
-
+    
     
     # Make sure Salary is numeric
     if (!is.numeric(dk_fighters$Salary)) {
@@ -908,8 +895,8 @@ process_fighter_scores <- function(sim_results, fighter_data, chunk_size = 250) 
   n_sims <- length(sim_ids)
   
   # Get unique fighters
-  fighters <- uniqueN(fighter_data, by = "NameID")
-  n_fighters <- fighters
+  fighters <- unique(fighter_data$NameID)
+  n_fighters <- length(fighters)
   
   # Create mapping from NameID to Name
   name_mapping <- fighter_data[, .(NameID, Name, Salary, OP)]
@@ -951,32 +938,55 @@ process_fighter_scores <- function(sim_results, fighter_data, chunk_size = 250) 
     chunk_sim_ids <- sim_ids[start_sim:end_sim]
     chunk_sim_data <- sim_results[SimID %in% chunk_sim_ids]
     
-    chunk_fighters <- data.table(
-      SimID = rep(chunk_sim_ids, each = n_fighters),
-      NameID = rep(fighters, times = length(chunk_sim_ids))
-    )
-    
-    # Join with name_mapping
-    chunk_fighters <- merge(chunk_fighters, name_mapping, by = "NameID", allow.cartesian = TRUE)
-    
-    # Create lookup tables for winners and losers for faster lookups
-    winners <- chunk_sim_data[, .(SimID, Name = Winner, WinnerScore)]
-    setkey(winners, SimID, Name)
-    
-    losers <- chunk_sim_data[, .(SimID, Name = Loser, LoserScore)]
-    setkey(losers, SimID, Name)
-    
-    # Join with winners and losers
-    chunk_scores <- merge(chunk_fighters, winners, by = c("SimID", "Name"), all.x = TRUE)
-    chunk_scores[, WinnerScore := ifelse(is.na(WinnerScore), 0, WinnerScore)]
-    
-    chunk_scores <- merge(chunk_scores, losers, by = c("SimID", "Name"), all.x = TRUE)
-    chunk_scores[, LoserScore := ifelse(is.na(LoserScore), 0, LoserScore)]
-    
-    # Calculate fantasy points
-    chunk_scores[, FantasyPoints := WinnerScore + LoserScore]
+    # Process each simulation in this chunk
+    for (sim in chunk_sim_ids) {
+      # Get results for this simulation
+      sim_data <- chunk_sim_data[SimID == sim]
       
-     
+      # Create lookup tables for winners and losers for faster lookups
+      winners <- sim_data[, .(Name = Winner, WinnerScore)]
+      setkey(winners, Name)
+      
+      losers <- sim_data[, .(Name = Loser, LoserScore)]
+      setkey(losers, Name)
+      
+      # Process each fighter
+      for (i in 1:n_fighters) {
+        f_id <- fighters[i]
+        fighter <- name_mapping[NameID == f_id]
+        
+        # Initialize fantasy points
+        fantasy_points <- 0
+        
+        # Check if fighter won 
+        winner_match <- winners[fighter$Name]
+        if (!is.na(winner_match$WinnerScore)) {
+          fantasy_points <- winner_match$WinnerScore
+        } else {
+          # Check if fighter lost
+          loser_match <- losers[fighter$Name]
+          if (!is.na(loser_match$LoserScore)) {
+            fantasy_points <- loser_match$LoserScore
+          }
+        }
+        
+        # Store the result
+        chunk_scores[row_counter, `:=`(
+          SimID = sim,
+          NameID = f_id,
+          Name = fighter$Name,
+          Salary = fighter$Salary,
+          OP = fighter$OP,
+          FantasyPoints = fantasy_points
+        )]
+        
+        row_counter <- row_counter + 1
+      }
+    }
+    
+    # Bind chunk to results - only bind the rows we actually filled
+    fighter_scores <- rbindlist(list(fighter_scores, chunk_scores[1:(row_counter-1)]), use.names = TRUE)
+    
     # Garbage collection
     if (chunk %% 3 == 0 || chunk == n_chunks) {
       cat("Processed fighter scores chunk", chunk, "of", n_chunks, "\n")
@@ -1625,12 +1635,16 @@ analyze_fighter_performance <- function(fighter_scores, sim_results) {
   
   # Process win stats
   win_stats <- sim_results[, .(
-    Name = Winner,
-    Wins = .N
-  )]
-  win_stats[, WinPct := Wins / n_sims_per_fighter * 100]
+    Wins = .N,
+    WinPct = .N / n_sims_per_fighter * 100
+  ), by = .(Name = Winner)]
   
-
+  # Process loss stats - we'll still calculate this but won't include it in the final output
+  loss_stats <- sim_results[, .(
+    Losses = .N,
+    LossPct = .N / n_sims_per_fighter * 100
+  ), by = .(Name = Loser)]
+  
   # Merge stats efficiently using keys
   setkey(fighters_base, Name)
   setkey(win_stats, Name)
@@ -2014,7 +2028,7 @@ server <- function(input, output, session) {
         }
         
         rv$name_id_mapping <- create_name_id_mapping(fighter_data)
-   
+        
         
         datatable(
           fighter_data,
