@@ -153,28 +153,37 @@ process_input_data <- function(input_data) {
     dom_dt <- dom_dt[!(is.na(PtLow) & is.na(PtHigh) & is.na(FinLow) & is.na(FinHigh) & 
                          is.na(OR) & is.na(TierMin) & is.na(TierMax))]
     
-    # Calculate ProcessedRank
     dom_dt[, ProcessedRank := {
-      ifelse(Rank == "Strategy", 0,
-             ifelse(Rank == "DomDead", 999,
-                    as.numeric(Rank)))
+      sapply(Rank, function(x) {
+        if(x == "Strategy") return(0)
+        if(x == "DomDead") return(999)
+        # Try to convert to numeric, return 999 if it fails
+        num <- suppressWarnings(as.numeric(as.character(x)))
+        if(is.na(num)) return(999) else return(num)
+      })
     }]
+  
     
     dom_dt[, OriginalRank := Rank]
     setorder(dom_dt, ProcessedRank)
     dom_dt
   } else data.table()
   
+
   # Process FD dominator data if available
   processed_fd_dominator <- if(!is.null(fd_dom_data)) {
     fd_dom_dt <- as.data.table(fd_dom_data)
     fd_dom_dt <- fd_dom_dt[!is.na(PtLow) | !is.na(PtHigh)]
     
-    # Calculate ProcessedRank
+    # Calculate ProcessedRank safely without warnings
     fd_dom_dt[, ProcessedRank := {
-      ifelse(Rank == "Strategy", 0, 
-             ifelse(Rank == "DomDead", 999, 
-                    as.numeric(Rank)))
+      sapply(Rank, function(x) {
+        if(x == "Strategy") return(0)
+        if(x == "DomDead") return(999)
+        # Try to convert to numeric, return 999 if it fails
+        num <- suppressWarnings(as.numeric(as.character(x)))
+        if(is.na(num)) return(999) else return(num)
+      })
     }]
     
     fd_dom_dt[, OriginalRank := Rank]
