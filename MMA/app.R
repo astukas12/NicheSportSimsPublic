@@ -1867,7 +1867,7 @@ calculate_dk_fighter_exposure <- function(optimal_lineups, fantasy_analysis, ran
   
   
   # Calculate leverage
-  metrics_data[!is.na(DKOwn) & !is.na(Exposure), Leverage := Exposure - DKOwn]
+  metrics_data[!is.na(DKOwn) & !is.na(Exposure), Leverage := Exposure - (DKOwn*100)]
   
   # Sort by OptimalRate
   setorder(metrics_data, -OptimalRate)
