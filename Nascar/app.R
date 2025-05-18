@@ -1414,7 +1414,8 @@ find_dk_optimal_lineups <- function(sim_data, k = 5) {
 # FanDuel optimal lineup finder with memory optimizations
 find_fd_optimal_lineups <- function(sim_data, k = 5) {
   # Ensure data.table
-  setDT(sim_data)
+  setDT(sim_data) %>% 
+    filter(FDSalary > 0)
   
   # Calculate PPD directly instead of adding a column to save memory
   # Use vector operations instead of adding columns 
