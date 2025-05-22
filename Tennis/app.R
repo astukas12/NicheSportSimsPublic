@@ -417,21 +417,15 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       
       # Create match info for finding similar historical matches
       tour <- match_players$Tour[1]
-      surface <- match_players$Surface[1]
       is_straight_sets <- as.integer(outcome_type == "SS")
       
       # Find similar historical matches
       similar_matches <- hist_dt[
         Tour == tour & 
-          surface == surface & 
           straight_sets == is_straight_sets
       ]
       
-      # If not enough matches, relax straight_sets constraint
-      if (nrow(similar_matches) < 10) {
-        similar_matches <- hist_dt[Tour == tour & surface == surface]
-      }
-      
+     
       # Calculate similarity scores
       if (nrow(similar_matches) > 0) {
         similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
@@ -2634,7 +2628,8 @@ server <- function(input, output, session) {
       player_cols <- grep(player_pattern, names(lineups_df), value = TRUE)
       
       # Create a copy for exporting
-      lineups_for_export <- lineups_df
+      lineups_for_export <- lineups_df %>% 
+        filter(Top1Count > 0)
       
       # Select columns for download
       display_cols <- c(
