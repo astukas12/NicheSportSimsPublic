@@ -437,8 +437,8 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
         similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
         setorder(similar_matches, odds_diff)
         
-        # Select top 50 most similar matches or all if fewer
-        n_similar <- min(50, nrow(similar_matches))
+        # Select top 25 most similar matches or all if fewer
+        n_similar <- min(25, nrow(similar_matches))
         top_matches <- similar_matches[1:n_similar]
         
         # Sample scores with replacement
