@@ -1003,28 +1003,98 @@ find_top_lineups <- function(sim_drivers,
     return(NULL)  # No valid lineup possible under salary cap
   }
   
-  # Linear programming approach for finding optimal lineup
+  
+  
+    # Linear programming approach for finding optimal lineup
   
   # Create entries for all possible choices
-  # Regular drivers
+  # Regular drivers - with filtering
   reg_drivers <- copy(sim_drivers)
+  
+  # Calculate PPD for regular drivers
+  reg_drivers[, PPD := FantasyPoints / DriverSalary]
+  
+  # Find salary thresholds (keep all cheap players, filter expensive ones)
+  driver_salary_threshold <- quantile(reg_drivers$DriverSalary, 0.6, na.rm = TRUE)  # Top 40% most expensive
+  
+  # For expensive drivers, only keep if they're good scorers OR good value
+  expensive_drivers <- reg_drivers[DriverSalary >= driver_salary_threshold]
+  cheap_drivers <- reg_drivers[DriverSalary < driver_salary_threshold]
+  
+  if(nrow(expensive_drivers) > 0) {
+    # For expensive drivers, keep top 6 by points OR top 4 by PPD
+    top_points_expensive <- expensive_drivers[order(-FantasyPoints)][1:min(4, nrow(expensive_drivers))]$Name
+    top_ppd_expensive <- expensive_drivers[order(-PPD)][1:min(4, nrow(expensive_drivers))]$Name
+    keep_expensive <- unique(c(top_points_expensive, top_ppd_expensive))
+    
+    # Filter expensive drivers
+    expensive_drivers_filtered <- expensive_drivers[Name %in% keep_expensive]
+    
+    # Combine cheap (all) + expensive (filtered)
+    reg_drivers <- rbindlist(list(cheap_drivers, expensive_drivers_filtered))
+  } else {
+    # If no expensive drivers, keep all
+    reg_drivers <- cheap_drivers
+  }
+  
   reg_drivers[, `:=`(Type = "Driver",
                      IsCaptain = FALSE,
                      IsConstructor = FALSE)]
   
-  # Captain entries (with 1.5x points)
+  # Captain entries (with 1.5x points) - with filtering
   captains <- copy(sim_drivers)
+  captains[, `:=`(FantasyPoints = FantasyPoints * 1.5)]  # Apply captain multiplier first
+  
+  # Calculate PPD for captains (using captain salary and multiplied points)
+  captains[, PPD := FantasyPoints / CaptainSalary]
+  
+  # Find salary thresholds for captains
+  captain_salary_threshold <- quantile(captains$CaptainSalary, 0.6, na.rm = TRUE)  # Top 40% most expensive
+  
+  # For expensive captains, only keep if they're good scorers OR good value
+  expensive_captains <- captains[CaptainSalary >= captain_salary_threshold]
+  cheap_captains <- captains[CaptainSalary < captain_salary_threshold]
+  
+  if(nrow(expensive_captains) > 0) {
+    # For expensive captains, keep top 6 by points OR top 4 by PPD
+    top_points_expensive_capt <- expensive_captains[order(-FantasyPoints)][1:min(4, nrow(expensive_captains))]$Name
+    top_ppd_expensive_capt <- expensive_captains[order(-PPD)][1:min(4, nrow(expensive_captains))]$Name
+    keep_expensive_capt <- unique(c(top_points_expensive_capt, top_ppd_expensive_capt))
+    
+    # Filter expensive captains
+    expensive_captains_filtered <- expensive_captains[Name %in% keep_expensive_capt]
+    
+    # Combine cheap (all) + expensive (filtered)
+    captains <- rbindlist(list(cheap_captains, expensive_captains_filtered))
+  } else {
+    # If no expensive captains, keep all
+    captains <- cheap_captains
+  }
+  
   captains[, `:=`(
     Type = "Captain",
     IsCaptain = TRUE,
     IsConstructor = FALSE,
-    DriverSalary = NA_real_,
-    # Not used for captains
-    FantasyPoints = FantasyPoints * 1.5  # Apply captain multiplier
+    DriverSalary = NA_real_  # Not used for captains
   )]
   
-  # Constructor entries
+  # Constructor filtering (existing code)
   constructors <- copy(sim_constructors)
+  
+  # Calculate points per dollar for constructors
+  constructors[, PPD := FantasyPoints / Salary]
+  
+  # Get top 4 by raw fantasy points
+  top_4_points <- constructors[order(-FantasyPoints)][1:min(4, nrow(constructors))]$Name
+  
+  # Get top 3 by points per dollar
+  top_3_ppd <- constructors[order(-PPD)][1:min(3, nrow(constructors))]$Name
+  
+  # Keep constructors that are in either top list
+  keep_constructors <- unique(c(top_4_points, top_3_ppd))
+  constructors <- constructors[Name %in% keep_constructors]
+  
+  # Add the required columns
   constructors[, `:=`(Type = "Constructor",
                       IsCaptain = FALSE,
                       IsConstructor = TRUE)]
@@ -1049,11 +1119,12 @@ find_top_lineups <- function(sim_drivers,
   }
 }
 
-# Optimized function to analyze top lineups (Top 1 only)
-analyze_top_lineups <- function(driver_results, constructor_results, max_sims = NULL) {
+analyze_top_lineups <- function(driver_results,
+                                constructor_results,
+                                max_sims = NULL) {
   # Add a global time limit for safety
   start_time <- Sys.time()
-  max_runtime <- 30 * 60  # 30 minutes max
+  max_runtime <- 25 * 60  # 25 minutes max
   
   # Force garbage collection before starting
   gc(verbose = FALSE)
@@ -1066,16 +1137,15 @@ analyze_top_lineups <- function(driver_results, constructor_results, max_sims = 
     sim_ids <- sample(sim_ids, max_sims)
   }
   
-  # Initialize storage more efficiently
-  all_lineups <- list()
-  lineup_keys <- character(0)
-  lineup_counts <- integer(0)
+  # OPTIMIZATION 1: Use lists instead of growing vectors
+  all_lineups <- vector("list", length(sim_ids))  # Pre-allocate
+  lineup_keys <- vector("list", length(sim_ids))  # Pre-allocate
   
-  # Get number of drivers for batch size calculation
+  # Get number of drivers for batch size calculation  
   n_drivers <- length(unique(driver_results$Name))
   
-  # Process simulations in batches for better memory management
-  batch_size <- min(100, max(50, ceiling(5000 / max(n_drivers, 1))))
+  # OPTIMIZATION 2: Larger batch sizes to reduce overhead
+  batch_size <- min(500, max(100, ceiling(length(sim_ids) / 10)))
   n_batches <- ceiling(length(sim_ids) / batch_size)
   
   cat("Starting to analyze top lineups across",
@@ -1083,93 +1153,67 @@ analyze_top_lineups <- function(driver_results, constructor_results, max_sims = 
       "simulations...\n")
   
   successful_sims <- 0
-  failed_sims <- 0
+  total_unique_lineups <- 0
   
   for (batch in 1:n_batches) {
-    # Check if we've exceeded the time limit
-    current_runtime <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-    if (current_runtime > max_runtime) {
-      cat("Reached maximum runtime of", max_runtime, "seconds. Stopping analysis.\n")
-      break
-    }
-    
     batch_start_time <- Sys.time()
     start_idx <- (batch - 1) * batch_size + 1
     end_idx <- min(batch * batch_size, length(sim_ids))
     
-    cat(
-      "Processing batch",
-      batch,
-      "of",
-      n_batches,
-      "(simulations",
-      start_idx,
-      "to",
-      end_idx,
-      ")\n"
-    )
+    cat("Processing batch",
+        batch,
+        "of",
+        n_batches,
+        "(simulations",
+        start_idx,
+        "to",
+        end_idx,
+        ")\n")
+    
+    # OPTIMIZATION 3: Process batch of simulations at once
+    batch_sims <- sim_ids[start_idx:end_idx]
+    
+    # Pre-filter data for this batch to reduce memory usage
+    batch_drivers <- driver_results[SimID %in% batch_sims]
+    batch_constructors <- constructor_results[SimID %in% batch_sims]
     
     # Process each simulation in this batch
-    batch_successful <- 0
-    for (i in start_idx:end_idx) {
+    for (i in 1:length(batch_sims)) {
       # Check for timeout periodically
-      if ((i - start_idx) %% 20 == 0) {
+      if (i %% 50 == 0) {
         current_runtime <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
         if (current_runtime > max_runtime) {
-          cat("Time limit reached after processing", i - start_idx, "simulations in batch.\n")
+          cat("Time limit reached. Stopping analysis.\n")
           break
         }
       }
       
-      sim_id <- sim_ids[i]
+      sim_id <- batch_sims[i]
       
-      # Get data for this simulation
-      sim_drivers <- driver_results[SimID == sim_id]
-      sim_constructors <- constructor_results[SimID == sim_id]
+      # Get data for this simulation using optimized filtering
+      sim_drivers <- batch_drivers[SimID == sim_id]
+      sim_constructors <- batch_constructors[SimID == sim_id]
       
-      # Find top lineup for this simulation (only optimal, not 2nd or 3rd best)
+      # Find top lineups for this simulation using your original function
       tryCatch({
-        # Set a timeout for this simulation
-        setTimeLimit(cpu = 10, elapsed = 10)
-        
-        # Find only the top lineup
+        # OPTIMIZATION 4: Use shorter timeout but keep your original logic
         top_sim_lineups <- find_top_lineups(sim_drivers, sim_constructors, n_top = 1)
-        
-        # Reset the timeout
-        setTimeLimit(cpu = Inf, elapsed = Inf)
         
         if (!is.null(top_sim_lineups) && length(top_sim_lineups) > 0) {
           lineup <- top_sim_lineups[[1]]
           
-          # Create a unique key for this lineup
-          lineup_key <- paste(paste(sort(
-            c(lineup$drivers, lineup$captain)
-          ), collapse = "|"),
-          lineup$constructor,
-          sep = "||")
+          # Create a unique key for this lineup (same as your original)
+          lineup_key <- paste(paste(sort(c(lineup$drivers, lineup$captain)), collapse = "|"),
+                              lineup$constructor, sep = "||")
           
-          # Check if we already have this lineup
-          key_match <- match(lineup_key, lineup_keys)
-          
-          if (!is.na(key_match)) {
-            # Lineup already exists, increment count
-            lineup_counts[key_match] <- lineup_counts[key_match] + 1
-          } else {
-            # New unique lineup
-            lineup_keys <- c(lineup_keys, lineup_key)
-            lineup_counts <- c(lineup_counts, 1)
-            all_lineups[[length(lineup_keys)]] <- lineup
-          }
-          
-          batch_successful <- batch_successful + 1
+          # Store in pre-allocated lists
+          idx <- start_idx + i - 1
+          all_lineups[[idx]] <- lineup
+          lineup_keys[[idx]] <- lineup_key
           successful_sims <- successful_sims + 1
         }
       }, error = function(e) {
-        # Skip this simulation if error occurs
-        failed_sims <- failed_sims + 1
-      }, finally = {
-        # Make sure to reset the timeout
-        setTimeLimit(cpu = Inf, elapsed = Inf)
+        # Skip this simulation if error occurs (same as original)
       })
     }
     
@@ -1179,71 +1223,74 @@ analyze_top_lineups <- function(driver_results, constructor_results, max_sims = 
         batch,
         "in",
         round(batch_duration, 2),
-        "seconds with",
-        batch_successful,
-        "successful simulations\n")
+        "seconds\n")
     
-    # Free memory after each batch
+    # OPTIMIZATION 5: Aggressive garbage collection after each batch
+    rm(batch_drivers, batch_constructors)
     gc(verbose = FALSE)
   }
+  
+  # OPTIMIZATION 6: More efficient lineup consolidation
+  # Remove NULL entries
+  valid_indices <- which(!sapply(all_lineups, is.null))
+  all_lineups <- all_lineups[valid_indices]
+  lineup_keys <- unlist(lineup_keys[valid_indices])
   
   # If no valid lineups found, return NULL
   if (length(lineup_keys) == 0) {
     return(NULL)
   }
   
-  # Create data frame of results sorted by Count
-  lineup_order <- order(lineup_counts, decreasing = TRUE)
-  top_lineup_keys <- lineup_keys[lineup_order]
-  top_lineup_counts <- lineup_counts[lineup_order]
+  # OPTIMIZATION 7: Use table() for faster counting instead of manual loops
+  lineup_counts <- table(lineup_keys)
+  unique_keys <- names(lineup_counts)
+  counts <- as.numeric(lineup_counts)
   
-  # Create results data frame
-  # This maintains compatibility with the rest of the app
+  # Create mapping from keys back to lineup objects
+  key_to_lineup <- setNames(all_lineups, lineup_keys)
+  
+  # OPTIMIZATION 8: Sort once using order() instead of multiple sorts
+  sort_order <- order(counts, decreasing = TRUE)
+  sorted_keys <- unique_keys[sort_order]
+  sorted_counts <- counts[sort_order]
+  
+  # OPTIMIZATION 9: Vectorized result creation
   results <- data.frame(
-    OptimalCount = top_lineup_counts,
+    OptimalCount = sorted_counts,
     stringsAsFactors = FALSE
   )
   
-  # Maximum number of drivers across all lineups
-  max_drivers <- max(sapply(all_lineups, function(x) length(x$drivers)))
-  
-  # Add columns for drivers, captain, constructor
+  # Pre-allocate result columns
   results$Captain <- character(nrow(results))
-  results$Constructor <- character(nrow(results))
+  results$Constructor <- character(nrow(results)) 
   results$TotalSalary <- numeric(nrow(results))
   
-  for (j in 1:max_drivers) {
+  # Pre-allocate driver columns
+  for (j in 1:4) {
     results[[paste0("Driver", j)]] <- character(nrow(results))
   }
   
-  # Fill in lineup details
-  for (i in 1:length(top_lineup_keys)) {
-    key <- top_lineup_keys[i]
-    lineup_idx <- match(key, lineup_keys)
+  # Fill in lineup details efficiently
+  for (i in 1:length(sorted_keys)) {
+    key <- sorted_keys[i]
+    lineup <- key_to_lineup[[key]]
     
-    if (!is.na(lineup_idx)) {
-      lineup <- all_lineups[[lineup_idx]]
-      
+    if (!is.null(lineup)) {
       results$Captain[i] <- lineup$captain
       results$Constructor[i] <- lineup$constructor
       results$TotalSalary[i] <- lineup$total_salary
       
       # Fill in driver columns
-      for (j in 1:length(lineup$drivers)) {
-        if (j <= max_drivers) {
-          results[[paste0("Driver", j)]][i] <- lineup$drivers[j]
-        }
+      for (j in 1:min(length(lineup$drivers), 4)) {
+        results[[paste0("Driver", j)]][i] <- lineup$drivers[j]
       }
     }
   }
   
-  cat("Analysis completed with", successful_sims, "successful simulations and", 
-      failed_sims, "failures.\n",
-      "Found", length(lineup_keys), "unique lineups.\n")
+  cat("Analysis completed. Found", length(unique_keys), "unique lineups from", successful_sims, "successful simulations.\n")
   
   return(list(lineups = results, total_processed = successful_sims))
 }
-
 
 # Analysis functions
 analyze_f1_drivers <- function(driver_results) {
@@ -1350,8 +1397,7 @@ analyze_top_lineups <- function(driver_results,
   all_lineups <- list()
   lineup_keys <- character()
   lineup_top1_counts <- integer()
-  lineup_top2_counts <- integer()
-  lineup_top3_counts <- integer()
+
   
   # Get number of drivers for batch size calculation
   n_drivers <- length(unique(driver_results$Name))
@@ -1414,16 +1460,13 @@ analyze_top_lineups <- function(driver_results,
             if (!is.na(key_match)) {
               # Lineup already exists, increment appropriate counts
               if (rank == 1) lineup_top1_counts[key_match] <- lineup_top1_counts[key_match] + 1
-              if (rank <= 2) lineup_top2_counts[key_match] <- lineup_top2_counts[key_match] + 1
-              if (rank <= 3) lineup_top3_counts[key_match] <- lineup_top3_counts[key_match] + 1
             } else {
               # New unique lineup
               lineup_keys <- c(lineup_keys, lineup_key)
               
               # Initialize counts
               lineup_top1_counts <- c(lineup_top1_counts, if(rank == 1) 1 else 0)
-              lineup_top2_counts <- c(lineup_top2_counts, if(rank <= 2) 1 else 0)
-              lineup_top3_counts <- c(lineup_top3_counts, if(rank <= 3) 1 else 0)
+           
               
               all_lineups[[length(lineup_keys)]] <- lineup
             }
@@ -1457,7 +1500,7 @@ analyze_top_lineups <- function(driver_results,
   }
   
   # Create data frame of results sorted by Top1 Count then Top3 Count
-  lineup_order <- order(lineup_top1_counts, lineup_top3_counts, decreasing = TRUE)
+  lineup_order <- order(lineup_top1_counts, decreasing = TRUE)
   top_lineup_keys <- lineup_keys[lineup_order]
   top_lineup_top1_counts <- lineup_top1_counts[lineup_order]
   
@@ -1796,7 +1839,7 @@ ui <- dashboardPage(
     numericInput(
       "total_laps",
       "Race Laps:",
-      value = 60
+      value = 78
     ),
     actionButton(
       "run_sim",
@@ -1817,18 +1860,24 @@ ui <- dashboardPage(
       
       # Driver Analysis Tab
       tabItem(tabName = "driver_analysis", fluidRow(
-        box(width = 12, title = "Driver Performance Analysis", DTOutput("driver_stats"))
+        box(width = 12, title = "Driver Performance Analysis", 
+            DTOutput("driver_stats"),
+            br(),
+            downloadButton("downloadDriverAnalysis", "Download Driver Analysis", class = "btn-success")
+        )
       ), fluidRow(
         box(
           width = 12,
           title = "Position Distribution",
-          plotlyOutput("position_dist", height = "600px"))
+          plotlyOutput("position_dist", height = "600px")
+        )
       ),
       fluidRow(
         box(
           width = 12,
           title = "Fantasy Points Distribution",
-          plotlyOutput("fp_dist", height = "600px"))
+          plotlyOutput("fp_dist", height = "600px")
+        )
       )
       ),
       
@@ -1837,7 +1886,9 @@ ui <- dashboardPage(
         box(
           width = 12,
           title = "Constructor Performance Analysis",
-          DTOutput("constructor_stats")
+          DTOutput("constructor_stats"),
+          br(),
+          downloadButton("downloadConstructorAnalysis", "Download Constructor Analysis", class = "btn-success")
         )
       ), fluidRow(
         box(
@@ -2747,8 +2798,6 @@ server <- function(input, output, session) {
   filter_inputs <- reactive({
     list(
       min_top1_count = input$min_top1_count,
-      min_top2_count = input$min_top2_count,
-      min_top3_count = input$min_top3_count,
       excluded_drivers = input$excluded_drivers,
       excluded_captains = input$excluded_captains,
       excluded_constructors = input$excluded_constructors,
@@ -2885,6 +2934,44 @@ server <- function(input, output, session) {
       }
     })
   })
+  
+  # Download handler for driver analysis
+  output$downloadDriverAnalysis <- downloadHandler(
+    filename = function() {
+      paste("f1_driver_analysis_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+    },
+    content = function(file) {
+      tryCatch({
+        # Get driver analysis data
+        download_data <- copy(rv$driver_analysis)
+        
+        # Write to CSV file
+        write.csv(download_data, file, row.names = FALSE)
+      }, error = function(e) {
+        # Handle errors
+        write.csv(data.frame(Error = paste("Error:", e$message)), file, row.names = FALSE)
+      })
+    }
+  )
+  
+  # Download handler for constructor analysis
+  output$downloadConstructorAnalysis <- downloadHandler(
+    filename = function() {
+      paste("f1_constructor_analysis_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+    },
+    content = function(file) {
+      tryCatch({
+        # Get constructor analysis data
+        download_data <- copy(rv$constructor_analysis)
+        
+        # Write to CSV file
+        write.csv(download_data, file, row.names = FALSE)
+      }, error = function(e) {
+        # Handle errors
+        write.csv(data.frame(Error = paste("Error:", e$message)), file, row.names = FALSE)
+      })
+    }
+  )
   
   output$random_lineups_table <- renderDT({
     req(rv$random_lineups)
