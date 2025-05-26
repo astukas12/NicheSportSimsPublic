@@ -1052,7 +1052,7 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
         
         # Add to match scores
         match_scores[[length(match_scores) + 1]] <- outcome_scores
-      }S
+      }
     }
     
     # Combine all outcomes for this match
