@@ -280,8 +280,8 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
   dk_dt <- as.data.table(dk_data)
   hist_dt <- as.data.table(historical_data)
   
-  # Create indexes on historical data
-  setkey(hist_dt, Tour, surface, straight_sets)
+  # Create indexes on historical data - now including best_of
+  setkey(hist_dt, Tour, best_of, straight_sets)
   
   # Get all unique matches
   matches <- unique(dk_dt$`Game Info`)
@@ -322,7 +322,6 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     
     p1_nss <- p1_ml - p1_ss
     p2_nss <- p2_ml - p2_ss
-    
     
     # Normalize to 1
     p1_ss_prob <- p1_ss / total_ml_prob
@@ -419,20 +418,38 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       tour <- match_players$Tour[1]
       is_straight_sets <- as.integer(outcome_type == "SS")
       
-      # Find similar historical matches
+      # Determine best_of based on tour
+      best_of_value <- ifelse(tour == "ATP", 5, 3)
+      
+      # Find similar historical matches - now including best_of
       similar_matches <- hist_dt[
         Tour == tour & 
+          best_of == best_of_value &
           straight_sets == is_straight_sets
       ]
       
-     
+      # If not enough matches, relax straight_sets but keep best_of
+      if (nrow(similar_matches) < 10) {
+        similar_matches <- hist_dt[
+          Tour == tour &
+            best_of == best_of_value
+        ]
+      }
+      
+      # If still not enough matches, relax best_of constraint
+      if (nrow(similar_matches) < 10) {
+        similar_matches <- hist_dt[
+          Tour == tour
+        ]
+      }
+      
       # Calculate similarity scores
       if (nrow(similar_matches) > 0) {
         similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
         setorder(similar_matches, odds_diff)
         
         # Select top 25 most similar matches or all if fewer
-        n_similar <- min(25, nrow(similar_matches))
+        n_similar <- min(40, nrow(similar_matches))
         top_matches <- similar_matches[1:n_similar]
         
         # Sample scores with replacement
@@ -808,10 +825,13 @@ find_similar_matches <- function(current_match, historical_data, n_matches = 50,
     cache <- get("MATCH_CACHE", envir = .GlobalEnv)
   }
   
-  # Create cache key
+  # Determine best_of based on tour
+  best_of_value <- ifelse(current_match$Tour == "ATP", 5, 3)
+  
+  # Create cache key including best_of
   cache_key <- paste(
     current_match$Tour,
-    current_match$Surface,
+    best_of_value,
     current_match$straight_sets,
     round(current_match$WIO, 2),  # Round to reduce key variations
     round(current_match$LIO, 2),
@@ -830,18 +850,25 @@ find_similar_matches <- function(current_match, historical_data, n_matches = 50,
     hist_dt <- historical_data
   }
   
-  # Filter historical data efficiently
+  # Filter historical data efficiently - now including best_of
   filtered_data <- hist_dt[
     Tour == current_match$Tour & 
-      surface == current_match$Surface & 
+      best_of == best_of_value &
       straight_sets == current_match$straight_sets
   ]
   
-  # If not enough matches, relax straight_sets constraint
+  # If not enough matches, relax straight_sets constraint but keep best_of
   if (nrow(filtered_data) < 10) {
     filtered_data <- hist_dt[
-      Tour == current_match$Tour & 
-        surface == current_match$Surface
+      Tour == current_match$Tour &
+        best_of == best_of_value
+    ]
+  }
+  
+  # If still not enough matches, relax best_of constraint
+  if (nrow(filtered_data) < 10) {
+    filtered_data <- hist_dt[
+      Tour == current_match$Tour
     ]
   }
   
@@ -857,6 +884,7 @@ find_similar_matches <- function(current_match, historical_data, n_matches = 50,
   
   return(result)
 }
+
 
 generate_match_score <- function(current_match, historical_data, cache = NULL) {
   # Find similar matches
@@ -883,14 +911,13 @@ generate_match_score <- function(current_match, historical_data, cache = NULL) {
 }
 
 
-# Pre-simulate all match outcomes once
 pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
   # Convert to data.table for performance
   dk_dt <- as.data.table(dk_data)
   hist_dt <- as.data.table(historical_data)
   
-  # Create indexes on historical data for faster lookups
-  setkey(hist_dt, Tour, surface, straight_sets)
+  # Create indexes on historical data for faster lookups - now including best_of
+  setkey(hist_dt, Tour, best_of, straight_sets)
   
   # Get all unique matches
   matches <- unique(dk_dt$`Game Info`)
@@ -958,24 +985,35 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
       # Only generate samples if probability > 0
       if (probability > 0) {
         # Create match info for similarity matching
+        tour <- p1$Tour
+        best_of_value <- ifelse(tour == "ATP", 5, 3)
+        
         match_info <- list(
-          Tour = p1$Tour,
-          Surface = p1$Surface,
+          Tour = tour,
+          best_of = best_of_value,
           straight_sets = ifelse(outcome == "SS", 1, 0),
           WIO = winner_prob,
           LIO = loser_prob
         )
         
-        # Find similar historical matches
+        # Find similar historical matches - now including best_of
         similar_matches <- hist_dt[
           Tour == match_info$Tour & 
-            surface == match_info$Surface & 
+            best_of == match_info$best_of &
             straight_sets == match_info$straight_sets
         ]
         
-        # If not enough matches, relax straight_sets constraint
+        # If not enough matches, relax straight_sets constraint but keep best_of
         if (nrow(similar_matches) < 10) {
-          similar_matches <- hist_dt[Tour == match_info$Tour & surface == match_info$Surface]
+          similar_matches <- hist_dt[
+            Tour == match_info$Tour &
+              best_of == match_info$best_of
+          ]
+        }
+        
+        # If still not enough matches, relax best_of constraint
+        if (nrow(similar_matches) < 10) {
+          similar_matches <- hist_dt[Tour == match_info$Tour]
         }
         
         # Generate n_samples scores
@@ -1760,7 +1798,6 @@ server <- function(input, output, session) {
       rv$score_history <- rv$score_history %>%
         mutate(
           Tour = as.factor(Tour),
-          surface = as.factor(surface),
           best_of = as.integer(best_of),
           w_dk_score = as.numeric(w_dk_score),
           l_dk_score = as.numeric(l_dk_score),
