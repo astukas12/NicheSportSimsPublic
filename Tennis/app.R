@@ -1052,7 +1052,7 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
         
         # Add to match scores
         match_scores[[length(match_scores) + 1]] <- outcome_scores
-      }
+      }S
     }
     
     # Combine all outcomes for this match
@@ -1393,7 +1393,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
           new_counts <- list(
             Count = 1,
             Top1Count = ifelse(rank == 1, 1, 0),
-            Top2Count = ifelse(rank == 2, 1, 0),
+            Top2Count = ifelse(rank <= 2, 1, 0),
             Top3Count = ifelse(rank <= 3, 1, 0),
             Top5Count = ifelse(rank <= 5, 1, 0)
           )
