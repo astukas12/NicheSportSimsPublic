@@ -273,32 +273,45 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
 
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
-  start_time <- Sys.time()
-  cat("Starting batch simulation with", n_simulations, "iterations\n")
+  overall_start_time <- Sys.time()
+  cat("\n=== BATCH SIMULATION STARTED ===\n")
+  cat("Starting batch simulation with", format(n_simulations, big.mark = ","), "iterations\n")
+  cat("Timestamp:", format(overall_start_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
   # Convert to data.table for performance
   dk_dt <- as.data.table(dk_data)
   hist_dt <- as.data.table(historical_data)
   
-  # Create indexes on historical data - now including best_of
+  # Create indexes on historical data
   setkey(hist_dt, Tour, best_of, straight_sets)
   
   # Get all unique matches
   matches <- unique(dk_dt$`Game Info`)
+  total_matches <- length(matches)
   
-  # Create storage for match outcomes (complete slate results)
-  # Structure: list of matches, each containing n_simulations results
+  cat("Processing", total_matches, "matches:\n")
+  for(i in seq_along(matches)) {
+    cat(sprintf("  %d. %s\n", i, matches[i]))
+  }
+  cat("\n")
+  
+  # Create storage for match outcomes
   match_results <- list()
   
-  # Process each match independently (this is the key optimization)
+  # Process each match with detailed timing
   for (match_idx in seq_along(matches)) {
+    match_start_time <- Sys.time()
     match_name <- matches[match_idx]
-    cat("Processing match", match_idx, "of", length(matches), "-", match_name, "\n")
+    
+    cat(sprintf("[%s] Processing match %d/%d: %s", 
+                format(match_start_time, "%H:%M:%S"), 
+                match_idx, total_matches, match_name))
     
     # Get players in this match
     match_players <- dk_dt[`Game Info` == match_name]
     
     if (nrow(match_players) != 2) {
+      cat(" - SKIPPED (invalid player count)\n")
       warning("Skipping match with invalid number of players:", match_name)
       next
     }
@@ -306,6 +319,8 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     # Extract player info
     p1 <- match_players[1]
     p2 <- match_players[2]
+    
+    cat(sprintf(" (%s vs %s)", p1$Name, p2$Name))
     
     # Calculate ML probabilities
     p1_ml <- odds_to_probability(as.numeric(p1$ML))
@@ -330,12 +345,10 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     p2_nss_prob <- p2_nss / total_ml_prob
     
     # Create probability bins for sampling
-    # [0, p1_ss, p1_ss+p1_nss, p1_ss+p1_nss+p2_ss, 1]
     cum_probs <- c(0, p1_ss_prob, p1_ss_prob + p1_nss_prob, 
                    p1_ss_prob + p1_nss_prob + p2_ss_prob, 1)
     
     # Generate ALL simulation outcomes at once for this match
-    # This is the key optimization - we batch process all simulations for one match
     random_values <- runif(n_simulations)
     
     # Pre-allocate results for this match
@@ -351,49 +364,33 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     )
     
     # Figure out which bin each random value falls into
-    # This vectorized operation is MUCH faster than a loop
     outcome_bins <- findInterval(random_values, cum_probs)
     
     # Assign winners, losers and outcome types based on bins
-    # bin 1 = player 1 straight sets
-    # bin 2 = player 1 non-straight sets
-    # bin 3 = player 2 straight sets
-    # bin 4 = player 2 non-straight sets
     match_output[outcome_bins == 1, `:=`(
-      winner = p1$Name,
-      loser = p2$Name,
-      outcome = "SS",
-      winner_prob = p1_ml_prob,
-      loser_prob = p2_ml_prob
+      winner = p1$Name, loser = p2$Name, outcome = "SS",
+      winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
     )]
     
     match_output[outcome_bins == 2, `:=`(
-      winner = p1$Name,
-      loser = p2$Name,
-      outcome = "NSS",
-      winner_prob = p1_ml_prob,
-      loser_prob = p2_ml_prob
+      winner = p1$Name, loser = p2$Name, outcome = "NSS",
+      winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
     )]
     
     match_output[outcome_bins == 3, `:=`(
-      winner = p2$Name,
-      loser = p1$Name,
-      outcome = "SS",
-      winner_prob = p2_ml_prob,
-      loser_prob = p1_ml_prob
+      winner = p2$Name, loser = p1$Name, outcome = "SS",
+      winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
     )]
     
     match_output[outcome_bins == 4, `:=`(
-      winner = p2$Name,
-      loser = p1$Name,
-      outcome = "NSS",
-      winner_prob = p2_ml_prob,
-      loser_prob = p1_ml_prob
+      winner = p2$Name, loser = p1$Name, outcome = "NSS",
+      winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
     )]
     
-    # Now we need to assign scores based on outcome types
-    # Group by outcome configuration to minimize historical data lookups
+    # Now assign scores based on outcome types
     outcome_groups <- match_output[, .N, by = .(winner, loser, outcome)]
+    
+    score_assignment_start <- Sys.time()
     
     # For each distinct outcome configuration
     for (j in 1:nrow(outcome_groups)) {
@@ -417,51 +414,38 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       # Create match info for finding similar historical matches
       tour <- match_players$Tour[1]
       is_straight_sets <- as.integer(outcome_type == "SS")
-      
-      # Determine best_of based on tour
       best_of_value <- ifelse(tour == "ATP", 5, 3)
       
-      # Find similar historical matches - now including best_of
+      # Find similar historical matches
       similar_matches <- hist_dt[
         Tour == tour & 
           best_of == best_of_value &
           straight_sets == is_straight_sets
       ]
       
-      # If not enough matches, relax straight_sets but keep best_of
+      # If not enough matches, relax constraints
       if (nrow(similar_matches) < 10) {
-        similar_matches <- hist_dt[
-          Tour == tour &
-            best_of == best_of_value
-        ]
+        similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
+      }
+      if (nrow(similar_matches) < 10) {
+        similar_matches <- hist_dt[Tour == tour]
       }
       
-      # If still not enough matches, relax best_of constraint
-      if (nrow(similar_matches) < 10) {
-        similar_matches <- hist_dt[
-          Tour == tour
-        ]
-      }
-      
-      # Calculate similarity scores
+      # Calculate similarity scores and assign scores
       if (nrow(similar_matches) > 0) {
         similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
         setorder(similar_matches, odds_diff)
         
-        # Select top 25 most similar matches or all if fewer
         n_similar <- min(40, nrow(similar_matches))
         top_matches <- similar_matches[1:n_similar]
         
-        # Sample scores with replacement
         sample_indices <- sample(1:n_similar, length(outcome_indices), replace = TRUE)
         
-        # Assign scores all at once (vectorized)
         match_output[outcome_indices, `:=`(
           winner_score = top_matches$w_dk_score[sample_indices],
           loser_score = top_matches$l_dk_score[sample_indices]
         )]
       } else {
-        # Default scores if no similar matches
         match_output[outcome_indices, `:=`(
           winner_score = runif(length(outcome_indices), 50, 70),
           loser_score = runif(length(outcome_indices), 20, 40)
@@ -469,14 +453,19 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       }
     }
     
-    # Randomly shuffle the iterations (important for variance)
-    # This ensures we're not getting systematic patterns in the combinations
+    # Randomly shuffle the iterations
     shuffled_indices <- sample(1:n_simulations)
     match_output <- match_output[shuffled_indices]
-    match_output[, iteration := 1:n_simulations]  # Reset iteration numbers
+    match_output[, iteration := 1:n_simulations]
     
     # Store this match's results
     match_results[[match_name]] <- match_output
+    
+    # Calculate and display timing
+    match_end_time <- Sys.time()
+    match_elapsed <- difftime(match_end_time, match_start_time, units = "secs")
+    
+    cat(sprintf(" - COMPLETED in %.2f seconds\n", as.numeric(match_elapsed)))
     
     # Force garbage collection after each match
     if (match_idx %% 3 == 0) {
@@ -484,10 +473,17 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     }
   }
   
-  # Now convert the match-by-match results into the format the rest of the app expects
-  # Pre-allocate the final results data.table
+  cat("\n=== MATCH PROCESSING COMPLETED ===\n")
+  cat("Now converting match results to final format...\n")
+  
+  # Convert match-by-match results to final format with progress tracking
+  conversion_start_time <- Sys.time()
   n_matches <- length(match_results)
-  total_rows <- n_simulations * n_matches * 2  # *2 for winner and loser
+  total_rows <- n_simulations * n_matches * 2
+  
+  cat(sprintf("Converting %s simulation results (%s total rows)\n", 
+              format(n_simulations, big.mark = ","),
+              format(total_rows, big.mark = ",")))
   
   final_results <- data.table(
     Iteration = integer(total_rows),
@@ -498,10 +494,11 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     Score = numeric(total_rows)
   )
   
-  # Current row in the final results
   row_idx <- 1
   
-  # Fill the final results table
+  # Track progress during conversion
+  progress_interval <- max(1000, n_simulations %/% 20)  # Show progress 20 times
+  
   for (iter in 1:n_simulations) {
     for (match_name in names(match_results)) {
       match_data <- match_results[[match_name]]
@@ -511,43 +508,51 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       
       # Add winner
       final_results[row_idx, `:=`(
-        Iteration = iter,
-        Match = match_name,
-        Player = iter_data$winner,
-        Result = "Winner",
-        Outcome = iter_data$outcome,
-        Score = iter_data$winner_score
+        Iteration = iter, Match = match_name, Player = iter_data$winner,
+        Result = "Winner", Outcome = iter_data$outcome, Score = iter_data$winner_score
       )]
       row_idx <- row_idx + 1
       
       # Add loser
       final_results[row_idx, `:=`(
-        Iteration = iter,
-        Match = match_name,
-        Player = iter_data$loser,
-        Result = "Loser",
-        Outcome = iter_data$outcome,
-        Score = iter_data$loser_score
+        Iteration = iter, Match = match_name, Player = iter_data$loser,
+        Result = "Loser", Outcome = iter_data$outcome, Score = iter_data$loser_score
       )]
       row_idx <- row_idx + 1
     }
     
-    # Report progress occasionally
-    if (iter %% 10000 == 0) {
-      cat("Processed", iter, "of", n_simulations, "iterations\n")
+    # Show progress
+    if (iter %% progress_interval == 0) {
+      elapsed_conversion <- difftime(Sys.time(), conversion_start_time, units = "secs")
+      pct_complete <- (iter / n_simulations) * 100
+      estimated_total <- elapsed_conversion * (n_simulations / iter)
+      estimated_remaining <- estimated_total - elapsed_conversion
+      
+      cat(sprintf("[%s] Conversion progress: %d/%s iterations (%.1f%%) - %.1fs elapsed, ~%.1fs remaining\n",
+                  format(Sys.time(), "%H:%M:%S"),
+                  iter, format(n_simulations, big.mark = ","),
+                  pct_complete, as.numeric(elapsed_conversion), as.numeric(estimated_remaining)))
     }
   }
   
-  # Trim any unused rows
+  # Trim unused rows
   final_results <- final_results[1:(row_idx-1)]
   
-  # Report time
-  end_time <- Sys.time()
-  elapsed <- difftime(end_time, start_time, units = "mins")
-  cat("Batch simulation completed in", round(elapsed, 2), "minutes\n")
+  # Report final timing
+  overall_end_time <- Sys.time()
+  total_elapsed <- difftime(overall_end_time, overall_start_time, units = "mins")
+  conversion_elapsed <- difftime(Sys.time(), conversion_start_time, units = "secs")
+  
+  cat("\n=== BATCH SIMULATION COMPLETED ===\n")
+  cat(sprintf("Total time: %.2f minutes\n", as.numeric(total_elapsed)))
+  cat(sprintf("Final conversion time: %.2f seconds\n", as.numeric(conversion_elapsed)))
+  cat(sprintf("Generated %s simulation results\n", format(nrow(final_results), big.mark = ",")))
+  cat("Timestamp:", format(overall_end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
   return(final_results)
 }
+
+
 
 # Calculate player exposure
 calculate_player_exposure <- function(optimal_lineups, player_stats, random_lineups = NULL) {
@@ -1229,8 +1234,11 @@ find_optimal_lineup <- function(player_scores, salary_cap = 50000, roster_size =
   return(optimal_lineup)
 }
 
-
 find_all_optimal_lineups <- function(simulation_results, player_data) {
+  overall_start_time <- Sys.time()
+  cat("\n=== LINEUP OPTIMIZATION STARTED ===\n")
+  cat("Timestamp:", format(overall_start_time, "%Y-%m-%d %H:%M:%S"), "\n")
+  
   # Make sure we're working with data.tables
   sim_dt <- as.data.table(simulation_results)
   player_dt <- as.data.table(player_data)
@@ -1239,9 +1247,13 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   iterations <- unique(sim_dt$Iteration)
   total_iterations <- length(iterations)
   
-  # Calculate batch size for better progress reporting
-  batch_size <- min(1000, total_iterations)
+  cat(sprintf("Processing %s iterations to find optimal lineups\n", format(total_iterations, big.mark = ",")))
+  
+  # Use smaller batch sizes for better progress reporting
+  batch_size <- min(500, total_iterations)  # Reduced from 1000 to 500
   n_batches <- ceiling(total_iterations / batch_size)
+  
+  cat(sprintf("Using batch size of %d iterations (%d batches total)\n\n", batch_size, n_batches))
   
   # Create a dictionary to track lineups more efficiently
   lineup_dict <- new.env(hash = TRUE, parent = emptyenv())
@@ -1256,29 +1268,35 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     }
   }
   
-  player_salary_map <- setNames(
-    player_dt$Salary,
-    player_dt[[name_col]]
-  )
+  player_salary_map <- setNames(player_dt$Salary, player_dt[[name_col]])
   
   # LP solver cache for avoiding redundant problems
   lp_cache <- new.env(hash = TRUE, parent = emptyenv())
   
-  # Process iterations in batches
+  # Process iterations in batches with detailed timing
   for (batch in 1:n_batches) {
+    batch_start_time <- Sys.time()
+    
     # Calculate batch start and end indices
     start_iter <- (batch - 1) * batch_size + 1
     end_iter <- min(batch * batch_size, total_iterations)
+    actual_batch_size <- end_iter - start_iter + 1
     
-    # Only show progress at batch level
-    message(sprintf("Processing lineup batch %d of %d (iterations %d-%d)", 
-                    batch, n_batches, start_iter, end_iter))
+    cat(sprintf("[%s] Processing batch %d/%d (iterations %s-%s, %d iterations)",
+                format(batch_start_time, "%H:%M:%S"),
+                batch, n_batches, 
+                format(start_iter, big.mark = ","), 
+                format(end_iter, big.mark = ","),
+                actual_batch_size))
     
     # Get iterations for this batch
     batch_iterations <- iterations[start_iter:end_iter]
     
     # Get all batch data at once to reduce filtering operations
     batch_results <- sim_dt[Iteration %in% batch_iterations]
+    
+    # Track lineups found in this batch
+    batch_lineups_found <- 0
     
     # Process each iteration in the batch
     for (iter in batch_iterations) {
@@ -1288,16 +1306,14 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
       # Create player scores for this iteration
       player_scores <- iter_results[, .(Score = sum(Score)), by = Player]
       
-      # Add salary info using the map (faster than merging)
+      # Add salary info using the map
       player_scores[, Salary := player_salary_map[Player]]
       
       # Remove players with NA salaries
       player_scores <- player_scores[!is.na(Salary)]
       
       # Skip if not enough players
-      if (nrow(player_scores) < 6) {
-        next
-      }
+      if (nrow(player_scores) < 6) next
       
       # Find top 5 lineups for this iteration
       top_lineups <- list()
@@ -1305,18 +1321,13 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
       
       for (i in 1:5) {
         # Skip if we've used too many players already
-        if (length(players_used) > nrow(player_scores) - 6) {
-          break
-        }
+        if (length(players_used) > nrow(player_scores) - 6) break
         
         # Filter out already used players
         available_players <- player_scores[!Player %in% players_used]
+        if (nrow(available_players) < 6) break
         
-        if (nrow(available_players) < 6) {
-          break
-        }
-        
-        # Check if we've solved this exact LP problem before
+        # Check LP cache first
         lp_key <- paste(
           paste(sort(available_players$Player), collapse="|"),
           paste(available_players$Salary, collapse="|"),
@@ -1335,10 +1346,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
                        c(50000, 6), 
                        all.bin = TRUE)
           
-          if (result$status != 0) {
-            # No feasible solution
-            break
-          }
+          if (result$status != 0) break
           
           optimal <- available_players[result$solution > 0.5]
           assign(lp_key, optimal, envir = lp_cache)
@@ -1353,6 +1361,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
           
           # Mark these players as used
           players_used <- c(players_used, optimal$Player)
+          batch_lineups_found <- batch_lineups_found + 1
         }
       }
       
@@ -1379,7 +1388,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
             current_counts$Top2Count <- current_counts$Top2Count + 1
             current_counts$Top3Count <- current_counts$Top3Count + 1
             current_counts$Top5Count <- current_counts$Top5Count + 1
-          }else if (rank == 3) {
+          } else if (rank == 3) {
             current_counts$Top3Count <- current_counts$Top3Count + 1
             current_counts$Top5Count <- current_counts$Top5Count + 1
           } else if (rank <= 5) {
@@ -1404,14 +1413,37 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
       }
     }
     
+    # Calculate and display batch timing
+    batch_end_time <- Sys.time()
+    batch_elapsed <- difftime(batch_end_time, batch_start_time, units = "secs")
+    
+    # Calculate estimated time remaining
+    if (batch > 1) {
+      avg_batch_time <- difftime(batch_end_time, overall_start_time, units = "secs") / batch
+      estimated_remaining <- avg_batch_time * (n_batches - batch)
+      
+      cat(sprintf(" - COMPLETED in %.2f seconds (~%.1f sec remaining, %d lineups found)\n",
+                  as.numeric(batch_elapsed), as.numeric(estimated_remaining), batch_lineups_found))
+    } else {
+      cat(sprintf(" - COMPLETED in %.2f seconds (%d lineups found)\n",
+                  as.numeric(batch_elapsed), batch_lineups_found))
+    }
+    
     # Force garbage collection after each batch
     if (batch %% 3 == 0) {
       cleanup_memory(verbose = FALSE)
     }
   }
   
+  cat("\n=== CONVERTING LINEUP DICTIONARY TO TABLE ===\n")
+  conversion_start_time <- Sys.time()
+  
   # Convert dictionary to data.table efficiently
   lineup_ids <- ls(lineup_dict)
+  total_unique_lineups <- length(lineup_ids)
+  
+  cat(sprintf("Found %s unique lineups, converting to data table...\n", 
+              format(total_unique_lineups, big.mark = ",")))
   
   # Create final data.table with correct size preallocated
   lineup_counter <- data.table(
@@ -1423,7 +1455,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     Top5Count = integer(length(lineup_ids))
   )
   
-  # Fill the data.table efficiently using set() instead of `:=`
+  # Fill the data.table efficiently using set()
   for (i in seq_along(lineup_ids)) {
     lineup_id <- lineup_ids[i]
     counts <- get(lineup_id, envir = lineup_dict)
@@ -1433,6 +1465,14 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     set(lineup_counter, i, 4L, counts$Top2Count)
     set(lineup_counter, i, 5L, counts$Top3Count)
     set(lineup_counter, i, 6L, counts$Top5Count)
+    
+    # Show progress for conversion too
+    if (i %% 1000 == 0) {
+      cat(sprintf("Converted %s/%s lineups (%.1f%%)\n", 
+                  format(i, big.mark = ","), 
+                  format(total_unique_lineups, big.mark = ","),
+                  (i / total_unique_lineups) * 100))
+    }
   }
   
   # Calculate frequencies
@@ -1441,14 +1481,31 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   # Sort by Top1Count
   setorder(lineup_counter, -Top1Count)
   
-  # Return top lineups
+  # Report final timing
+  overall_end_time <- Sys.time()
+  total_elapsed <- difftime(overall_end_time, overall_start_time, units = "mins")
+  conversion_elapsed <- difftime(overall_end_time, conversion_start_time, units = "secs")
+  
+  cat("\n=== LINEUP OPTIMIZATION COMPLETED ===\n")
+  cat(sprintf("Total optimization time: %.2f minutes\n", as.numeric(total_elapsed)))
+  cat(sprintf("Final conversion time: %.2f seconds\n", as.numeric(conversion_elapsed)))
+  cat(sprintf("Generated %s unique optimal lineups\n", format(nrow(lineup_counter), big.mark = ",")))
+  cat("Timestamp:", format(overall_end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
+  
   return(lineup_counter)
 }
 
 expand_lineup_details <- function(lineup_stats, player_data) {
+  start_time <- Sys.time()
+  cat("\n=== EXPANDING LINEUP DETAILS ===\n")
+  cat("Timestamp:", format(start_time, "%Y-%m-%d %H:%M:%S"), "\n")
+  
   # Make sure we're working with data.tables
   lineup_dt <- as.data.table(lineup_stats)
   player_dt <- as.data.table(player_data)
+  
+  total_lineups <- nrow(lineup_dt)
+  cat(sprintf("Expanding details for %s lineups\n", format(total_lineups, big.mark = ",")))
   
   # Make sure we have the right name column in player data
   name_col <- "Name"
@@ -1461,10 +1518,7 @@ expand_lineup_details <- function(lineup_stats, player_data) {
   }
   
   # Create a fast player name to salary lookup
-  player_salary_map <- setNames(
-    player_dt$Salary,
-    player_dt[[name_col]]
-  )
+  player_salary_map <- setNames(player_dt$Salary, player_dt[[name_col]])
   
   # Pre-allocate the results data.table for better performance
   expanded_lineups <- data.table(
@@ -1477,27 +1531,33 @@ expand_lineup_details <- function(lineup_stats, player_data) {
     TotalSalary = numeric(nrow(lineup_dt))
   )
   
-  # Add player name and salary columns - using consistent "Name" prefix
+  # Add player name and salary columns
   for (j in 1:6) {
     expanded_lineups[[paste0("Name", j)]] <- character(nrow(lineup_dt))
     expanded_lineups[[paste0("Salary", j)]] <- numeric(nrow(lineup_dt))
   }
   
-  # Calculate batch size for progress reporting
-  batch_size <- min(1000, nrow(lineup_dt))
+  # Use smaller batch sizes for more frequent progress updates
+  batch_size <- min(250, nrow(lineup_dt))  # Reduced from 1000 to 250
   n_batches <- ceiling(nrow(lineup_dt) / batch_size)
+  
+  cat(sprintf("Using batch size of %d lineups (%d batches total)\n\n", batch_size, n_batches))
   
   # Process each lineup with batch reporting
   for (batch in 1:n_batches) {
+    batch_start_time <- Sys.time()
+    
     # Calculate batch range
     start_idx <- (batch - 1) * batch_size + 1
     end_idx <- min(batch * batch_size, nrow(lineup_dt))
+    actual_batch_size <- end_idx - start_idx + 1
     
-    # Only report progress occasionally to reduce console clutter
-    if (batch %% 5 == 0 || batch == n_batches) {
-      message(sprintf("Processing batch %d of %d (%.1f%% complete)", 
-                      batch, n_batches, batch/n_batches*100))
-    }
+    cat(sprintf("[%s] Processing expansion batch %d/%d (lineups %s-%s, %d lineups)",
+                format(batch_start_time, "%H:%M:%S"),
+                batch, n_batches,
+                format(start_idx, big.mark = ","),
+                format(end_idx, big.mark = ","),
+                actual_batch_size))
     
     # Process each lineup in this batch
     for (i in start_idx:end_idx) {
@@ -1517,7 +1577,7 @@ expand_lineup_details <- function(lineup_stats, player_data) {
       sorted_players <- player_names[sorted_indices]
       sorted_salaries <- player_salaries[sorted_indices]
       
-      # Add player details to the lineup using set() for better performance
+      # Add player details to the lineup using set()
       for (j in 1:min(length(sorted_players), 6)) {
         name_col <- paste0("Name", j)
         salary_col <- paste0("Salary", j)
@@ -1527,14 +1587,39 @@ expand_lineup_details <- function(lineup_stats, player_data) {
       }
     }
     
+    # Calculate and display batch timing
+    batch_end_time <- Sys.time()
+    batch_elapsed <- difftime(batch_end_time, batch_start_time, units = "secs")
+    
+    # Calculate estimated time remaining
+    if (batch > 1) {
+      avg_batch_time <- difftime(batch_end_time, start_time, units = "secs") / batch
+      estimated_remaining <- avg_batch_time * (n_batches - batch)
+      
+      cat(sprintf(" - COMPLETED in %.2f seconds (~%.1f sec remaining)\n",
+                  as.numeric(batch_elapsed), as.numeric(estimated_remaining)))
+    } else {
+      cat(sprintf(" - COMPLETED in %.2f seconds\n", as.numeric(batch_elapsed)))
+    }
+    
     # Clean up memory occasionally
-    if (batch %% 10 == 0) {
+    if (batch %% 5 == 0) {  # More frequent cleanup with smaller batches
       cleanup_memory(verbose = FALSE)
     }
   }
   
+  # Report final timing
+  end_time <- Sys.time()
+  total_elapsed <- difftime(end_time, start_time, units = "secs")
+  
+  cat("\n=== LINEUP DETAIL EXPANSION COMPLETED ===\n")
+  cat(sprintf("Total expansion time: %.2f seconds\n", as.numeric(total_elapsed)))
+  cat(sprintf("Processed %s lineups\n", format(nrow(expanded_lineups), big.mark = ",")))
+  cat("Timestamp:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
+  
   return(expanded_lineups)
 }
+
 
 # Define UI
 ui <- dashboardPage(
@@ -2398,6 +2483,7 @@ server <- function(input, output, session) {
   })
 
   # Correct the optimal_lineups_table output
+  # Updated optimal_lineups_table output with improved sorting
   output$optimal_lineups_table <- renderDT({
     # Force validation and show diagnostic info
     cat("Optimization complete:", rv$optimization_complete, "\n")
@@ -2435,16 +2521,62 @@ server <- function(input, output, session) {
     # Use the selected columns from the data frame
     display_data <- lineups_df[, display_cols, drop = FALSE]
     
+    # Sort the data by Top1Count (desc) then by Top5Count (desc)
+    if("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
+      display_data <- display_data[order(-display_data$Top1Count, -display_data$Top5Count), ]
+    } else if("Top1Count" %in% names(display_data)) {
+      display_data <- display_data[order(-display_data$Top1Count), ]
+    }
+    
+    # Find the column indices for Top1Count and Top5Count for the datatable ordering
+    top1_col_idx <- which(names(display_data) == "Top1Count") - 1  # DT uses 0-based indexing
+    top5_col_idx <- which(names(display_data) == "Top5Count") - 1  # DT uses 0-based indexing
+    
+    # Create the ordering specification
+    # If both columns exist, sort by Top1Count desc, then Top5Count desc
+    if(length(top1_col_idx) > 0 && length(top5_col_idx) > 0) {
+      order_spec <- list(
+        list(top1_col_idx, 'desc'),
+        list(top5_col_idx, 'desc')
+      )
+    } else if(length(top1_col_idx) > 0) {
+      order_spec <- list(list(top1_col_idx, 'desc'))
+    } else {
+      order_spec <- list(list(0, 'desc'))  # Default to first column
+    }
+    
     # Create datatable
     dt <- datatable(
       display_data,
       options = list(
         scrollX = TRUE,
         pageLength = 50,
-        order = list(list(length(player_cols), 'desc'))  # Sort by Top1Count column which is first after player columns
+        order = order_spec,  # Use the multi-column sorting
+        columnDefs = list(
+          # Make the count columns more prominent with center alignment
+          list(className = 'dt-center', targets = c(top1_col_idx, top5_col_idx)),
+          # Optional: make the top count columns have a different background
+          list(className = 'dt-body-nowrap', targets = "_all")
+        )
       ),
       rownames = FALSE
-    )
+    ) %>%
+      # Add conditional formatting to highlight high-performing lineups
+      formatStyle(
+        "Top1Count",
+        backgroundColor = styleInterval(
+          c(1, 5, 10, 20), 
+          c("white", "#fff3cd", "#ffeaa7", "#fdcb6e", "#e17055")
+        ),
+        fontWeight = styleInterval(10, c("normal", "bold"))
+      ) %>%
+      formatStyle(
+        "Top5Count", 
+        backgroundColor = styleInterval(
+          c(5, 15, 30, 50), 
+          c("white", "#f8f9fa", "#e9ecef", "#dee2e6", "#ced4da")
+        )
+      )
     
     # Format salary
     if("TotalSalary" %in% display_cols) {
@@ -2453,7 +2585,6 @@ server <- function(input, output, session) {
     
     dt
   })
-  
   
   # Lineup count thresholds
   output$lineup_count_thresholds <- renderDT({
