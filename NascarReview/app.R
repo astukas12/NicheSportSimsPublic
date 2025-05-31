@@ -327,7 +327,8 @@ server <- function(input, output, session) {
   output$sim_lineup_table <- renderDT({
     req(filtered_sim_data())
     
-    filtered_sim_data() %>%
+    # Prepare the full dataset
+    full_data <- filtered_sim_data() %>%
       arrange(desc(TotalScore)) %>%
       mutate(
         In_Contest = ifelse(play_count > 0, "Yes", "No"),
@@ -348,38 +349,45 @@ server <- function(input, output, session) {
         Top5Count,
         In_Contest,
         ContestCount = play_count
-      ) %>%
-      datatable(
-        options = list(
-          pageLength = 50,
-          scrollX = TRUE,
-          dom = 'Bfrtip',
-          buttons = c('copy', 'csv', 'excel', 'pdf')
+      )
+    
+    datatable(
+      full_data,
+      options = list(
+        pageLength = 50,
+        scrollX = TRUE,
+        dom = 'Bfrtip',
+        buttons = list(
+          list(extend = 'csv', exportOptions = list(modifier = list(page = "all"))),
+          list(extend = 'excel', exportOptions = list(modifier = list(page = "all")))
         ),
-        extensions = 'Buttons',
-        rownames = FALSE
-      ) %>%
+        # Ensure server-side processing is disabled for full downloads
+        serverSide = FALSE
+      ),
+      extensions = 'Buttons',
+      rownames = FALSE
+    ) %>%
       formatStyle(
         'In_Contest',
         backgroundColor = styleEqual(c("Yes", "No"), c('#a3e4d7', '#f5b7b1'))
       ) %>%
       formatStyle(
         'TotalScore',
-        background = styleColorBar(c(0, max(filtered_sim_data()$TotalScore)), '#90caf9'),
+        background = styleColorBar(c(0, max(full_data$TotalScore)), '#90caf9'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
         'Top1Count',
-        background = styleColorBar(c(0, max(filtered_sim_data()$Top1Count)), '#a5d6a7'),
+        background = styleColorBar(c(0, max(full_data$Top1Count)), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
         'ContestCount',
-        background = styleColorBar(c(0, max(filtered_sim_data()$play_count)), '#ffcc80'),
+        background = styleColorBar(c(0, max(full_data$play_count)), '#ffcc80'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
