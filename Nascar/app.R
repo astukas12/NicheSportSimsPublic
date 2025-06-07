@@ -1312,6 +1312,172 @@ analyze_simulation_accuracy <- function(sim_results, input_data) {
   return(results)
 }
 
+
+# Cash simulation functions
+read_field_lineups <- function(file_path) {
+  tryCatch({
+    # Read CSV file
+    field_data <- read.csv(file_path, stringsAsFactors = FALSE)
+    
+    # Validate required columns
+    required_cols <- c("LineupName", paste0("Driver", 1:6))
+    if(!all(required_cols %in% names(field_data))) {
+      stop("Field lineup file must contain columns: ", paste(required_cols, collapse = ", "))
+    }
+    
+    # Clean driver names (remove parentheses and IDs)
+    for(i in 1:6) {
+      col_name <- paste0("Driver", i)
+      field_data[[col_name]] <- gsub("\\s*\\([^)]*\\)", "", field_data[[col_name]])
+      field_data[[col_name]] <- trimws(field_data[[col_name]])
+    }
+    
+    return(field_data)
+  }, error = function(e) {
+    stop(paste("Error reading field lineup file:", e$message))
+  })
+}
+
+
+simulate_h2h_cash_contest <- function(user_lineups, field_lineups, simulation_results, platform = "DK") {
+  cat("Starting cash contest simulation...\n")
+  
+  # Determine platform-specific columns
+  if(platform == "DK") {
+    fantasy_col <- "DKFantasyPoints"
+    driver_cols <- paste0("Driver", 1:6)
+    roster_size <- 6
+  } else {
+    fantasy_col <- "FDFantasyPoints" 
+    driver_cols <- paste0("Driver", 1:5)
+    roster_size <- 5
+  }
+  
+  # Convert to data.table for better performance
+  setDT(simulation_results)
+  setDT(user_lineups)
+  setDT(field_lineups)
+  
+  # Get simulation parameters
+  sim_ids <- unique(simulation_results$SimID)
+  n_sims <- length(sim_ids)
+  n_user_lineups <- nrow(user_lineups)
+  n_field_lineups <- nrow(field_lineups)
+  
+  cat(sprintf("Processing %d user lineups vs %d field lineups across %d simulations\n", 
+              n_user_lineups, n_field_lineups, n_sims))
+  
+  # Pre-calculate all lineup scores for efficiency
+  cat("Pre-calculating lineup scores...\n")
+  
+  # Create lookup table for driver fantasy points by simulation
+  driver_lookup <- simulation_results[, .(Name, SimID, FantasyPoints = get(fantasy_col))]
+  setkey(driver_lookup, SimID, Name)
+  
+  # Function to calculate lineup score efficiently
+  calculate_lineup_score <- function(lineup_drivers, sim_id) {
+    driver_points <- driver_lookup[.(sim_id, lineup_drivers), FantasyPoints, nomatch = 0]
+    sum(driver_points, na.rm = TRUE)
+  }
+  
+  # Pre-calculate user lineup scores for all simulations
+  cat("Calculating user lineup scores...\n")
+  user_scores <- array(0, dim = c(n_user_lineups, n_sims))
+  
+  for(u in 1:n_user_lineups) {
+    user_drivers <- unlist(user_lineups[u, ..driver_cols])
+    for(s in 1:n_sims) {
+      user_scores[u, s] <- calculate_lineup_score(user_drivers, sim_ids[s])
+    }
+    if(u %% 10 == 0 || u == n_user_lineups) {
+      cat(sprintf("Processed %d/%d user lineups\n", u, n_user_lineups))
+    }
+  }
+  
+  # Pre-calculate field lineup scores for all simulations  
+  cat("Calculating field lineup scores...\n")
+  field_scores <- array(0, dim = c(n_field_lineups, n_sims))
+  
+  for(f in 1:n_field_lineups) {
+    field_drivers <- unlist(field_lineups[f, ..driver_cols])
+    for(s in 1:n_sims) {
+      field_scores[f, s] <- calculate_lineup_score(field_drivers, sim_ids[s])
+    }
+    if(f %% 50 == 0 || f == n_field_lineups) {
+      cat(sprintf("Processed %d/%d field lineups\n", f, n_field_lineups))
+    }
+  }
+  
+  # Calculate H2H results efficiently
+  cat("Calculating H2H matchup results...\n")
+  h2h_results <- data.table()
+  
+  for(u in 1:n_user_lineups) {
+    for(f in 1:n_field_lineups) {
+      wins <- sum(user_scores[u, ] > field_scores[f, ])
+      losses <- n_sims - wins
+      
+      h2h_results <- rbind(h2h_results, data.table(
+        UserLineupIndex = u,
+        FieldLineupIndex = f,
+        UserLineupName = paste("Lineup", u),
+        FieldLineupName = field_lineups$LineupName[f],
+        Wins = wins,
+        Losses = losses,
+        WinRate = (wins / n_sims) * 100
+      ))
+    }
+    if(u %% 5 == 0 || u == n_user_lineups) {
+      cat(sprintf("Completed H2H for %d/%d user lineups\n", u, n_user_lineups))
+    }
+  }
+  
+  # Calculate group contest results efficiently
+  cat("Calculating group contest results...\n")
+  group_results <- data.table()
+  total_lineups <- n_field_lineups + 1
+  top3_threshold <- 3
+  top20_threshold <- ceiling(total_lineups * 0.20)
+  top25_threshold <- ceiling(total_lineups * 0.25)
+  top50_threshold <- ceiling(total_lineups * 0.5)
+  
+  for(u in 1:n_user_lineups) {
+    ranks <- numeric(n_sims)
+    
+    for(s in 1:n_sims) {
+      all_scores <- c(user_scores[u, s], field_scores[, s])
+      ranks[s] <- rank(-all_scores)[1]  # User lineup rank (1 = best)
+    }
+    
+    wins <- sum(ranks == 1)
+    
+    group_results <- rbind(group_results, data.table(
+      UserLineupIndex = u,
+      UserLineupName = paste("Lineup", u),
+      AvgRank = mean(ranks),
+      MedianRank = median(ranks),
+      WinRate = (wins / n_sims) * 100,
+      Top3Pct = (sum(ranks <= top3_threshold) / n_sims) * 100,
+      Top20Pct = (sum(ranks <= top20_threshold) / n_sims) * 100,
+      Top25Pct = (sum(ranks <= top25_threshold) / n_sims) * 100,
+      Top50Pct = (sum(ranks <= top50_threshold) / n_sims) * 100
+    ))
+    
+    if(u %% 10 == 0 || u == n_user_lineups) {
+      cat(sprintf("Completed group contest for %d/%d user lineups\n", u, n_user_lineups))
+    }
+  }
+  
+  cat("Cash contest simulation completed!\n")
+  
+  return(list(
+    h2h_results = as.data.frame(h2h_results),
+    group_results = as.data.frame(group_results),
+    user_lineups = as.data.frame(user_lineups),
+    field_lineups = as.data.frame(field_lineups)
+  ))
+}
+
 # Lineup optimization functions
 # DraftKings optimal lineup finder with memory optimizations
 find_dk_optimal_lineups <- function(sim_data, k = 5) {
@@ -2502,11 +2668,21 @@ ui <- dashboardPage(
   skin = "blue",
   
   # Dashboard header
-  dashboardHeader(title = "NASCAR Fantasy Sims"),
+  dashboardHeader(
+    title = tags$div(
+      style = "display: flex; align-items: center; font-weight: bold;",
+      "NASCAR Fantasy Sims"
+    ),
+    titleWidth = 350  # Increased from 300 to give more space
+  ),
   
   # Dashboard sidebar
   dashboardSidebar(
     useShinyjs(),
+    div(
+      style = "text-align: center; padding: 10px;"
+    ),
+    br(),
     sidebarMenu(
       id = "sidebar_menu",
       menuItem("Input Check", tabName = "upload", icon = icon("upload")),
@@ -2514,7 +2690,8 @@ ui <- dashboardPage(
       menuItem("Dominator Analysis", tabName = "dominator", icon = icon("trophy")),
       menuItem("Fantasy Projections", tabName = "fantasy", icon = icon("calculator")),
       menuItem("Optimal Lineups", tabName = "optimal_lineups", icon = icon("trophy")),
-      menuItem("Lineup Builder", tabName = "lineup_builder", icon = icon("percentage"))
+      menuItem("Lineup Builder", tabName = "lineup_builder", icon = icon("percentage")),
+      menuItem("Cash Contest Sim", tabName = "cash_sim", icon = icon("dollar-sign"))
     ),
     br(),
     fileInput("excel_file", "Upload Excel File", accept = c(".xlsx")),
@@ -2637,8 +2814,143 @@ ui <- dashboardPage(
       # Lineup Builder Tab
       tabItem(tabName = "lineup_builder",
               uiOutput("lineup_builder_ui")
+      ),
+      
+      # Cash Contest Simulation Tab
+      # Cash Contest Simulation Tab
+      tabItem(tabName = "cash_sim",
+              fluidRow(
+                box(
+                  width = 12,
+                  title = "Upload Field Lineups & Configure Filters",
+                  status = "primary",
+                  solidHeader = TRUE,
+                  fluidRow(
+                    column(9,
+                           h4("Upload Field Lineups"),
+                           fileInput("field_file", "Upload Field Lineups CSV", 
+                                     accept = c(".csv"),
+                                     placeholder = "Select field lineup file..."),
+                           DTOutput("field_preview")
+                    ),
+                    column(3,
+                           conditionalPanel(
+                             condition = "output.has_dk_lineups == 'true'",
+                             h4("DraftKings Lineup Filters"),
+                             fluidRow(
+                               column(6, numericInput("dk_cash_min_top1", "Min Top 1 Count:", value = 0, min = 0)),
+                               column(6, numericInput("dk_cash_min_top2", "Min Top 2 Count:", value = 0, min = 0))
+                             ),
+                             fluidRow(
+                               column(6, numericInput("dk_cash_min_top3", "Min Top 3 Count:", value = 0, min = 0)),
+                               column(6, numericInput("dk_cash_min_top5", "Min Top 5 Count:", value = 0, min = 0))
+                             ),
+                             selectizeInput("dk_cash_excluded_drivers", "Exclude Drivers:",
+                                            choices = NULL, multiple = TRUE,
+                                            options = list(plugins = list('remove_button'),
+                                                           placeholder = 'Click to select drivers to exclude')),
+                             div(class = "well well-sm",
+                                 h5("Filtered Pool Size:"),
+                                 textOutput("dk_cash_filtered_count")),
+                             actionButton("run_dk_cash_sim", "Run DraftKings Cash Simulation", 
+                                          class = "btn-primary", style = "width: 100%; margin: 10px 0;")
+                           ),
+                           conditionalPanel(
+                             condition = "output.has_fd_lineups == 'true'",
+                             h4("FanDuel Lineup Filters"),
+                             fluidRow(
+                               column(6, numericInput("fd_cash_min_top1", "Min Top 1 Count:", value = 0, min = 0)),
+                               column(6, numericInput("fd_cash_min_top2", "Min Top 2 Count:", value = 0, min = 0))
+                             ),
+                             fluidRow(
+                               column(6, numericInput("fd_cash_min_top3", "Min Top 3 Count:", value = 0, min = 0)),
+                               column(6, numericInput("fd_cash_min_top5", "Min Top 5 Count:", value = 0, min = 0))
+                             ),
+                             selectizeInput("fd_cash_excluded_drivers", "Exclude Drivers:",
+                                            choices = NULL, multiple = TRUE,
+                                            options = list(plugins = list('remove_button'),
+                                                           placeholder = 'Click to select drivers to exclude')),
+                             div(class = "well well-sm",
+                                 h5("Filtered Pool Size:"),
+                                 textOutput("fd_cash_filtered_count")),
+                             actionButton("run_fd_cash_sim", "Run FanDuel Cash Simulation", 
+                                          class = "btn-primary", style = "width: 100%; margin: 10px 0;")
+                           ),
+                           conditionalPanel(
+                             condition = "output.has_dk_lineups != 'true' && output.has_fd_lineups != 'true'",
+                             div(
+                               class = "alert alert-warning",
+                               "No optimal lineups available. Calculate optimal lineups first."
+                             )
+                           )
+                    )
+                  )
+                )
+              ),
+              
+              # DraftKings Results section
+              conditionalPanel(
+                condition = "output.has_dk_cash_results == 'true'",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "DraftKings Top 10 H2H Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_dk_h2h_complete', 'Download Complete H2H Results')
+                    ),
+                    DTOutput("dk_h2h_top10") %>% withSpinner(color = "#ff6600")
+                  )
+                ),
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "DraftKings Top 25 Single Entry Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_dk_group_complete', 'Download Complete Single Entry Results')
+                    ),
+                    DTOutput("dk_group_top25") %>% withSpinner(color = "#ff6600")
+                  )
+                )
+              ),
+              
+              # FanDuel Results section
+              conditionalPanel(
+                condition = "output.has_fd_cash_results == 'true'",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "FanDuel Top 10 H2H Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_fd_h2h_complete', 'Download Complete H2H Results')
+                    ),
+                    DTOutput("fd_h2h_top10") %>% withSpinner(color = "#ff6600")
+                  )
+                ),
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "FanDuel Top 25 Single Entry Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_fd_group_complete', 'Download Complete Single Entry Results')
+                    ),
+                    DTOutput("fd_group_top25") %>% withSpinner(color = "#ff6600")
+                  )
+                ),
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "Additional Downloads",
+                    downloadButton('download_fd_lineups_with_names', 'Download Lineups with Player Names')
+                  )
+                )
+              )
       )
     )
+   
   )
 )
 
@@ -2664,7 +2976,10 @@ server <- function(input, output, session) {
     dk_random_lineups = NULL,
     fd_random_lineups = NULL,
     file_uploaded = FALSE,
-    simulation_complete = FALSE
+    simulation_complete = FALSE,
+    field_lineups = NULL,
+    dk_cash_results = NULL,
+    fd_cash_results = NULL
   )
   
   output$has_draftkings <- reactive({
@@ -2695,6 +3010,18 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "has_fd_lineups", suspendWhenHidden = FALSE)
   
+  output$has_dk_cash_results <- reactive({
+    result <- tolower(as.character(!is.null(rv$dk_cash_results)))
+    return(result)
+  })
+  outputOptions(output, "has_dk_cash_results", suspendWhenHidden = FALSE)
+  
+  output$has_fd_cash_results <- reactive({
+    result <- tolower(as.character(!is.null(rv$fd_cash_results)))
+    return(result)
+  })
+  outputOptions(output, "has_fd_cash_results", suspendWhenHidden = FALSE)
+  
   # File upload handler
   observeEvent(input$excel_file, {
     req(input$excel_file)
@@ -2723,6 +3050,9 @@ server <- function(input, output, session) {
         rv$dk_random_lineups <- NULL
         rv$fd_random_lineups <- NULL
         rv$simulation_complete <- FALSE
+        rv$field_lineups <- NULL
+        rv$dk_cash_results <- NULL
+        rv$fd_cash_results <- NULL
         
         # Store platform availability
         rv$has_draftkings <- rv$input_data$platform_info$has_draftkings
@@ -5165,6 +5495,546 @@ server <- function(input, output, session) {
   session$onSessionEnded(function() {
     gc(verbose = FALSE, full = TRUE)
   })
+  
+  # Field lineup file upload handler
+  observeEvent(input$field_file, {
+    req(input$field_file)
+    
+    withProgress(message = 'Reading field lineups...', value = 0, {
+      tryCatch({
+        rv$field_lineups <- read_field_lineups(input$field_file$datapath)
+        
+        # Update excluded drivers choices
+        if(!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
+          driver_data <- rv$dk_driver_exposure
+          driver_names <- driver_data$Name
+          driver_ids <- driver_data$DKName
+          driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
+          driver_choices <- setNames(driver_ids, driver_labels)
+          
+          updateSelectizeInput(session, "dk_cash_excluded_drivers", choices = driver_choices)
+        }
+        
+        if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
+          driver_data <- rv$fd_driver_exposure
+          driver_names <- driver_data$Name
+          driver_ids <- driver_data$FDName
+          driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
+          driver_choices <- setNames(driver_ids, driver_labels)
+          
+          updateSelectizeInput(session, "fd_cash_excluded_drivers", choices = driver_choices)
+        }
+        
+        showModal(modalDialog(
+          title = "Success",
+          sprintf("Successfully loaded %d field lineups!", nrow(rv$field_lineups)),
+          easyClose = TRUE
+        ))
+        
+      }, error = function(e) {
+        showModal(modalDialog(
+          title = "Error",
+          paste("Error reading field lineup file:", e$message),
+          easyClose = TRUE
+        ))
+        rv$field_lineups <- NULL
+      })
+    })
+  })
+  
+  # Field lineup preview
+  output$field_preview <- renderDT({
+    req(rv$field_lineups)
+    
+    datatable(
+      rv$field_lineups,
+      options = list(
+        pageLength = -1,
+        scrollX = TRUE,
+        dom = "tp"
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe compact'
+    )
+  })
+  
+  output$dk_cash_filtered_count <- renderText({
+    req(rv$dk_optimal_lineups)
+    
+    filters <- list(
+      min_top1_count = input$dk_cash_min_top1,
+      min_top2_count = input$dk_cash_min_top2,
+      min_top3_count = input$dk_cash_min_top3,
+      min_top5_count = input$dk_cash_min_top5,
+      excluded_drivers = input$dk_cash_excluded_drivers
+    )
+    
+    stats <- calculate_dk_filtered_pool_stats(rv$dk_optimal_lineups, filters)
+    paste("Number of lineups in filtered pool:", stats$count)
+  })
+  
+  output$fd_cash_filtered_count <- renderText({
+    req(rv$fd_optimal_lineups)
+    
+    filters <- list(
+      min_top1_count = input$fd_cash_min_top1,
+      min_top2_count = input$fd_cash_min_top2,
+      min_top3_count = input$fd_cash_min_top3,
+      min_top5_count = input$fd_cash_min_top5,
+      excluded_drivers = input$fd_cash_excluded_drivers
+    )
+    
+    stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
+    paste("Number of lineups in filtered pool:", stats$count)
+  })
+  
+  # DraftKings cash simulation
+  observeEvent(input$run_dk_cash_sim, {
+    req(rv$simulation_results, rv$field_lineups, rv$dk_optimal_lineups)
+    
+    withProgress(message = 'Running DraftKings cash simulation...', value = 0, {
+      # Filter user lineups
+      filters <- list(
+        min_top1_count = input$dk_cash_min_top1,
+        min_top2_count = input$dk_cash_min_top2,
+        min_top3_count = input$dk_cash_min_top3,
+        min_top5_count = input$dk_cash_min_top5,
+        excluded_drivers = input$dk_cash_excluded_drivers,
+        num_lineups = 999999
+      )
+      
+      filtered_lineups <- generate_random_dk_lineups(rv$dk_optimal_lineups, filters)
+      
+      if(is.null(filtered_lineups) || nrow(filtered_lineups) == 0) {
+        showModal(modalDialog(
+          title = "Error",
+          "No lineups match your filters. Adjust your criteria.",
+          easyClose = TRUE
+        ))
+        return()
+      }
+      
+      # Convert DKName back to Name for simulation
+      for(i in 1:6) {
+        col_name <- paste0("Driver", i)
+        filtered_lineups[[col_name]] <- sapply(filtered_lineups[[col_name]], function(dk_name) {
+          match_idx <- which(rv$simulation_results$DKName == dk_name)
+          if(length(match_idx) > 0) {
+            rv$simulation_results$Name[match_idx[1]]
+          } else {
+            dk_name
+          }
+        })
+      }
+      
+      rv$dk_cash_results <- simulate_h2h_cash_contest(
+        filtered_lineups,
+        rv$field_lineups,
+        rv$simulation_results,
+        platform = "DK"
+      )
+      
+      showModal(modalDialog(
+        title = "Success",
+        sprintf("Cash simulation completed with %d lineups!", nrow(filtered_lineups)),
+        easyClose = TRUE
+      ))
+    })
+  })
+  
+  # FanDuel cash simulation
+  observeEvent(input$run_fd_cash_sim, {
+    req(rv$simulation_results, rv$field_lineups, rv$fd_optimal_lineups)
+    
+    withProgress(message = 'Running FanDuel cash simulation...', value = 0, {
+      # Filter user lineups
+      filters <- list(
+        min_top1_count = input$fd_cash_min_top1,
+        min_top2_count = input$fd_cash_min_top2,
+        min_top3_count = input$fd_cash_min_top3,
+        min_top5_count = input$fd_cash_min_top5,
+        excluded_drivers = input$fd_cash_excluded_drivers,
+        num_lineups = 999999
+      )
+      
+      filtered_lineups <- generate_random_fd_lineups(rv$fd_optimal_lineups, filters)
+      
+      if(is.null(filtered_lineups) || nrow(filtered_lineups) == 0) {
+        showModal(modalDialog(
+          title = "Error",
+          "No lineups match your filters. Adjust your criteria.",
+          easyClose = TRUE
+        ))
+        return()
+      }
+      
+      # Convert FDName back to Name for simulation
+      for(i in 1:5) {
+        col_name <- paste0("Driver", i)
+        filtered_lineups[[col_name]] <- sapply(filtered_lineups[[col_name]], function(fd_name) {
+          match_idx <- which(rv$simulation_results$FDName == fd_name)
+          if(length(match_idx) > 0) {
+            rv$simulation_results$Name[match_idx[1]]
+          } else {
+            fd_name
+          }
+        })
+      }
+      
+      # Run simulation
+      rv$fd_cash_results <- simulate_h2h_cash_contest(
+        filtered_lineups,
+        rv$field_lineups,
+        rv$simulation_results,
+        platform = "FD"
+      )
+      
+      showModal(modalDialog(
+        title = "Success",
+        sprintf("Cash simulation completed with %d lineups!", nrow(filtered_lineups)),
+        easyClose = TRUE
+      ))
+    })
+  })
+  
+  # Result tables - Updated to show top performers with player names
+  
+  # DraftKings Top 10 H2H Results
+  output$dk_h2h_top10 <- renderDT({
+    req(rv$dk_cash_results)
+    
+    # Get top 10 lineups by average win rate
+    top_lineups <- rv$dk_cash_results$h2h_results %>%
+      group_by(UserLineupIndex, UserLineupName) %>%
+      summarise(AvgWinRate = mean(WinRate), .groups = 'drop') %>%
+      arrange(desc(AvgWinRate)) %>%
+      head(10)
+    
+    # Add player names using DKName
+    display_data <- data.frame()
+    for(i in 1:nrow(top_lineups)) {
+      lineup_idx <- top_lineups$UserLineupIndex[i]
+      user_lineup <- rv$dk_cash_results$user_lineups[lineup_idx, ]
+      
+      # Convert back to DKName for display
+      dk_drivers <- character(6)
+      for(j in 1:6) {
+        driver_name <- user_lineup[[paste0("Driver", j)]]
+        # Find the DKName for this driver name
+        match_idx <- which(rv$simulation_results$Name == driver_name)
+        if(length(match_idx) > 0) {
+          dk_drivers[j] <- rv$simulation_results$DKName[match_idx[1]]
+        } else {
+          dk_drivers[j] <- driver_name
+        }
+      }
+      
+      display_data <- rbind(display_data, data.frame(
+        Rank = i,
+        LineupName = top_lineups$UserLineupName[i],
+        Driver1 = dk_drivers[1],
+        Driver2 = dk_drivers[2],
+        Driver3 = dk_drivers[3],
+        Driver4 = dk_drivers[4],
+        Driver5 = dk_drivers[5],
+        Driver6 = dk_drivers[6],
+        AvgWinRate = top_lineups$AvgWinRate[i]
+      ))
+    }
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 10,
+        scrollX = TRUE,
+        dom = "t",
+        ordering = FALSE
+      ),
+      rownames = FALSE
+    ) %>%
+      formatRound('AvgWinRate', digits = 1)
+  })
+  
+  output$dk_group_top25 <- renderDT({
+    req(rv$dk_cash_results)
+    
+    # Get top 25 lineups by win rate
+    top_lineups <- rv$dk_cash_results$group_results %>%
+      arrange(desc(WinRate)) %>%
+      head(25)
+    
+    # Add player names using DKName
+    display_data <- data.frame()
+    for(i in 1:nrow(top_lineups)) {
+      lineup_idx <- top_lineups$UserLineupIndex[i]
+      user_lineup <- rv$dk_cash_results$user_lineups[lineup_idx, ]
+      
+      # Convert back to DKName for display
+      dk_drivers <- character(6)
+      for(j in 1:6) {
+        driver_name <- user_lineup[[paste0("Driver", j)]]
+        # Find the DKName for this driver name
+        match_idx <- which(rv$simulation_results$Name == driver_name)
+        if(length(match_idx) > 0) {
+          dk_drivers[j] <- rv$simulation_results$DKName[match_idx[1]]
+        } else {
+          dk_drivers[j] <- driver_name
+        }
+      }
+      
+      display_data <- rbind(display_data, data.frame(
+        Rank = i,
+        LineupName = top_lineups$UserLineupName[i],
+        Driver1 = dk_drivers[1],
+        Driver2 = dk_drivers[2],
+        Driver3 = dk_drivers[3],
+        Driver4 = dk_drivers[4],
+        Driver5 = dk_drivers[5],
+        Driver6 = dk_drivers[6],
+        Win = top_lineups$WinRate[i],
+        Top3 = ifelse("Top3Pct" %in% names(top_lineups), top_lineups$Top3Pct[i], NA),
+        Top20Pct = ifelse("Top20Pct" %in% names(top_lineups), top_lineups$Top20Pct[i], top_lineups$Top25Pct[i]),
+        Top50Pct = top_lineups$Top50Pct[i]
+      ))
+    }
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        dom = "t",
+        ordering = FALSE
+      ),
+      rownames = FALSE
+    ) %>%
+      formatRound(c('Win', 'Top3', 'Top20Pct', 'Top50Pct'), digits = 1)
+  })
+  
+  # FanDuel Top 10 H2H Results
+  output$fd_h2h_top10 <- renderDT({
+    req(rv$fd_cash_results)
+    
+    # Get top 10 lineups by average win rate
+    top_lineups <- rv$fd_cash_results$h2h_results %>%
+      group_by(UserLineupIndex, UserLineupName) %>%
+      summarise(AvgWinRate = mean(WinRate), .groups = 'drop') %>%
+      arrange(desc(AvgWinRate)) %>%
+      head(10)
+    
+    # Add player names
+    display_data <- data.frame()
+    for(i in 1:nrow(top_lineups)) {
+      lineup_idx <- top_lineups$UserLineupIndex[i]
+      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
+      
+      display_data <- rbind(display_data, data.frame(
+        Rank = i,
+        LineupName = top_lineups$UserLineupName[i],
+        Driver1 = user_lineup$Driver1,
+        Driver2 = user_lineup$Driver2,
+        Driver3 = user_lineup$Driver3,
+        Driver4 = user_lineup$Driver4,
+        Driver5 = user_lineup$Driver5,
+        AvgWinRate = top_lineups$AvgWinRate[i]
+      ))
+    }
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 10,
+        scrollX = TRUE,
+        dom = "t",
+        ordering = FALSE
+      ),
+      rownames = FALSE
+    ) %>%
+      formatRound('AvgWinRate', digits = 1)
+  })
+  
+  # FanDuel Top 25 Group Contest Results
+  output$fd_group_top25 <- renderDT({
+    req(rv$fd_cash_results)
+    
+    # Get top 25 lineups by win rate
+    top_lineups <- rv$fd_cash_results$group_results %>%
+      arrange(desc(WinRate)) %>%
+      head(25)
+    
+    # Add player names
+    display_data <- data.frame()
+    for(i in 1:nrow(top_lineups)) {
+      lineup_idx <- top_lineups$UserLineupIndex[i]
+      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
+      
+      display_data <- rbind(display_data, data.frame(
+        Rank = i,
+        LineupName = top_lineups$UserLineupName[i],
+        Driver1 = user_lineup$Driver1,
+        Driver2 = user_lineup$Driver2,
+        Driver3 = user_lineup$Driver3,
+        Driver4 = user_lineup$Driver4,
+        Driver5 = user_lineup$Driver5,
+        WinRate = top_lineups$WinRate[i],
+        Top25Pct = top_lineups$Top25Pct[i]
+      ))
+    }
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        dom = "t",
+        ordering = FALSE
+      ),
+      rownames = FALSE
+    ) %>%
+      formatRound(c('WinRate', 'Top25Pct'), digits = 1)
+  })
+  
+# Download handlers - Updated for complete results with player names
+
+  output$download_dk_h2h_complete <- downloadHandler(
+    filename = function() {
+      paste("dk_h2h_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+    },
+    content = function(file) {
+      complete_results <- rv$dk_cash_results$h2h_results
+      
+      # Add DKName to results
+      enhanced_results <- complete_results
+      enhanced_results$User_Driver1 <- ""
+      enhanced_results$User_Driver2 <- ""
+      enhanced_results$User_Driver3 <- ""
+      enhanced_results$User_Driver4 <- ""
+      enhanced_results$User_Driver5 <- ""
+      enhanced_results$User_Driver6 <- ""
+      
+      for(i in 1:nrow(enhanced_results)) {
+        lineup_idx <- enhanced_results$UserLineupIndex[i]
+        user_lineup <- rv$dk_cash_results$user_lineups[lineup_idx, ]
+        
+        # Convert back to DKName for download
+        for(j in 1:6) {
+          driver_name <- user_lineup[[paste0("Driver", j)]]
+          match_idx <- which(rv$simulation_results$Name == driver_name)
+          if(length(match_idx) > 0) {
+            enhanced_results[[paste0("User_Driver", j)]][i] <- rv$simulation_results$DKName[match_idx[1]]
+          } else {
+            enhanced_results[[paste0("User_Driver", j)]][i] <- driver_name
+          }
+        }
+      }
+      
+      write.csv(enhanced_results, file, row.names = FALSE)
+    }
+  )
+  
+  output$download_dk_group_complete <- downloadHandler(
+    filename = function() {
+      paste("dk_se_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+    },
+    content = function(file) {
+      complete_results <- rv$dk_cash_results$group_results
+      
+      # Add DKName to results
+      enhanced_results <- complete_results
+      enhanced_results$Driver1 <- ""
+      enhanced_results$Driver2 <- ""
+      enhanced_results$Driver3 <- ""
+      enhanced_results$Driver4 <- ""
+      enhanced_results$Driver5 <- ""
+      enhanced_results$Driver6 <- ""
+      
+      for(i in 1:nrow(enhanced_results)) {
+        lineup_idx <- enhanced_results$UserLineupIndex[i]
+        user_lineup <- rv$dk_cash_results$user_lineups[lineup_idx, ]
+        
+        # Convert back to DKName for download
+        for(j in 1:6) {
+          driver_name <- user_lineup[[paste0("Driver", j)]]
+          match_idx <- which(rv$simulation_results$Name == driver_name)
+          if(length(match_idx) > 0) {
+            enhanced_results[[paste0("Driver", j)]][i] <- rv$simulation_results$DKName[match_idx[1]]
+          } else {
+            enhanced_results[[paste0("Driver", j)]][i] <- driver_name
+          }
+        }
+      }
+      
+      write.csv(enhanced_results, file, row.names = FALSE)
+    }
+  )
+  
+
+output$download_fd_h2h_complete <- downloadHandler(
+  filename = function() {
+    paste("fd_h2h_complete_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    complete_results <- rv$fd_cash_results$h2h_results
+    
+    # Add player names to results
+    enhanced_results <- complete_results
+    enhanced_results$User_Driver1 <- ""
+    enhanced_results$User_Driver2 <- ""
+    enhanced_results$User_Driver3 <- ""
+    enhanced_results$User_Driver4 <- ""
+    enhanced_results$User_Driver5 <- ""
+    
+    for(i in 1:nrow(enhanced_results)) {
+      lineup_idx <- enhanced_results$UserLineupIndex[i]
+      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
+      enhanced_results$User_Driver1[i] <- user_lineup$Driver1
+      enhanced_results$User_Driver2[i] <- user_lineup$Driver2
+      enhanced_results$User_Driver3[i] <- user_lineup$Driver3
+      enhanced_results$User_Driver4[i] <- user_lineup$Driver4
+      enhanced_results$User_Driver5[i] <- user_lineup$Driver5
+    }
+    
+    write.csv(enhanced_results, file, row.names = FALSE)
+  }
+)
+
+output$download_fd_group_complete <- downloadHandler(
+  filename = function() {
+    paste("fd_group_complete_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    complete_results <- rv$fd_cash_results$group_results
+    
+    # Add player names to results
+    enhanced_results <- complete_results
+    enhanced_results$Driver1 <- ""
+    enhanced_results$Driver2 <- ""
+    enhanced_results$Driver3 <- ""
+    enhanced_results$Driver4 <- ""
+    enhanced_results$Driver5 <- ""
+    
+    for(i in 1:nrow(enhanced_results)) {
+      lineup_idx <- enhanced_results$UserLineupIndex[i]
+      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
+      enhanced_results$Driver1[i] <- user_lineup$Driver1
+      enhanced_results$Driver2[i] <- user_lineup$Driver2
+      enhanced_results$Driver3[i] <- user_lineup$Driver3
+      enhanced_results$Driver4[i] <- user_lineup$Driver4
+      enhanced_results$Driver5[i] <- user_lineup$Driver5
+    }
+    
+    write.csv(enhanced_results, file, row.names = FALSE)
+  }
+)
+
+output$download_fd_lineups_with_names <- downloadHandler(
+  filename = function() {
+    paste("fd_lineups_with_names_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    write.csv(rv$fd_cash_results$user_lineups, file, row.names = FALSE)
+  }
+)
 }
 
 
