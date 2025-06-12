@@ -22,7 +22,7 @@ options(datatable.optimize = Inf)
 custom_css <- "
   /* Override dashboard header colors */
   .skin-blue .main-header {
-    background-color: #000000;
++    background-color: #000000;
   }
   .skin-blue .main-header .logo {
     background-color: #000000;
@@ -414,7 +414,7 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       # Create match info for finding similar historical matches
       tour <- match_players$Tour[1]
       is_straight_sets <- as.integer(outcome_type == "SS")
-      best_of_value <- ifelse(tour == "ATP", 5, 3)
+      best_of_value <- 3
       
       # Find similar historical matches
       similar_matches <- hist_dt[
