@@ -1631,6 +1631,11 @@ ui <- dashboardPage(
   # Dashboard sidebar
   dashboardSidebar(
     useShinyjs(),
+    div(
+      style = "text-align: center; padding: 10px; margin-bottom: 5px;",
+      tags$img(src = "logo.jpg", height = "200px", width = "auto", 
+               style = "border: 2px solid #FFD700; border-radius: 10px;")
+    ),
     sidebarMenu(
       id = "sidebar_menu",
       menuItem("Input Check", tabName = "upload", icon = icon("upload")),
