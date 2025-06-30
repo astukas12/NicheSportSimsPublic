@@ -202,8 +202,8 @@ calculate_ew_metrics <- function(simulation_results, n_simulations) {
   return(ew_metrics)
 }
 
+# Replace the calculate_filtered_pool_stats function with this updated version:
 
-# Calculate filtered pool stats
 calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Validate inputs before proceeding
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -243,9 +243,12 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
   }
   
+  # Apply TotalEW filter safely
   if (!is.null(filters$min_total_ew) && filters$min_total_ew > 0 && "TotalEW" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
   }
+  
+  # Apply win percentage filters safely
   if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0 && "Win6Pct" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
   }
@@ -296,7 +299,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   
   # Calculate thresholds for display
   thresholds <- list()
-  threshold_columns <- c("Top1Count", "Top2Count", "Top3Count", "Top5Count")
+  threshold_columns <- c("Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalEW")
   
   for (col in threshold_columns) {
     if (col %in% names(filtered_lineups) && !all(is.na(filtered_lineups[[col]]))) {
@@ -304,8 +307,13 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
       max_val <- max(filtered_lineups[[col]], na.rm = TRUE)
       
       # Use proper naming convention
-      min_name <- paste0("min_", sub("Count", "", tolower(col)))
-      max_name <- paste0("max_", sub("Count", "", tolower(col)))
+      if (col == "TotalEW") {
+        min_name <- "min_total_ew"
+        max_name <- "max_total_ew"
+      } else {
+        min_name <- paste0("min_", sub("Count", "", tolower(col)))
+        max_name <- paste0("max_", sub("Count", "", tolower(col)))
+      }
       
       thresholds[[min_name]] <- min_val
       thresholds[[max_name]] <- max_val
@@ -317,6 +325,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     thresholds = thresholds
   ))
 }
+
 
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
@@ -1573,7 +1582,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   return(lineup_counter)
 }
 
-expand_lineup_details <- function(lineup_stats, player_data) {
+expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) {
   start_time <- Sys.time()
   cat("\n=== EXPANDING LINEUP DETAILS ===\n")
   cat("Timestamp:", format(start_time, "%Y-%m-%d %H:%M:%S"), "\n")
@@ -1598,6 +1607,17 @@ expand_lineup_details <- function(lineup_stats, player_data) {
   # Create a fast player name to salary lookup
   player_salary_map <- setNames(player_dt$Salary, player_dt[[name_col]])
   
+  # Create EW lookup if EW metrics provided
+  ew_lookup <- NULL
+  if (!is.null(ew_metrics)) {
+    if (is.data.table(ew_metrics)) {
+      ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
+    } else if (is.data.frame(ew_metrics)) {
+      ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
+    }
+    cat("EW metrics loaded for", length(ew_lookup), "players\n")
+  }
+  
   # Pre-allocate the results data.table for better performance
   expanded_lineups <- data.table(
     LineupID = lineup_dt$LineupID,
@@ -1614,6 +1634,11 @@ expand_lineup_details <- function(lineup_stats, player_data) {
     Win4PlusPct = lineup_dt$Win4PlusPct,
     TotalSalary = numeric(nrow(lineup_dt))
   )
+  
+  # Add TotalEW column if EW metrics are available
+  if (!is.null(ew_lookup)) {
+    expanded_lineups[, TotalEW := numeric(nrow(lineup_dt))]
+  }
   
   # Add player name and salary columns
   for (j in 1:6) {
@@ -1655,6 +1680,14 @@ expand_lineup_details <- function(lineup_stats, player_data) {
       # Calculate total salary
       total_salary <- sum(player_salaries, na.rm = TRUE)
       set(expanded_lineups, i, "TotalSalary", total_salary)
+      
+      # Calculate total EW if available
+      if (!is.null(ew_lookup)) {
+        player_ew <- ew_lookup[player_names]
+        player_ew[is.na(player_ew)] <- 0
+        total_ew <- sum(player_ew, na.rm = TRUE)
+        set(expanded_lineups, i, "TotalEW", total_ew)
+      }
       
       # Sort players by salary (descending)
       sorted_indices <- order(player_salaries, decreasing = TRUE)
@@ -1699,10 +1732,14 @@ expand_lineup_details <- function(lineup_stats, player_data) {
   cat("\n=== LINEUP DETAIL EXPANSION COMPLETED ===\n")
   cat(sprintf("Total expansion time: %.2f seconds\n", as.numeric(total_elapsed)))
   cat(sprintf("Processed %s lineups\n", format(nrow(expanded_lineups), big.mark = ",")))
+  if (!is.null(ew_lookup)) {
+    cat("Added TotalEW column with Expected Wins metrics\n")
+  }
   cat("Timestamp:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
   return(expanded_lineups)
 }
+
 
 # Define UI
 ui <- dashboardPage(
@@ -2593,8 +2630,8 @@ server <- function(input, output, session) {
       layout(margin = list(l = 120)) # Add left margin for player names
   })
   
-  # Correct the optimal_lineups_table output
-  # Updated optimal_lineups_table output with improved sorting
+  # Replace the optimal_lineups_table output in your server code:
+  
   output$optimal_lineups_table <- renderDT({
     # Force validation and show diagnostic info
     cat("Optimization complete:", rv$optimization_complete, "\n")
@@ -2620,10 +2657,10 @@ server <- function(input, output, session) {
       player_cols <- character(0)
     }
     
-    # Select columns for display
+    # Select columns for display - include TotalEW if available
     display_cols <- c(
       player_cols,
-      "TotalSalary", "Win6Pct", "Win5PlusPct", "Win4PlusPct",  # NEW WIN COLUMNS
+      "TotalSalary", "TotalEW", "Win6Pct", "Win5PlusPct", "Win4PlusPct",  # Include TotalEW
       "Top1Count", "Top2Count", "Top3Count", "Top5Count"
     )
     
@@ -2695,6 +2732,7 @@ server <- function(input, output, session) {
       dt <- dt %>% formatCurrency("TotalSalary", "$", digits = 0)
     }
     
+    # Format EW metrics
     if("TotalEW" %in% display_cols) {
       dt <- dt %>% formatRound("TotalEW", 2)
     }
