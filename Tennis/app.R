@@ -2657,10 +2657,12 @@ server <- function(input, output, session) {
       player_cols <- character(0)
     }
     
-    # Select columns for display - include TotalEW if available
+    # Select columns for display - INCLUDE TotalEW in the primary display columns
     display_cols <- c(
       player_cols,
-      "TotalSalary", "TotalEW", "Win6Pct", "Win5PlusPct", "Win4PlusPct",  # Include TotalEW
+      "TotalEW",           # ADD TotalEW as a primary column
+      "TotalSalary", 
+      "Win6Pct", "Win5PlusPct", "Win4PlusPct",
       "Top1Count", "Top2Count", "Top3Count", "Top5Count"
     )
     
@@ -2670,28 +2672,26 @@ server <- function(input, output, session) {
     # Use the selected columns from the data frame
     display_data <- lineups_df[, display_cols, drop = FALSE]
     
-    # Sort the data by Top1Count (desc) then by Top5Count (desc)
-    if("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
+    # Sort the data by TotalEW (desc) then by Top1Count (desc) for better lineup ranking
+    if("TotalEW" %in% names(display_data) && "Top1Count" %in% names(display_data)) {
+      display_data <- display_data[order(-display_data$TotalEW, -display_data$Top1Count), ]
+    } else if("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
       display_data <- display_data[order(-display_data$Top1Count, -display_data$Top5Count), ]
     } else if("Top1Count" %in% names(display_data)) {
       display_data <- display_data[order(-display_data$Top1Count), ]
     }
     
-    # Find the column indices for Top1Count and Top5Count for the datatable ordering
-    top1_col_idx <- which(names(display_data) == "Top1Count") - 1  # DT uses 0-based indexing
-    top5_col_idx <- which(names(display_data) == "Top5Count") - 1  # DT uses 0-based indexing
+    # Find the column indices for sorting
+    totalew_col_idx <- which(names(display_data) == "TotalEW") - 1  # DT uses 0-based indexing
+    top1_col_idx <- which(names(display_data) == "Top1Count") - 1
     
-    # Create the ordering specification
-    # If both columns exist, sort by Top1Count desc, then Top5Count desc
-    if(length(top1_col_idx) > 0 && length(top5_col_idx) > 0) {
-      order_spec <- list(
-        list(top1_col_idx, 'desc'),
-        list(top5_col_idx, 'desc')
-      )
+    # Create the ordering specification - prioritize TotalEW if available
+    if(length(totalew_col_idx) > 0) {
+      order_spec <- list(list(totalew_col_idx, 'desc'))
     } else if(length(top1_col_idx) > 0) {
       order_spec <- list(list(top1_col_idx, 'desc'))
     } else {
-      order_spec <- list(list(0, 'desc'))  # Default to first column
+      order_spec <- list(list(0, 'desc'))
     }
     
     # Create datatable
@@ -2700,17 +2700,24 @@ server <- function(input, output, session) {
       options = list(
         scrollX = TRUE,
         pageLength = 50,
-        order = order_spec,  # Use the multi-column sorting
+        order = order_spec,
         columnDefs = list(
-          # Make the count columns more prominent with center alignment
-          list(className = 'dt-center', targets = c(top1_col_idx, top5_col_idx)),
-          # Optional: make the top count columns have a different background
+          list(className = 'dt-center', targets = c(totalew_col_idx, top1_col_idx)),
           list(className = 'dt-body-nowrap', targets = "_all")
         )
       ),
       rownames = FALSE
     ) %>%
-      # Add conditional formatting to highlight high-performing lineups
+      # Add conditional formatting for TotalEW
+      formatStyle(
+        "TotalEW",
+        backgroundColor = styleInterval(
+          c(2.0, 2.5, 3.0, 3.5), 
+          c("white", "#e8f5e8", "#d4e6d4", "#c0d7c0", "#8bc34a")
+        ),
+        fontWeight = styleInterval(3.0, c("normal", "bold"))
+      ) %>%
+      # Keep existing formatting for Top1Count
       formatStyle(
         "Top1Count",
         backgroundColor = styleInterval(
@@ -2718,13 +2725,6 @@ server <- function(input, output, session) {
           c("white", "#fff3cd", "#ffeaa7", "#fdcb6e", "#e17055")
         ),
         fontWeight = styleInterval(10, c("normal", "bold"))
-      ) %>%
-      formatStyle(
-        "Top5Count", 
-        backgroundColor = styleInterval(
-          c(5, 15, 30, 50), 
-          c("white", "#f8f9fa", "#e9ecef", "#dee2e6", "#ced4da")
-        )
       )
     
     # Format salary
@@ -2732,10 +2732,12 @@ server <- function(input, output, session) {
       dt <- dt %>% formatCurrency("TotalSalary", "$", digits = 0)
     }
     
-    # Format EW metrics
+    # Format EW metrics - IMPORTANT: Format TotalEW to 2 decimal places
     if("TotalEW" %in% display_cols) {
       dt <- dt %>% formatRound("TotalEW", 2)
     }
+    
+    # Format win percentages
     if("Win6Pct" %in% display_cols) {
       dt <- dt %>% formatRound("Win6Pct", 1)
     }
@@ -2748,6 +2750,7 @@ server <- function(input, output, session) {
     
     dt
   })
+  
   
   # Lineup count thresholds
   output$lineup_count_thresholds <- renderDT({
