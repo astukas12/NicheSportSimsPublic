@@ -414,7 +414,7 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       # Create match info for finding similar historical matches
       tour <- match_players$Tour[1]
       is_straight_sets <- as.integer(outcome_type == "SS")
-      best_of_value <- 3
+      best_of_value <- ifelse(tour == "ATP", 5, 3)
       
       # Find similar historical matches
       similar_matches <- hist_dt[
@@ -1794,52 +1794,52 @@ ui <- dashboardPage(
                                numericInput("min_top5_count", "Min Top 5 Count:", 
                                             value = 0, min = 0)
                         )
-                        )
-                      ),
-                      fluidRow(
-                        column(6,
-                               selectizeInput("excluded_players", "Exclude Players:",
-                                              choices = NULL,
-                                              multiple = TRUE,
-                                              options = list(plugins = list('remove_button')))
-                        ),
-                        column(6,
-                               numericInput("num_lineups", "Number of Lineups to Generate:", 
-                                            value = 20, min = 1, max = 150)
-                        )
-                      ),
-                      fluidRow(
-                        column(6,
-                               div(class = "well well-sm",
-                                   h4("Filtered Pool Statistics:"),
-                                   textOutput("filtered_pool_size")
-                               )
-                        ),
-                        column(6,
-                               div(style = "margin-top: 20px;",
-                                   actionButton("generate_lineups", "Generate Lineups", 
-                                                class = "btn-primary btn-lg", 
-                                                style = "width: 100%;"),
-                                   br(), br(),
-                                   downloadButton("download_generated_lineups", "Download Lineups", 
-                                                  style = "width: 100%;")
-                               )
-                        )
                       )
-                  )
-                ),
-                fluidRow(
-                  box(width = 12,
-                      title = "Player Exposure Analysis",
-                      DTOutput("player_exposure_table") %>% withSpinner(color = "#FFD700")
-                  )
-                ),
-                fluidRow(
-                  box(width = 12,
-                      title = "Generated Lineups",
-                      DTOutput("generated_lineups_table") %>% withSpinner(color = "#FFD700")
+                  ),
+                  fluidRow(
+                    column(6,
+                           selectizeInput("excluded_players", "Exclude Players:",
+                                          choices = NULL,
+                                          multiple = TRUE,
+                                          options = list(plugins = list('remove_button')))
+                    ),
+                    column(6,
+                           numericInput("num_lineups", "Number of Lineups to Generate:", 
+                                        value = 20, min = 1, max = 150)
+                    )
+                  ),
+                  fluidRow(
+                    column(6,
+                           div(class = "well well-sm",
+                               h4("Filtered Pool Statistics:"),
+                               textOutput("filtered_pool_size")
+                           )
+                    ),
+                    column(6,
+                           div(style = "margin-top: 20px;",
+                               actionButton("generate_lineups", "Generate Lineups", 
+                                            class = "btn-primary btn-lg", 
+                                            style = "width: 100%;"),
+                               br(), br(),
+                               downloadButton("download_generated_lineups", "Download Lineups", 
+                                              style = "width: 100%;")
+                           )
+                    )
                   )
                 )
+              ),
+              fluidRow(
+                box(width = 12,
+                    title = "Player Exposure Analysis",
+                    DTOutput("player_exposure_table") %>% withSpinner(color = "#FFD700")
+                )
+              ),
+              fluidRow(
+                box(width = 12,
+                    title = "Generated Lineups",
+                    DTOutput("generated_lineups_table") %>% withSpinner(color = "#FFD700")
+                )
+              )
               
       )
     )
@@ -1869,7 +1869,7 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "simulation_complete", suspendWhenHidden = FALSE)
   
-
+  
   output$optimization_complete <- reactive({
     # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
     result <- tolower(as.character(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0))
@@ -2443,7 +2443,7 @@ server <- function(input, output, session) {
     ggplotly(p, tooltip = c("text", "x", "y", "size", "color"))
   })
   
-
+  
   
   
   # Player score distribution - box and whisker for winning scores only
@@ -2486,7 +2486,7 @@ server <- function(input, output, session) {
     ggplotly(p) %>%
       layout(margin = list(l = 120)) # Add left margin for player names
   })
-
+  
   # Correct the optimal_lineups_table output
   # Updated optimal_lineups_table output with improved sorting
   output$optimal_lineups_table <- renderDT({
@@ -2704,7 +2704,7 @@ server <- function(input, output, session) {
       formatRound(c('OptimalRate', 'EliteRate', 'FloorRate', 'AppearanceRate', 'Exposure', 'Leverage'), digits = 1)
   })
   
-
+  
   # Generated lineups table
   output$generated_lineups_table <- renderDT({
     req(rv$dk_random_lineups)
@@ -2968,8 +2968,8 @@ server <- function(input, output, session) {
     gc(verbose = FALSE, full = TRUE)
   })
 }
-                    
-                    
+
+
 
 # Run the application
 shinyApp(ui = ui, server = server)
