@@ -1610,15 +1610,19 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   # Create EW lookup if EW metrics provided
   ew_lookup <- NULL
   if (!is.null(ew_metrics)) {
+    cat("EW metrics provided - creating lookup table\n")
     if (is.data.table(ew_metrics)) {
       ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
     } else if (is.data.frame(ew_metrics)) {
       ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
     }
-    cat("EW metrics loaded for", length(ew_lookup), "players\n")
+    cat("EW lookup created for", length(ew_lookup), "players\n")
+    cat("Sample EW values:", paste(head(ew_lookup, 3), collapse = ", "), "\n")
+  } else {
+    cat("No EW metrics provided - TotalEW column will not be calculated\n")
   }
   
-  # Pre-allocate the results data.table for better performance
+  # Pre-allocate the results data.table for better performance - FIX THE STRUCTURE
   expanded_lineups <- data.table(
     LineupID = lineup_dt$LineupID,
     Count = lineup_dt$Count,
@@ -1732,9 +1736,14 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   cat("\n=== LINEUP DETAIL EXPANSION COMPLETED ===\n")
   cat(sprintf("Total expansion time: %.2f seconds\n", as.numeric(total_elapsed)))
   cat(sprintf("Processed %s lineups\n", format(nrow(expanded_lineups), big.mark = ",")))
-  if (!is.null(ew_lookup)) {
-    cat("Added TotalEW column with Expected Wins metrics\n")
+  
+  # Final debug output
+  cat("Final columns in expanded_lineups:", paste(names(expanded_lineups), collapse = ", "), "\n")
+  if (!is.null(ew_lookup) && "TotalEW" %in% names(expanded_lineups)) {
+    cat("TotalEW column successfully added\n")
+    cat("TotalEW range:", min(expanded_lineups$TotalEW, na.rm=TRUE), "to", max(expanded_lineups$TotalEW, na.rm=TRUE), "\n")
   }
+  
   cat("Timestamp:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
   return(expanded_lineups)
@@ -2297,7 +2306,6 @@ server <- function(input, output, session) {
     gc(full = TRUE)
   })
   
-  # Run lineup optimization
   observeEvent(input$run_dk_optimization, {
     req(rv$simulation_results, rv$player_projections)
     
@@ -2312,7 +2320,6 @@ server <- function(input, output, session) {
     
     # Show progress dialog
     withProgress(message = 'Finding optimal lineups...', value = 0, {
-      # Show a specific modal
       showModal(modalDialog(
         title = "Processing Optimal Lineups",
         "Finding optimal lineups using all simulations. This may take a few minutes.",
@@ -2324,7 +2331,32 @@ server <- function(input, output, session) {
       
       # Step 1: Calculate EW metrics
       incProgress(0.1, detail = "Calculating EW metrics...")
-      ew_metrics <- calculate_ew_metrics(rv$simulation_results, input$n_sims)
+      
+      cat("\n=== STARTING EW CALCULATION ===\n")
+      cat("Simulation results available:", !is.null(rv$simulation_results), "\n")
+      cat("Number of simulation rows:", ifelse(!is.null(rv$simulation_results), nrow(rv$simulation_results), 0), "\n")
+      
+      ew_metrics <- tryCatch({
+        calculate_ew_metrics(rv$simulation_results, input$n_sims)
+      }, error = function(e) {
+        cat("Error calculating EW metrics:", e$message, "\n")
+        return(NULL)
+      })
+      
+      # DEBUG: Check EW metrics
+      cat("\n=== EW METRICS DEBUG ===\n")
+      cat("EW metrics calculated successfully:", !is.null(ew_metrics), "\n")
+      if (!is.null(ew_metrics)) {
+        cat("Number of players with EW:", nrow(ew_metrics), "\n")
+        cat("EW columns:", paste(names(ew_metrics), collapse = ", "), "\n")
+        if (nrow(ew_metrics) > 0) {
+          cat("Sample EW values:\n")
+          print(head(ew_metrics, 5))
+        }
+      } else {
+        cat("EW metrics calculation failed or returned NULL\n")
+      }
+      cat("========================\n")
       
       # Step 2: Find optimal lineups
       incProgress(0.3, detail = "Finding optimal lineups...")
@@ -2335,10 +2367,25 @@ server <- function(input, output, session) {
       
       # Step 3: Expand lineup details with EW metrics
       incProgress(0.6, detail = "Processing lineup details...")
+      
+      # DEBUG: Check if we're passing EW metrics correctly
+      cat("About to call expand_lineup_details:\n")
+      cat("  - optimal_lineups is null:", is.null(optimal_lineups), "\n")
+      cat("  - rv$dk_data is null:", is.null(rv$dk_data), "\n")
+      cat("  - ew_metrics is null:", is.null(ew_metrics), "\n")
+      
       expanded_lineups <- expand_lineup_details(
         optimal_lineups,
-        rv$dk_data
+        rv$dk_data,
+        ew_metrics  # This should now work
       )
+      
+      # DEBUG: Check if TotalEW was added
+      cat("expand_lineup_details completed successfully\n")
+      cat("TotalEW column exists in expanded lineups:", "TotalEW" %in% names(expanded_lineups), "\n")
+      if ("TotalEW" %in% names(expanded_lineups)) {
+        cat("TotalEW range:", min(expanded_lineups$TotalEW, na.rm=TRUE), "to", max(expanded_lineups$TotalEW, na.rm=TRUE), "\n")
+      }
       
       # Store results
       rv$dk_optimal_lineups <- expanded_lineups
@@ -2383,13 +2430,22 @@ server <- function(input, output, session) {
       
       # Show success message
       if(!is.null(rv$dk_optimal_lineups)) {
+        success_msg <- sprintf(
+          "Successfully generated <b>%d</b> optimal lineups!<br><br>",
+          nrow(rv$dk_optimal_lineups)
+        )
+        
+        if ("TotalEW" %in% names(rv$dk_optimal_lineups)) {
+          success_msg <- paste0(success_msg, "✅ Expected Wins (EW) metrics included<br><br>")
+        } else {
+          success_msg <- paste0(success_msg, "⚠️ EW metrics not available<br><br>")
+        }
+        
+        success_msg <- paste0(success_msg, "You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.")
+        
         showModal(modalDialog(
           title = "Success",
-          HTML(sprintf(
-            "Successfully generated <b>%d</b> optimal lineups!<br><br>
-            You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.",
-            nrow(rv$dk_optimal_lineups)
-          )),
+          HTML(success_msg),
           easyClose = TRUE
         ))
       }
