@@ -2300,8 +2300,7 @@ server <- function(input, output, session) {
       incProgress(0.6, detail = "Processing lineup details...")
       expanded_lineups <- expand_lineup_details(
         optimal_lineups,
-        rv$dk_data,
-        ew_metrics  # ADD THIS PARAMETER
+        rv$dk_data
       )
       
       # Store results
