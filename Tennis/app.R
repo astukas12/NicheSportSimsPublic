@@ -170,6 +170,38 @@ cleanup_memory <- function(verbose = FALSE) {
   }
 }
 
+# Calculate Expected Wins and high-win percentages from simulation results
+calculate_ew_metrics <- function(simulation_results, n_simulations) {
+  cat("Calculating EW metrics from simulation results...\n")
+  
+  # Convert to data.table for performance
+  sim_dt <- as.data.table(simulation_results)
+  
+  # Calculate win counts per iteration for each player
+  win_counts <- sim_dt[Result == "Winner", .N, by = .(Iteration, Player)]
+  
+  # Create a complete grid of all iterations and players (including 0 wins)
+  all_iterations <- unique(sim_dt$Iteration)
+  all_players <- unique(sim_dt$Player)
+  
+  complete_grid <- CJ(Iteration = all_iterations, Player = all_players)
+  
+  # Merge with actual win counts (NAs become 0)
+  win_counts_complete <- merge(complete_grid, win_counts, 
+                               by = c("Iteration", "Player"), all.x = TRUE)
+  win_counts_complete[is.na(N), N := 0]
+  
+  # Calculate metrics for each player
+  ew_metrics <- win_counts_complete[, .(
+    EW = mean(N, na.rm = TRUE),  # Expected Wins
+    Win6Plus = mean(N >= 6, na.rm = TRUE) * 100,  # 6+ win %
+    Win5Plus = mean(N >= 5, na.rm = TRUE) * 100   # 5+ win %
+  ), by = Player]
+  
+  cat("EW metrics calculated for", nrow(ew_metrics), "players\n")
+  return(ew_metrics)
+}
+
 
 # Calculate filtered pool stats
 calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
@@ -209,6 +241,18 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Apply Top5Count filter safely
   if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  
+  if (!is.null(filters$min_total_ew) && filters$min_total_ew > 0 && "TotalEW" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
+  }
+  
+  if (!is.null(filters$min_avg_6plus) && filters$min_avg_6plus > 0 && "Avg6Plus" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Avg6Plus >= filters$min_avg_6plus]
+  }
+  
+  if (!is.null(filters$min_avg_5plus) && filters$min_avg_5plus > 0 && "Avg5Plus" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Avg5Plus >= filters$min_avg_5plus]
   }
   
   # Apply player exclusion filter safely
@@ -1249,6 +1293,8 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   
   cat(sprintf("Processing %s iterations to find optimal lineups\n", format(total_iterations, big.mark = ",")))
   
+  ew_metrics <- calculate_ew_metrics(simulation_results, total_iterations)
+  
   # Use smaller batch sizes for better progress reporting
   batch_size <- min(500, total_iterations)  # Reduced from 1000 to 500
   n_batches <- ceiling(total_iterations / batch_size)
@@ -1495,7 +1541,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   return(lineup_counter)
 }
 
-expand_lineup_details <- function(lineup_stats, player_data) {
+expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL){
   start_time <- Sys.time()
   cat("\n=== EXPANDING LINEUP DETAILS ===\n")
   cat("Timestamp:", format(start_time, "%Y-%m-%d %H:%M:%S"), "\n")
@@ -1503,6 +1549,14 @@ expand_lineup_details <- function(lineup_stats, player_data) {
   # Make sure we're working with data.tables
   lineup_dt <- as.data.table(lineup_stats)
   player_dt <- as.data.table(player_data)
+  
+  # Create EW lookup if provided
+  ew_lookup <- NULL
+  if (!is.null(ew_metrics)) {
+    ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
+    win6_lookup <- setNames(ew_metrics$Win6Plus, ew_metrics$Player)
+    win5_lookup <- setNames(ew_metrics$Win5Plus, ew_metrics$Player)
+  }
   
   total_lineups <- nrow(lineup_dt)
   cat(sprintf("Expanding details for %s lineups\n", format(total_lineups, big.mark = ",")))
@@ -1528,7 +1582,10 @@ expand_lineup_details <- function(lineup_stats, player_data) {
     Top2Count = lineup_dt$Top2Count,
     Top3Count = lineup_dt$Top3Count,
     Top5Count = lineup_dt$Top5Count,
-    TotalSalary = numeric(nrow(lineup_dt))
+    TotalSalary = numeric(nrow(lineup_dt)),
+    TotalEW = numeric(nrow(lineup_dt)),      # ADD THIS
+    Avg6Plus = numeric(nrow(lineup_dt)),     # ADD THIS
+    Avg5Plus = numeric(nrow(lineup_dt))      # ADD THIS
   )
   
   # Add player name and salary columns
@@ -1571,6 +1628,16 @@ expand_lineup_details <- function(lineup_stats, player_data) {
       # Calculate total salary
       total_salary <- sum(player_salaries, na.rm = TRUE)
       set(expanded_lineups, i, "TotalSalary", total_salary)
+      
+      if (!is.null(ew_lookup)) {
+        total_ew <- sum(ew_lookup[player_names], na.rm = TRUE)
+        avg_6plus <- mean(win6_lookup[player_names], na.rm = TRUE)
+        avg_5plus <- mean(win5_lookup[player_names], na.rm = TRUE)
+        
+        set(expanded_lineups, i, "TotalEW", total_ew)
+        set(expanded_lineups, i, "Avg6Plus", avg_6plus)
+        set(expanded_lineups, i, "Avg5Plus", avg_5plus)
+      }
       
       # Sort players by salary (descending)
       sorted_indices <- order(player_salaries, decreasing = TRUE)
@@ -1754,6 +1821,7 @@ ui <- dashboardPage(
       ),
       
       # Lineup Builder Tab
+      # Lineup Builder Tab
       tabItem(tabName = "lineup_builder",
               conditionalPanel(
                 condition = "!output.optimization_complete",
@@ -1794,54 +1862,69 @@ ui <- dashboardPage(
                                numericInput("min_top5_count", "Min Top 5 Count:", 
                                             value = 0, min = 0)
                         )
+                      ),
+                      # ADD THIS ROW:
+                      fluidRow(
+                        column(4,
+                               numericInput("min_total_ew", "Min Total EW:", 
+                                            value = 0, min = 0, step = 0.1)
+                        ),
+                        column(4,
+                               numericInput("min_avg_6plus", "Min Avg 6+ Win %:", 
+                                            value = 0, min = 0, max = 100, step = 0.1)
+                        ),
+                        column(4,
+                               numericInput("min_avg_5plus", "Min Avg 5+ Win %:", 
+                                            value = 0, min = 0, max = 100, step = 0.1)
+                        )
+                      ),
+                      fluidRow(
+                        column(6,
+                               selectizeInput("excluded_players", "Exclude Players:",
+                                              choices = NULL,
+                                              multiple = TRUE,
+                                              options = list(plugins = list('remove_button')))
+                        ),
+                        column(6,
+                               numericInput("num_lineups", "Number of Lineups to Generate:", 
+                                            value = 20, min = 1, max = 150)
+                        )
+                      ),
+                      fluidRow(
+                        column(6,
+                               div(class = "well well-sm",
+                                   h4("Filtered Pool Statistics:"),
+                                   textOutput("filtered_pool_size")
+                               )
+                        ),
+                        column(6,
+                               div(style = "margin-top: 20px;",
+                                   actionButton("generate_lineups", "Generate Lineups", 
+                                                class = "btn-primary btn-lg", 
+                                                style = "width: 100%;"),
+                                   br(), br(),
+                                   downloadButton("download_generated_lineups", "Download Lineups", 
+                                                  style = "width: 100%;")
+                               )
+                        )
                       )
-                  ),
-                  fluidRow(
-                    column(6,
-                           selectizeInput("excluded_players", "Exclude Players:",
-                                          choices = NULL,
-                                          multiple = TRUE,
-                                          options = list(plugins = list('remove_button')))
-                    ),
-                    column(6,
-                           numericInput("num_lineups", "Number of Lineups to Generate:", 
-                                        value = 20, min = 1, max = 150)
-                    )
-                  ),
-                  fluidRow(
-                    column(6,
-                           div(class = "well well-sm",
-                               h4("Filtered Pool Statistics:"),
-                               textOutput("filtered_pool_size")
-                           )
-                    ),
-                    column(6,
-                           div(style = "margin-top: 20px;",
-                               actionButton("generate_lineups", "Generate Lineups", 
-                                            class = "btn-primary btn-lg", 
-                                            style = "width: 100%;"),
-                               br(), br(),
-                               downloadButton("download_generated_lineups", "Download Lineups", 
-                                              style = "width: 100%;")
-                           )
-                    )
+                  )
+                ),
+                fluidRow(
+                  box(width = 12,
+                      title = "Player Exposure Analysis",
+                      DTOutput("player_exposure_table") %>% withSpinner(color = "#FFD700")
+                  )
+                ),
+                fluidRow(
+                  box(width = 12,
+                      title = "Generated Lineups",
+                      DTOutput("generated_lineups_table") %>% withSpinner(color = "#FFD700")
                   )
                 )
-              ),
-              fluidRow(
-                box(width = 12,
-                    title = "Player Exposure Analysis",
-                    DTOutput("player_exposure_table") %>% withSpinner(color = "#FFD700")
-                )
-              ),
-              fluidRow(
-                box(width = 12,
-                    title = "Generated Lineups",
-                    DTOutput("generated_lineups_table") %>% withSpinner(color = "#FFD700")
-                )
               )
-              
       )
+      
     )
   )
 )
@@ -2183,18 +2266,23 @@ server <- function(input, output, session) {
       
       lp_cache <- new.env(hash = TRUE, parent = emptyenv())
       
-      # Step 1: Find optimal lineups
+      # Step 1: Calculate EW metrics
+      incProgress(0.1, detail = "Calculating EW metrics...")
+      ew_metrics <- calculate_ew_metrics(rv$simulation_results, input$n_sims)
+      
+      # Step 2: Find optimal lineups
       incProgress(0.3, detail = "Finding optimal lineups...")
       optimal_lineups <- find_all_optimal_lineups(
         rv$simulation_results, 
         rv$dk_data
       )
       
-      # Step 2: Expand lineup details
+      # Step 3: Expand lineup details with EW metrics
       incProgress(0.6, detail = "Processing lineup details...")
       expanded_lineups <- expand_lineup_details(
         optimal_lineups,
-        rv$dk_data
+        rv$dk_data,
+        ew_metrics  # ADD THIS PARAMETER
       )
       
       # Store results
@@ -2517,7 +2605,8 @@ server <- function(input, output, session) {
     # Select columns for display
     display_cols <- c(
       player_cols,
-      "TotalSalary", "Top1Count", "Top2Count", "Top3Count", "Top5Count"
+      "TotalSalary", "TotalEW", "Avg6Plus", "Avg5Plus",  # ADD EW COLUMNS
+      "Top1Count", "Top2Count", "Top3Count", "Top5Count"
     )
     
     # Intersect with available columns
@@ -2588,6 +2677,16 @@ server <- function(input, output, session) {
       dt <- dt %>% formatCurrency("TotalSalary", "$", digits = 0)
     }
     
+    if("TotalEW" %in% display_cols) {
+      dt <- dt %>% formatRound("TotalEW", 2)
+    }
+    if("Avg6Plus" %in% display_cols) {
+      dt <- dt %>% formatRound("Avg6Plus", 1)
+    }
+    if("Avg5Plus" %in% display_cols) {
+      dt <- dt %>% formatRound("Avg5Plus", 1)
+    }
+    
     dt
   })
   
@@ -2628,6 +2727,9 @@ server <- function(input, output, session) {
       min_top2_count = input$min_top2_count,
       min_top3_count = input$min_top3_count,
       min_top5_count = input$min_top5_count,
+      min_total_ew = input$min_total_ew,        # ADD THIS
+      min_avg_6plus = input$min_avg_6plus,      # ADD THIS
+      min_avg_5plus = input$min_avg_5plus, 
       excluded_players = input$excluded_players
     )
     
@@ -2968,7 +3070,6 @@ server <- function(input, output, session) {
     gc(verbose = FALSE, full = TRUE)
   })
 }
-
 
 
 # Run the application
