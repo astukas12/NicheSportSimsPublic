@@ -2825,10 +2825,9 @@ server <- function(input, output, session) {
   
   # Replace your existing output$optimal_lineups_table with this updated version:
   
+  # Replace your entire output$optimal_lineups_table with this robust version:
+  
   output$optimal_lineups_table <- renderDT({
-    # Force validation and show diagnostic info
-    cat("Optimization complete:", rv$optimization_complete, "\n")
-    
     # Validate required data
     if (is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
       return(datatable(
@@ -2838,55 +2837,71 @@ server <- function(input, output, session) {
       ))
     }
     
-    # Get lineup data
-    lineups_df <- as.data.frame(rv$dk_optimal_lineups)
+    # Get lineup data and ensure it's a data.frame
+    lineups_df <- tryCatch({
+      as.data.frame(rv$dk_optimal_lineups)
+    }, error = function(e) {
+      return(data.frame(Message = paste("Error converting lineup data:", e$message)))
+    })
     
-    # Determine the player column naming pattern used
-    if(any(grepl("^Name[1-6]$", names(lineups_df)))) {
-      player_cols <- grep("^Name[1-6]$", names(lineups_df), value = TRUE)
-    } else if(any(grepl("^Player[1-6]$", names(lineups_df)))) {
-      player_cols <- grep("^Player[1-6]$", names(lineups_df), value = TRUE)
-    } else {
-      player_cols <- character(0)
+    # Check if conversion failed
+    if (!"LineupID" %in% names(lineups_df)) {
+      return(datatable(
+        data.frame(Message = "Invalid lineup data structure"),
+        options = list(dom = "t", ordering = FALSE),
+        rownames = FALSE
+      ))
     }
     
-    # Select columns for display - INCLUDE ALL score statistics
-    display_cols <- c(
+    # Debug: Show what columns we actually have
+    cat("Available columns:", paste(names(lineups_df), collapse = ", "), "\n")
+    
+    # Determine the player column naming pattern used
+    player_cols <- character(0)
+    if (any(grepl("^Name[1-6]$", names(lineups_df)))) {
+      player_cols <- grep("^Name[1-6]$", names(lineups_df), value = TRUE)
+    } else if (any(grepl("^Player[1-6]$", names(lineups_df)))) {
+      player_cols <- grep("^Player[1-6]$", names(lineups_df), value = TRUE)
+    }
+    
+    # Select columns for display - ONLY include columns that actually exist
+    potential_display_cols <- c(
       player_cols,
       "TotalEW",
-      "AvgScore", "MedianScore", "Score20th", "Score80th",  # NEW score columns
+      "AvgScore", "MedianScore", "Score20th", "Score80th",
       "TotalSalary", 
       "Win6Pct", "Win5PlusPct", "Win4PlusPct",
       "Top1Count", "Top2Count", "Top3Count", "Top5Count"
     )
     
-    # Intersect with available columns
-    display_cols <- intersect(display_cols, names(lineups_df))
+    # Only use columns that actually exist in the data
+    display_cols <- intersect(potential_display_cols, names(lineups_df))
+    cat("Display columns:", paste(display_cols, collapse = ", "), "\n")
+    
+    # Ensure we have some columns to display
+    if (length(display_cols) == 0) {
+      return(datatable(
+        data.frame(Message = "No valid columns found for display"),
+        options = list(dom = "t", ordering = FALSE),
+        rownames = FALSE
+      ))
+    }
     
     # Use the selected columns from the data frame
     display_data <- lineups_df[, display_cols, drop = FALSE]
     
-    # Sort the data by TotalEW (desc) then by Top1Count (desc) for better lineup ranking
-    if("TotalEW" %in% names(display_data) && "Top1Count" %in% names(display_data)) {
-      display_data <- display_data[order(-display_data$TotalEW, -display_data$Top1Count), ]
-    } else if("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
-      display_data <- display_data[order(-display_data$Top1Count, -display_data$Top5Count), ]
-    } else if("Top1Count" %in% names(display_data)) {
-      display_data <- display_data[order(-display_data$Top1Count), ]
-    }
-    
-    # Find the column indices for sorting
-    totalew_col_idx <- which(names(display_data) == "TotalEW") - 1  # DT uses 0-based indexing
-    top1_col_idx <- which(names(display_data) == "Top1Count") - 1
-    
-    # Create the ordering specification - prioritize TotalEW if available
-    if(length(totalew_col_idx) > 0) {
-      order_spec <- list(list(totalew_col_idx, 'desc'))
-    } else if(length(top1_col_idx) > 0) {
-      order_spec <- list(list(top1_col_idx, 'desc'))
-    } else {
-      order_spec <- list(list(0, 'desc'))
-    }
+    # Sort the data safely
+    tryCatch({
+      if ("TotalEW" %in% names(display_data) && "Top1Count" %in% names(display_data)) {
+        display_data <- display_data[order(-display_data$TotalEW, -display_data$Top1Count), ]
+      } else if ("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
+        display_data <- display_data[order(-display_data$Top1Count, -display_data$Top5Count), ]
+      } else if ("Top1Count" %in% names(display_data)) {
+        display_data <- display_data[order(-display_data$Top1Count), ]
+      }
+    }, error = function(e) {
+      cat("Sorting error:", e$message, "\n")
+    })
     
     # Create datatable
     dt <- datatable(
@@ -2894,29 +2909,88 @@ server <- function(input, output, session) {
       options = list(
         scrollX = TRUE,
         pageLength = 50,
-        order = order_spec,
         columnDefs = list(
-          list(className = 'dt-center', targets = c(totalew_col_idx, top1_col_idx)),
           list(className = 'dt-body-nowrap', targets = "_all")
         )
       ),
       rownames = FALSE
-    ) %>%
-      # UPDATED: Format TotalEW to 2 decimal places
-      formatRound("TotalEW", 3) %>%
-      # NEW: Format score columns to 1 decimal place
-      formatRound(c("AvgScore", "MedianScore", "Score20th", "Score80th"), 1) %>%
-      # UPDATED: Format win percentages to 2 decimal places
-      formatRound(c("Win6Pct", "Win5PlusPct", "Win4PlusPct"), 2) %>%
-      
-    # Format salary if present
-    if("TotalSalary" %in% display_cols) {
-      dt <- dt %>% formatCurrency("TotalSalary", "$", digits = 0)
+    )
+    
+    # Apply formatting only for columns that exist - use safer checks
+    
+    # Format TotalEW if it exists
+    totalew_exists <- "TotalEW" %in% names(display_data)
+    if (totalew_exists) {
+      dt <- tryCatch({
+        dt %>% 
+          formatRound("TotalEW", 3) %>%
+          formatStyle(
+            "TotalEW",
+            backgroundColor = styleInterval(
+              c(2.0, 2.5, 3.0, 3.5), 
+              c("white", "#e8f5e8", "#d4e6d4", "#c0d7c0", "#8bc34a")
+            ),
+            fontWeight = styleInterval(3.0, c("normal", "bold"))
+          )
+      }, error = function(e) {
+        cat("TotalEW formatting error:", e$message, "\n")
+        dt
+      })
     }
     
-     dt
+    # Format score columns if they exist
+    score_cols_available <- intersect(c("AvgScore", "MedianScore", "Score20th", "Score80th"), names(display_data))
+    if (length(score_cols_available) > 0) {
+      dt <- tryCatch({
+        dt %>% formatRound(score_cols_available, 1)
+      }, error = function(e) {
+        cat("Score formatting error:", e$message, "\n")
+        dt
+      })
+    }
+    
+    # Format win percentages if they exist
+    win_pct_cols_available <- intersect(c("Win6Pct", "Win5PlusPct", "Win4PlusPct"), names(display_data))
+    if (length(win_pct_cols_available) > 0) {
+      dt <- tryCatch({
+        dt %>% formatRound(win_pct_cols_available, 2)
+      }, error = function(e) {
+        cat("Win percentage formatting error:", e$message, "\n")
+        dt
+      })
+    }
+    
+    # Format salary if present
+    salary_exists <- "TotalSalary" %in% names(display_data)
+    if (salary_exists) {
+      dt <- tryCatch({
+        dt %>% formatCurrency("TotalSalary", "$", digits = 0)
+      }, error = function(e) {
+        cat("Salary formatting error:", e$message, "\n")
+        dt
+      })
+    }
+    
+    # Format Top1Count if it exists
+    top1_exists <- "Top1Count" %in% names(display_data)
+    if (top1_exists) {
+      dt <- tryCatch({
+        dt %>% formatStyle(
+          "Top1Count",
+          backgroundColor = styleInterval(
+            c(1, 5, 10, 20), 
+            c("white", "#fff3cd", "#ffeaa7", "#fdcb6e", "#e17055")
+          ),
+          fontWeight = styleInterval(10, c("normal", "bold"))
+        )
+      }, error = function(e) {
+        cat("Top1Count formatting error:", e$message, "\n")
+        dt
+      })
+    }
+    
+    return(dt)
   })
-  
   
   # Lineup count thresholds
   output$lineup_count_thresholds <- renderDT({
