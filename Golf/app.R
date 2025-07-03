@@ -484,13 +484,18 @@ generate_filtered_mme_lineups <- function(optimal_lineups, filters) {
   return(as.data.frame(selected_lineups))
 }
 
-# Calculate exposures for the exposure table
 calculate_exposures <- function(lineups, mme_data, platform) {
   if (is.null(lineups) || nrow(lineups) == 0) return(NULL)
   
   # Get all unique players from lineups
   player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
-  all_lineup_players <- unlist(lineups[, player_cols])
+  
+  # Handle both data.frame and data.table
+  if (is.data.table(lineups)) {
+    all_lineup_players <- unlist(lineups[, player_cols, with = FALSE])
+  } else {
+    all_lineup_players <- unlist(lineups[, player_cols])
+  }
   
   # Calculate exposure counts
   exposure_counts <- table(all_lineup_players)
@@ -684,8 +689,8 @@ ui <- dashboardPage(
                                                 options = list(plugins = list('remove_button')))
                           ),
                           column(3,
-                                 sliderInput("dk_num_mme_lineups", "Number of Lineups to Generate:", 
-                                             min = 1, max = 150, value = 20, step = 1)
+                                 numericInput("dk_num_mme_lineups", "Number of Lineups to Generate:", 
+                                              value = 20, min = 1, max = 150)
                           )
                         ),
                         # Row 3: Pool Stats and Generate Button
@@ -803,8 +808,8 @@ ui <- dashboardPage(
                                                 options = list(plugins = list('remove_button')))
                           ),
                           column(3,
-                                 sliderInput("fd_num_mme_lineups", "Number of Lineups to Generate:", 
-                                             min = 1, max = 150, value = 20, step = 1)
+                                 numericInput("fd_num_mme_lineups", "Number of Lineups to Generate:", 
+                                              value = 20, min = 1, max = 150)
                           )
                         ),
                         # Row 3: Pool Stats and Generate Button
@@ -1233,25 +1238,37 @@ server <- function(input, output, session) {
     req(rv$dk_mme_lineups)
     
     if (!is.null(rv$dk_mme_lineups)) {
-      # Update slider ranges based on actual data
+      # Update slider ranges based on actual data with less granular steps
       updateSliderInput(session, "dk_min_expected_cuts",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$ExpectedCuts)), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$ExpectedCuts) * 10) / 10, 
+                        max = ceiling(max(rv$dk_mme_lineups$ExpectedCuts) * 10) / 10, 
+                        value = floor(min(rv$dk_mme_lineups$ExpectedCuts) * 10) / 10,
+                        step = 0.1)
       updateSliderInput(session, "dk_min_standard_proj",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$StandardProj)), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$StandardProj)), 
+                        max = ceiling(max(rv$dk_mme_lineups$StandardProj)), 
+                        value = floor(min(rv$dk_mme_lineups$StandardProj)),
+                        step = 1)
       updateSliderInput(session, "dk_min_ceiling_proj",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$CeilingProj)), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$CeilingProj)), 
+                        max = ceiling(max(rv$dk_mme_lineups$CeilingProj)), 
+                        value = floor(min(rv$dk_mme_lineups$CeilingProj)),
+                        step = 1)
       updateSliderInput(session, "dk_min_6_pct",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$AtLeast6) * 100), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$AtLeast6) * 100), 
+                        max = ceiling(max(rv$dk_mme_lineups$AtLeast6) * 100), 
+                        value = floor(min(rv$dk_mme_lineups$AtLeast6) * 100),
+                        step = 0.5)
       updateSliderInput(session, "dk_min_5plus_pct",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$AtLeast5) * 100), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$AtLeast5) * 100), 
+                        max = ceiling(max(rv$dk_mme_lineups$AtLeast5) * 100), 
+                        value = floor(min(rv$dk_mme_lineups$AtLeast5) * 100),
+                        step = 0.5)
       updateSliderInput(session, "dk_min_4plus_pct",
-                        min = 0, max = ceiling(max(rv$dk_mme_lineups$AtLeast4) * 100), 
-                        value = 0)
+                        min = floor(min(rv$dk_mme_lineups$AtLeast4) * 100), 
+                        max = ceiling(max(rv$dk_mme_lineups$AtLeast4) * 100), 
+                        value = floor(min(rv$dk_mme_lineups$AtLeast4) * 100),
+                        step = 0.5)
     }
   })
   
@@ -1260,25 +1277,37 @@ server <- function(input, output, session) {
     req(rv$fd_mme_lineups)
     
     if (!is.null(rv$fd_mme_lineups)) {
-      # Update slider ranges based on actual data
+      # Update slider ranges based on actual data with less granular steps
       updateSliderInput(session, "fd_min_expected_cuts",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$ExpectedCuts)), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$ExpectedCuts) * 10) / 10, 
+                        max = ceiling(max(rv$fd_mme_lineups$ExpectedCuts) * 10) / 10, 
+                        value = floor(min(rv$fd_mme_lineups$ExpectedCuts) * 10) / 10,
+                        step = 0.1)
       updateSliderInput(session, "fd_min_standard_proj",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$StandardProj)), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$StandardProj)), 
+                        max = ceiling(max(rv$fd_mme_lineups$StandardProj)), 
+                        value = floor(min(rv$fd_mme_lineups$StandardProj)),
+                        step = 1)
       updateSliderInput(session, "fd_min_ceiling_proj",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$CeilingProj)), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$CeilingProj)), 
+                        max = ceiling(max(rv$fd_mme_lineups$CeilingProj)), 
+                        value = floor(min(rv$fd_mme_lineups$CeilingProj)),
+                        step = 1)
       updateSliderInput(session, "fd_min_6_pct",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$AtLeast6) * 100), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$AtLeast6) * 100), 
+                        max = ceiling(max(rv$fd_mme_lineups$AtLeast6) * 100), 
+                        value = floor(min(rv$fd_mme_lineups$AtLeast6) * 100),
+                        step = 0.5)
       updateSliderInput(session, "fd_min_5plus_pct",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$AtLeast5) * 100), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$AtLeast5) * 100), 
+                        max = ceiling(max(rv$fd_mme_lineups$AtLeast5) * 100), 
+                        value = floor(min(rv$fd_mme_lineups$AtLeast5) * 100),
+                        step = 0.5)
       updateSliderInput(session, "fd_min_4plus_pct",
-                        min = 0, max = ceiling(max(rv$fd_mme_lineups$AtLeast4) * 100), 
-                        value = 0)
+                        min = floor(min(rv$fd_mme_lineups$AtLeast4) * 100), 
+                        max = ceiling(max(rv$fd_mme_lineups$AtLeast4) * 100), 
+                        value = floor(min(rv$fd_mme_lineups$AtLeast4) * 100),
+                        step = 0.5)
     }
   })
   
@@ -1412,31 +1441,59 @@ server <- function(input, output, session) {
     random_exposures <- calculate_exposures(rv$dk_mme_lineups, rv$mme_data, "dk")
     filtered_exposures <- calculate_exposures(filtered_lineups, rv$mme_data, "dk")
     
+    # Check for generated lineups exposure (current randomized set)
+    generated_exposures <- NULL
+    if (!is.null(rv$generated_dk_mme_lineups)) {
+      generated_exposures <- calculate_exposures(rv$generated_dk_mme_lineups, rv$mme_data, "dk")
+    }
+    
     if (is.null(random_exposures)) return(NULL)
     
-    # Combine the data
-    combined_data <- random_exposures
-    names(combined_data) <- c("Golfer", "Random_Count", "Random_Exposure", "Ownership_Proj")
+    # Get salary information
+    salary_lookup <- setNames(rv$mme_data[["DKSal"]], rv$mme_data$Golfer)
     
-    # Add filtered exposures
+    # Start with all golfers from MME data to ensure complete list
+    all_golfers <- unique(rv$mme_data$Golfer)
+    
+    # Create base data frame
+    combined_data <- data.frame(
+      Golfer = all_golfers,
+      stringsAsFactors = FALSE
+    )
+    
+    # Add salary
+    combined_data$Salary <- salary_lookup[combined_data$Golfer]
+    
+    # Add random pool exposures
+    random_lookup <- setNames(random_exposures$Exposure_Pct, random_exposures$Golfer)
+    combined_data$Random_Exposure <- random_lookup[combined_data$Golfer]
+    combined_data$Random_Exposure[is.na(combined_data$Random_Exposure)] <- 0
+    
+    # Add filtered pool exposures
     if (!is.null(filtered_exposures) && nrow(filtered_exposures) > 0) {
-      # Merge filtered exposures
-      filtered_lookup_pct <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
-      filtered_lookup_count <- setNames(filtered_exposures$Exposure_Count, filtered_exposures$Golfer)
-      
-      combined_data$Filtered_Count <- filtered_lookup_count[combined_data$Golfer]
-      combined_data$Filtered_Exposure <- filtered_lookup_pct[combined_data$Golfer]
-      
-      # Replace NA with 0 for players not in filtered pool
-      combined_data$Filtered_Count[is.na(combined_data$Filtered_Count)] <- 0
+      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
+      combined_data$Filtered_Exposure <- filtered_lookup[combined_data$Golfer]
       combined_data$Filtered_Exposure[is.na(combined_data$Filtered_Exposure)] <- 0
     } else {
-      combined_data$Filtered_Count <- 0
       combined_data$Filtered_Exposure <- 0
     }
     
-    # Reorder columns
-    combined_data <- combined_data[, c("Golfer", "Random_Exposure", "Filtered_Exposure", "Ownership_Proj", "Random_Count", "Filtered_Count")]
+    # Add generated lineups exposure (current randomized set)
+    if (!is.null(generated_exposures) && nrow(generated_exposures) > 0) {
+      generated_lookup <- setNames(generated_exposures$Exposure_Pct, generated_exposures$Golfer)
+      combined_data$Generated_Exposure <- generated_lookup[combined_data$Golfer]
+      combined_data$Generated_Exposure[is.na(combined_data$Generated_Exposure)] <- 0
+    } else {
+      combined_data$Generated_Exposure <- 0
+    }
+    
+    # Add ownership projections (convert from decimal to percentage)
+    ownership_lookup <- setNames(rv$mme_data[["DKOP"]] * 100, rv$mme_data$Golfer)
+    combined_data$Ownership_Proj <- ownership_lookup[combined_data$Golfer]
+    
+    # Reorder columns and sort by random exposure  
+    combined_data <- combined_data[, c("Golfer", "Salary", "Generated_Exposure", "Filtered_Exposure", "Ownership_Proj")]
+    combined_data <- combined_data[order(combined_data$Filtered_Exposure, decreasing = TRUE), ]
     
     datatable(
       combined_data,
@@ -1447,9 +1504,10 @@ server <- function(input, output, session) {
         ordering = TRUE
       ),
       rownames = FALSE,
-      colnames = c("Golfer", "Random Pool %", "Filtered Pool %", "Ownership Proj %", "Random Count", "Filtered Count")
+      colnames = c("Golfer", "Salary", "Current Set %", "Filtered Pool %", "Ownership Proj %")
     ) %>%
-      formatRound(c("Random_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
+      formatCurrency("Salary", "$", digits = 0) %>%
+      formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
   
   # FD Exposure table (reactive to filter changes)
@@ -1497,31 +1555,59 @@ server <- function(input, output, session) {
     random_exposures <- calculate_exposures(rv$fd_mme_lineups, rv$mme_data, "fd")
     filtered_exposures <- calculate_exposures(filtered_lineups, rv$mme_data, "fd")
     
+    # Check for generated lineups exposure (current randomized set)
+    generated_exposures <- NULL
+    if (!is.null(rv$generated_fd_mme_lineups)) {
+      generated_exposures <- calculate_exposures(rv$generated_fd_mme_lineups, rv$mme_data, "fd")
+    }
+    
     if (is.null(random_exposures)) return(NULL)
     
-    # Combine the data
-    combined_data <- random_exposures
-    names(combined_data) <- c("Golfer", "Random_Count", "Random_Exposure", "Ownership_Proj")
+    # Get salary information
+    salary_lookup <- setNames(rv$mme_data[["FDSal"]], rv$mme_data$Golfer)
     
-    # Add filtered exposures
+    # Start with all golfers from MME data to ensure complete list
+    all_golfers <- unique(rv$mme_data$Golfer)
+    
+    # Create base data frame
+    combined_data <- data.frame(
+      Golfer = all_golfers,
+      stringsAsFactors = FALSE
+    )
+    
+    # Add salary
+    combined_data$Salary <- salary_lookup[combined_data$Golfer]
+    
+    # Add random pool exposures
+    random_lookup <- setNames(random_exposures$Exposure_Pct, random_exposures$Golfer)
+    combined_data$Random_Exposure <- random_lookup[combined_data$Golfer]
+    combined_data$Random_Exposure[is.na(combined_data$Random_Exposure)] <- 0
+    
+    # Add filtered pool exposures
     if (!is.null(filtered_exposures) && nrow(filtered_exposures) > 0) {
-      # Merge filtered exposures
-      filtered_lookup_pct <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
-      filtered_lookup_count <- setNames(filtered_exposures$Exposure_Count, filtered_exposures$Golfer)
-      
-      combined_data$Filtered_Count <- filtered_lookup_count[combined_data$Golfer]
-      combined_data$Filtered_Exposure <- filtered_lookup_pct[combined_data$Golfer]
-      
-      # Replace NA with 0 for players not in filtered pool
-      combined_data$Filtered_Count[is.na(combined_data$Filtered_Count)] <- 0
+      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
+      combined_data$Filtered_Exposure <- filtered_lookup[combined_data$Golfer]
       combined_data$Filtered_Exposure[is.na(combined_data$Filtered_Exposure)] <- 0
     } else {
-      combined_data$Filtered_Count <- 0
       combined_data$Filtered_Exposure <- 0
     }
     
-    # Reorder columns
-    combined_data <- combined_data[, c("Golfer", "Random_Exposure", "Filtered_Exposure", "Ownership_Proj", "Random_Count", "Filtered_Count")]
+    # Add generated lineups exposure (current randomized set)
+    if (!is.null(generated_exposures) && nrow(generated_exposures) > 0) {
+      generated_lookup <- setNames(generated_exposures$Exposure_Pct, generated_exposures$Golfer)
+      combined_data$Generated_Exposure <- generated_lookup[combined_data$Golfer]
+      combined_data$Generated_Exposure[is.na(combined_data$Generated_Exposure)] <- 0
+    } else {
+      combined_data$Generated_Exposure <- 0
+    }
+    
+    # Add ownership projections (convert from decimal to percentage)
+    ownership_lookup <- setNames(rv$mme_data[["FDOP"]] * 100, rv$mme_data$Golfer)
+    combined_data$Ownership_Proj <- ownership_lookup[combined_data$Golfer]
+    
+    # Reorder columns and sort by filtered exposure
+    combined_data <- combined_data[, c("Golfer", "Salary", "Generated_Exposure", "Filtered_Exposure", "Ownership_Proj")]
+    combined_data <- combined_data[order(combined_data$Filtered_Exposure, decreasing = TRUE), ]
     
     datatable(
       combined_data,
@@ -1532,9 +1618,10 @@ server <- function(input, output, session) {
         ordering = TRUE
       ),
       rownames = FALSE,
-      colnames = c("Golfer", "Random Pool %", "Filtered Pool %", "Ownership Proj %", "Random Count", "Filtered Count")
+      colnames = c("Golfer", "Salary", "Current Set %", "Filtered Pool %", "Ownership Proj %")
     ) %>%
-      formatRound(c("Random_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
+      formatCurrency("Salary", "$", digits = 0) %>%
+      formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
   
   # Generate DK MME lineups from filters
