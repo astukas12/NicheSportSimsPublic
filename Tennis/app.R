@@ -245,7 +245,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
   }
   
-  # Apply win percentage filters safely
+  # Apply win percentage filters safely - UPDATED to use Win6Pct and Win5PlusPct
   if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0 && "Win6Pct" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
   }
@@ -254,11 +254,12 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[Win5PlusPct >= filters$min_win5plus_pct]
   }
   
-  if (!is.null(filters$min_win4plus_pct) && filters$min_win4plus_pct > 0 && "Win4PlusPct" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Win4PlusPct >= filters$min_win4plus_pct]
-  }
+  # Remove the Win4PlusPct filter since we don't have that column anymore
+  # if (!is.null(filters$min_win4plus_pct) && filters$min_win4plus_pct > 0 && "Win4PlusPct" %in% names(filtered_lineups)) {
+  #   filtered_lineups <- filtered_lineups[Win4PlusPct >= filters$min_win4plus_pct]
+  # }
   
-  # NEW: Apply score filters safely
+  # Apply score filters safely
   if (!is.null(filters$min_avg_score) && filters$min_avg_score > 0 && "AvgScore" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[AvgScore >= filters$min_avg_score]
   }
@@ -275,7 +276,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[Score80th >= filters$min_score80th]
   }
   
-  # FIXED: Apply player exclusion filter with better logic
+  # Apply player exclusion filter with better logic
   if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
     # Determine the player column naming pattern - check both formats
     player_pattern <- if(any(grepl("^Name[1-6]$", names(filtered_lineups)))) {
@@ -315,7 +316,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Calculate thresholds for display
   thresholds <- list()
   threshold_columns <- c("Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalEW", 
-                         "AvgScore", "MedianScore", "Score20th", "Score80th")
+                         "MedianScore", "Score80th")  # Updated to remove AvgScore and Score20th
   
   for (col in threshold_columns) {
     if (col %in% names(filtered_lineups) && !all(is.na(filtered_lineups[[col]]))) {
@@ -326,15 +327,9 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
       if (col == "TotalEW") {
         min_name <- "min_total_ew"
         max_name <- "max_total_ew"
-      } else if (col == "AvgScore") {
-        min_name <- "min_avg_score"
-        max_name <- "max_avg_score"
       } else if (col == "MedianScore") {
         min_name <- "min_median_score"
         max_name <- "max_median_score"
-      } else if (col == "Score20th") {
-        min_name <- "min_score20th"
-        max_name <- "max_score20th"
       } else if (col == "Score80th") {
         min_name <- "min_score80th"
         max_name <- "max_score80th"
@@ -353,7 +348,6 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     thresholds = thresholds
   ))
 }
-
 
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
@@ -812,17 +806,12 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
   return(as.data.frame(metrics_data))
 }
 
-# Replace your existing generate_random_lineups function with this updated version:
-
-# Replace your existing generate_random_lineups function with this fixed version:
-
 generate_random_lineups <- function(optimal_lineups, filters) {
   # Convert to data.table for efficiency
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
   
-  # MOVED: Determine player columns early in the function
-  # Check if columns are named "Name1", "Name2", etc. or "Player1", "Player2", etc.
+  # Determine player columns early in the function
   player_cols <- if(any(grepl("^Name[1-6]$", names(filtered_lineups)))) {
     grep("^Name[1-6]$", names(filtered_lineups), value = TRUE)
   } else {
@@ -854,6 +843,7 @@ generate_random_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
   }
   
+  # UPDATED: Use Win6Pct and Win5PlusPct instead of Win6Count, etc.
   if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0) {
     filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
   }
@@ -862,9 +852,6 @@ generate_random_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[Win5PlusPct >= filters$min_win5plus_pct]
   }
   
-  if (!is.null(filters$min_win4plus_pct) && filters$min_win4plus_pct > 0) {
-    filtered_lineups <- filtered_lineups[Win4PlusPct >= filters$min_win4plus_pct]
-  }
   
   # Apply score filters
   if (!is.null(filters$min_avg_score) && filters$min_avg_score > 0) {
@@ -951,13 +938,14 @@ generate_random_lineups <- function(optimal_lineups, filters) {
   final_exposure <- (player_counts / nrow(selected_lineups)) * 100
   attr(selected_lineups, "exposure") <- final_exposure
   
-  # Keep only needed columns - INCLUDE the new score columns
+  # Keep only needed columns - UPDATE to use new column names
   keep_cols <- c(player_cols, "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-                 "TotalSalary", "TotalEW", "AvgScore", "MedianScore", "Score20th", "Score80th")
+                 "TotalSalary", "TotalEW", "MedianScore", "Score80th")  # Updated column list
   keep_cols <- intersect(keep_cols, names(selected_lineups))
   
   return(as.data.frame(selected_lineups[, ..keep_cols]))
 }
+
 
 
 find_similar_matches <- function(current_match, historical_data, n_matches = 50, cache = NULL) {
@@ -1397,9 +1385,6 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   # Create a dictionary to track lineups more efficiently
   lineup_dict <- new.env(hash = TRUE, parent = emptyenv())
   
-  # NEW: Create a dictionary to track lineup scores for each iteration
-  lineup_scores_dict <- new.env(hash = TRUE, parent = emptyenv())
-  
   # Create a salary lookup map for faster access
   name_col <- "Name"
   if (!"Name" %in% names(player_dt)) {
@@ -1502,24 +1487,15 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
           # Create lineup ID
           lineup_id <- paste(sort(optimal$Player), collapse = "|")
           
-          # Calculate total wins and total score for this lineup in this iteration
+          # Calculate total wins for this lineup in this iteration
           lineup_players <- optimal$Player
           total_wins <- sum(win_counts[Player %in% lineup_players, wins], na.rm = TRUE)
-          total_score <- sum(optimal$Score, na.rm = TRUE)  # NEW: Calculate total score
-          
-          # NEW: Store the score for this lineup in this iteration
-          if (!exists(lineup_id, envir = lineup_scores_dict)) {
-            assign(lineup_id, numeric(0), envir = lineup_scores_dict)
-          }
-          current_scores <- get(lineup_id, envir = lineup_scores_dict)
-          assign(lineup_id, c(current_scores, total_score), envir = lineup_scores_dict)
           
           # Add to tracking with win count information
           top_lineups[[i]] <- list(
             id = lineup_id, 
             rank = i, 
             total_wins = total_wins,
-            total_score = total_score,  # NEW: Include total score
             players = lineup_players
           )
           
@@ -1560,11 +1536,6 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
             current_counts$Top5Count <- current_counts$Top5Count + 1
           }
           
-          # Update win count tracking
-          if (total_wins >= 6) current_counts$Win6Count <- current_counts$Win6Count + 1
-          if (total_wins >= 5) current_counts$Win5PlusCount <- current_counts$Win5PlusCount + 1
-          if (total_wins >= 4) current_counts$Win4PlusCount <- current_counts$Win4PlusCount + 1
-          
           # Update in dictionary
           assign(lineup_id, current_counts, envir = lineup_dict)
         } else {
@@ -1575,9 +1546,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
             Top2Count = ifelse(rank <= 2, 1, 0),
             Top3Count = ifelse(rank <= 3, 1, 0),
             Top5Count = ifelse(rank <= 5, 1, 0),
-            Win6Count = ifelse(total_wins >= 6, 1, 0),
-            Win5PlusCount = ifelse(total_wins >= 5, 1, 0),
-            Win4PlusCount = ifelse(total_wins >= 4, 1, 0)
+            players = lineup$players  # Store player names for later score calculation
           )
           
           # Add to dictionary
@@ -1618,7 +1587,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   cat(sprintf("Found %s unique lineups, converting to data table...\n", 
               format(total_unique_lineups, big.mark = ",")))
   
-  # NEW: Create final data.table with score statistics columns
+  # Create final data.table with score statistics columns
   lineup_counter <- data.table(
     LineupID = lineup_ids,
     Count = integer(length(lineup_ids)),
@@ -1626,16 +1595,14 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     Top2Count = integer(length(lineup_ids)),
     Top3Count = integer(length(lineup_ids)),
     Top5Count = integer(length(lineup_ids)),
-    Win6Count = integer(length(lineup_ids)),
-    Win5PlusCount = integer(length(lineup_ids)),
-    Win4PlusCount = integer(length(lineup_ids)),
-    AvgScore = numeric(length(lineup_ids)),      # NEW
-    MedianScore = numeric(length(lineup_ids)),   # NEW
-    Score20th = numeric(length(lineup_ids)),     # NEW
-    Score80th = numeric(length(lineup_ids))      # NEW
+    TotalEW = numeric(length(lineup_ids)),
+    MedianScore = numeric(length(lineup_ids)),
+    Score80th = numeric(length(lineup_ids)),
+    Win6Pct = numeric(length(lineup_ids)),
+    Win5PlusPct = numeric(length(lineup_ids))
   )
   
-  # Fill the data.table efficiently using set()
+  # Fill the basic counts first
   for (i in seq_along(lineup_ids)) {
     lineup_id <- lineup_ids[i]
     counts <- get(lineup_id, envir = lineup_dict)
@@ -1645,38 +1612,215 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     set(lineup_counter, i, 4L, counts$Top2Count)
     set(lineup_counter, i, 5L, counts$Top3Count)
     set(lineup_counter, i, 6L, counts$Top5Count)
-    set(lineup_counter, i, 7L, counts$Win6Count)
-    set(lineup_counter, i, 8L, counts$Win5PlusCount)
-    set(lineup_counter, i, 9L, counts$Win4PlusCount)
+  }
+  
+  cat("\n=== CALCULATING EXPECTED WINS (EW) FOR ALL LINEUPS ===\n")
+  ew_calc_start_time <- Sys.time()
+  
+  # Calculate EW for each lineup using the EW metrics from the server
+  # We need to get EW metrics first
+  cat("Calculating EW metrics from simulation results...\n")
+  ew_metrics <- tryCatch({
+    calculate_ew_metrics(sim_dt, total_iterations)
+  }, error = function(e) {
+    cat("Error calculating EW metrics:", e$message, "\n")
+    return(NULL)
+  })
+  
+  if (!is.null(ew_metrics)) {
+    # Create EW lookup
+    ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
+    cat(sprintf("EW metrics calculated for %d players\n", length(ew_lookup)))
     
-    # NEW: Calculate score statistics
-    if (exists(lineup_id, envir = lineup_scores_dict)) {
-      scores <- get(lineup_id, envir = lineup_scores_dict)
-      if (length(scores) > 0) {
-        set(lineup_counter, i, 10L, mean(scores, na.rm = TRUE))
-        set(lineup_counter, i, 11L, median(scores, na.rm = TRUE))
-        set(lineup_counter, i, 12L, quantile(scores, 0.2, na.rm = TRUE))
-        set(lineup_counter, i, 13L, quantile(scores, 0.8, na.rm = TRUE))
+    # Calculate TotalEW for each lineup
+    for (i in seq_along(lineup_ids)) {
+      lineup_id <- lineup_ids[i]
+      counts <- get(lineup_id, envir = lineup_dict)
+      
+      # Get the players in this lineup
+      if (!is.null(counts$players)) {
+        lineup_players <- counts$players
+      } else {
+        # Fallback: parse from lineup_id
+        lineup_players <- unlist(strsplit(lineup_id, "\\|"))
+      }
+      
+      # Calculate total EW for this lineup
+      player_ew <- ew_lookup[lineup_players]
+      player_ew[is.na(player_ew)] <- 0
+      total_ew <- sum(player_ew, na.rm = TRUE)
+      
+      set(lineup_counter, i, 7L, total_ew)  # TotalEW
+      
+      # Show progress
+      if (i %% 1000 == 0) {
+        cat(sprintf("Calculated EW for %s/%s lineups (%.1f%%)\n", 
+                    format(i, big.mark = ","), 
+                    format(total_unique_lineups, big.mark = ","),
+                    (i / total_unique_lineups) * 100))
       }
     }
     
-    # Show progress for conversion too
-    if (i %% 1000 == 0) {
-      cat(sprintf("Converted %s/%s lineups (%.1f%%)\n", 
-                  format(i, big.mark = ","), 
-                  format(total_unique_lineups, big.mark = ","),
-                  (i / total_unique_lineups) * 100))
+    ew_calc_elapsed <- difftime(Sys.time(), ew_calc_start_time, units = "secs")
+    cat(sprintf("EW calculation completed in %.1f seconds\n", as.numeric(ew_calc_elapsed)))
+  } else {
+    cat("WARNING: Could not calculate EW metrics, setting all TotalEW to 0\n")
+    lineup_counter[, TotalEW := 0]
+  }
+  
+  cat("\n=== FILTERING TO TOP 10,000 LINEUPS BY EW ===\n")
+  # Sort by TotalEW and keep only top 10k
+  setorder(lineup_counter, -TotalEW, -Top1Count)
+  
+  original_count <- nrow(lineup_counter)
+  lineup_counter <- lineup_counter[1:min(25000, nrow(lineup_counter))]
+  filtered_count <- nrow(lineup_counter)
+  
+  cat(sprintf("Filtered from %s to %s lineups (top 10k by EW)\n", 
+              format(original_count, big.mark = ","),
+              format(filtered_count, big.mark = ",")))
+  cat(sprintf("EW range: %.3f to %.3f\n", 
+              min(lineup_counter$TotalEW, na.rm = TRUE),
+              max(lineup_counter$TotalEW, na.rm = TRUE)))
+  
+  cat("\n=== CALCULATING SCORE STATISTICS ACROSS ALL ITERATIONS ===\n")
+  score_calc_start_time <- Sys.time()
+  cat(sprintf("Calculating scores for TOP %s lineups (filtered by EW) across %s iterations\n", 
+              format(nrow(lineup_counter), big.mark = ","),
+              format(total_iterations, big.mark = ",")))
+  
+  # OPTIMIZATION: Pre-calculate all player scores for all iterations once
+  cat("Pre-calculating player scores for all iterations (this may take a moment)...\n")
+  
+  # Create a matrix: rows = iterations, cols = players
+  all_players <- unique(sim_dt$Player)
+  player_scores_matrix <- matrix(0, nrow = total_iterations, ncol = length(all_players))
+  colnames(player_scores_matrix) <- all_players
+  
+  # Fill the matrix efficiently
+  for (iter_idx in seq_along(iterations)) {
+    iter <- iterations[iter_idx]
+    iter_results <- sim_dt[Iteration == iter]
+    
+    # Calculate player scores for this iteration
+    player_iter_scores <- iter_results[, .(Score = sum(Score)), by = Player]
+    
+    # Fill the matrix row
+    for (j in 1:nrow(player_iter_scores)) {
+      player_name <- player_iter_scores$Player[j]
+      if (player_name %in% all_players) {
+        player_scores_matrix[iter_idx, player_name] <- player_iter_scores$Score[j]
+      }
+    }
+    
+    # Show progress for pre-calculation
+    if (iter_idx %% 1000 == 0) {
+      cat(sprintf("Pre-calculated scores for %s/%s iterations (%.1f%%)\n", 
+                  format(iter_idx, big.mark = ","), 
+                  format(total_iterations, big.mark = ","),
+                  (iter_idx / total_iterations) * 100))
+    }
+  }
+  
+  # Pre-calculate win counts matrix too
+  cat("Pre-calculating win counts for all iterations...\n")
+  win_counts_matrix <- matrix(0, nrow = total_iterations, ncol = length(all_players))
+  colnames(win_counts_matrix) <- all_players
+  
+  for (iter_idx in seq_along(iterations)) {
+    iter <- iterations[iter_idx]
+    iter_results <- sim_dt[Iteration == iter]
+    
+    # Calculate win counts for this iteration
+    win_counts <- iter_results[Result == "Winner", .N, by = Player]
+    
+    # Fill the matrix row
+    for (j in 1:nrow(win_counts)) {
+      player_name <- win_counts$Player[j]
+      if (player_name %in% all_players) {
+        win_counts_matrix[iter_idx, player_name] <- win_counts$N[j]
+      }
+    }
+    
+    # Show progress
+    if (iter_idx %% 1000 == 0) {
+      cat(sprintf("Pre-calculated wins for %s/%s iterations (%.1f%%)\n", 
+                  format(iter_idx, big.mark = ","), 
+                  format(total_iterations, big.mark = ","),
+                  (iter_idx / total_iterations) * 100))
+    }
+  }
+  
+  cat("Pre-calculation complete! Now calculating lineup statistics...\n\n")
+  
+  # NOW: Calculate lineup statistics using matrix operations (MUCH faster)
+  for (i in 1:nrow(lineup_counter)) {
+    lineup_id <- lineup_counter$LineupID[i]
+    counts <- get(lineup_id, envir = lineup_dict)
+    
+    # Get the players in this lineup
+    if (!is.null(counts$players)) {
+      lineup_players <- counts$players
+    } else {
+      # Fallback: parse from lineup_id
+      lineup_players <- unlist(strsplit(lineup_id, "\\|"))
+    }
+    
+    # Filter to players that exist in our matrices
+    valid_players <- lineup_players[lineup_players %in% all_players]
+    
+    if (length(valid_players) >= 6) {
+      # Use only first 6 if more than 6
+      valid_players <- valid_players[1:6]
+      
+      # Calculate lineup scores across all iterations using matrix operations
+      lineup_scores <- rowSums(player_scores_matrix[, valid_players, drop = FALSE])
+      lineup_wins <- rowSums(win_counts_matrix[, valid_players, drop = FALSE])
+      
+      # Calculate score statistics (median and 80th percentile only)
+      set(lineup_counter, i, 8L, median(lineup_scores, na.rm = TRUE))      # MedianScore
+      set(lineup_counter, i, 9L, quantile(lineup_scores, 0.8, na.rm = TRUE)) # Score80th
+      
+      # Calculate win percentages across ALL iterations
+      win6_pct <- (sum(lineup_wins >= 6) / total_iterations) * 100
+      win5plus_pct <- (sum(lineup_wins >= 5) / total_iterations) * 100
+      
+      set(lineup_counter, i, 10L, win6_pct)      # Win6Pct
+      set(lineup_counter, i, 11L, win5plus_pct)  # Win5PlusPct
+    } else {
+      # Set default values if not enough valid players
+      set(lineup_counter, i, 8L, 0)   # MedianScore
+      set(lineup_counter, i, 9L, 0)   # Score80th
+      set(lineup_counter, i, 10L, 0)  # Win6Pct
+      set(lineup_counter, i, 11L, 0)  # Win5PlusPct
+    }
+    
+    # Show progress with timing estimates (more frequent updates)
+    if (i %% 25 == 0 || i == nrow(lineup_counter)) {
+      current_time <- Sys.time()
+      elapsed_time <- difftime(current_time, score_calc_start_time, units = "secs")
+      
+      if (i > 0) {
+        avg_time_per_lineup <- as.numeric(elapsed_time) / i
+        estimated_total_time <- avg_time_per_lineup * nrow(lineup_counter)
+        estimated_remaining <- estimated_total_time - as.numeric(elapsed_time)
+        
+        cat(sprintf("[%s] Calculated scores for %s/%s lineups (%.1f%%) - %.1fs elapsed, ~%.1fs remaining\n", 
+                    format(current_time, "%H:%M:%S"),
+                    format(i, big.mark = ","), 
+                    format(nrow(lineup_counter), big.mark = ","),
+                    (i / nrow(lineup_counter)) * 100,
+                    as.numeric(elapsed_time),
+                    estimated_remaining))
+      }
     }
   }
   
   # Calculate frequencies and percentages correctly
   lineup_counter[, Frequency := Count / total_iterations * 100]
-  lineup_counter[, Win6Pct := (Win6Count / total_iterations) * 100]
-  lineup_counter[, Win5PlusPct := (Win5PlusCount / total_iterations) * 100]
-  lineup_counter[, Win4PlusPct := (Win4PlusCount / total_iterations) * 100]
   
-  # Sort by Top1Count
-  setorder(lineup_counter, -Top1Count)
+  # Sort by TotalEW (already sorted, but re-sort in case)
+  setorder(lineup_counter, -TotalEW, -Top1Count)
   
   # Report final timing
   overall_end_time <- Sys.time()
@@ -1717,32 +1861,12 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   # Create a fast player name to salary lookup
   player_salary_map <- setNames(player_df$Salary, player_df[[name_col]])
   
-  # Create EW lookup if EW metrics provided
-  ew_lookup <- NULL
-  if (!is.null(ew_metrics)) {
-    cat("EW metrics provided - creating lookup table\n")
-    if (is.data.table(ew_metrics)) {
-      ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
-    } else if (is.data.frame(ew_metrics)) {
-      ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
-    }
-    cat("EW lookup created for", length(ew_lookup), "players\n")
-    cat("Sample EW values:", paste(head(ew_lookup, 3), collapse = ", "), "\n")
-  } else {
-    cat("No EW metrics provided - TotalEW column will not be calculated\n")
-  }
-  
   # Start with the existing lineup data and add new columns
   expanded_lineups <- lineup_df
   
   # Add TotalSalary column if it doesn't exist
   if (!"TotalSalary" %in% names(expanded_lineups)) {
     expanded_lineups$TotalSalary <- numeric(nrow(expanded_lineups))
-  }
-  
-  # Add TotalEW column if EW metrics are available and column doesn't exist
-  if (!is.null(ew_lookup) && !"TotalEW" %in% names(expanded_lineups)) {
-    expanded_lineups$TotalEW <- numeric(nrow(expanded_lineups))
   }
   
   # Add player name and salary columns if they don't exist
@@ -1793,14 +1917,6 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
       total_salary <- sum(player_salaries, na.rm = TRUE)
       expanded_lineups$TotalSalary[i] <- total_salary
       
-      # Calculate total EW if available
-      if (!is.null(ew_lookup)) {
-        player_ew <- ew_lookup[player_names]
-        player_ew[is.na(player_ew)] <- 0
-        total_ew <- sum(player_ew, na.rm = TRUE)
-        expanded_lineups$TotalEW[i] <- total_ew
-      }
-      
       # Sort players by salary (descending)
       sorted_indices <- order(player_salaries, decreasing = TRUE)
       sorted_players <- player_names[sorted_indices]
@@ -1847,13 +1963,13 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   
   # Final debug output
   cat("Final columns in expanded_lineups:", paste(names(expanded_lineups), collapse = ", "), "\n")
-  if (!is.null(ew_lookup) && "TotalEW" %in% names(expanded_lineups)) {
-    cat("TotalEW column successfully added\n")
+  if ("TotalEW" %in% names(expanded_lineups)) {
+    cat("TotalEW column exists\n")
     cat("TotalEW range:", min(expanded_lineups$TotalEW, na.rm=TRUE), "to", max(expanded_lineups$TotalEW, na.rm=TRUE), "\n")
   }
   
   # Check for score columns
-  score_cols <- c("AvgScore", "MedianScore", "Score20th", "Score80th")
+  score_cols <- c("MedianScore", "Score80th", "Win6Pct", "Win5PlusPct")
   existing_score_cols <- intersect(score_cols, names(expanded_lineups))
   cat("Score columns preserved:", paste(existing_score_cols, collapse = ", "), "\n")
   
@@ -1861,7 +1977,6 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   
   return(expanded_lineups)
 }
-
 # Define UI
 ui <- dashboardPage(
   skin = "blue",
@@ -2053,27 +2168,15 @@ ui <- dashboardPage(
                         column(3,
                                numericInput("min_win5plus_pct", "Min 5+ Win %:", 
                                             value = 0, min = 0, max = 100, step = 0.01)
-                        ),
-                        column(3,
-                               numericInput("min_win4plus_pct", "Min 4+ Win %:", 
-                                            value = 0, min = 0, max = 100, step = 0.01)
                         )
                       ),
                       # Row 3: NEW Score Filters
                       fluidRow(
-                        column(3,
-                               numericInput("min_avg_score", "Min Avg Score:", 
-                                            value = 0, min = 0, step = 0.1)
-                        ),
-                        column(3,
+                        column(4,
                                numericInput("min_median_score", "Min Median Score:", 
                                             value = 0, min = 0, step = 0.1)
                         ),
-                        column(3,
-                               numericInput("min_score20th", "Min 20th %ile Score:", 
-                                            value = 0, min = 0, step = 0.1)
-                        ),
-                        column(3,
+                        column(4,
                                numericInput("min_score80th", "Min 80th %ile Score:", 
                                             value = 0, min = 0, step = 0.1)
                         )
@@ -2827,6 +2930,7 @@ server <- function(input, output, session) {
   
   # Replace your entire output$optimal_lineups_table with this robust version:
   
+  # Updated output$optimal_lineups_table for the server section
   output$optimal_lineups_table <- renderDT({
     # Validate required data
     if (is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
@@ -2864,13 +2968,13 @@ server <- function(input, output, session) {
       player_cols <- grep("^Player[1-6]$", names(lineups_df), value = TRUE)
     }
     
-    # Select columns for display - ONLY include columns that actually exist
+    # Select columns for display - UPDATED for new column structure
     potential_display_cols <- c(
       player_cols,
       "TotalEW",
-      "AvgScore", "MedianScore", "Score20th", "Score80th",
+      "MedianScore", "Score80th",  # Updated: removed AvgScore and Score20th
       "TotalSalary", 
-      "Win6Pct", "Win5PlusPct", "Win4PlusPct",
+      "Win6Pct", "Win5PlusPct",   # Updated: use new win percentage columns
       "Top1Count", "Top2Count", "Top3Count", "Top5Count"
     )
     
@@ -2938,8 +3042,8 @@ server <- function(input, output, session) {
       })
     }
     
-    # Format score columns if they exist
-    score_cols_available <- intersect(c("AvgScore", "MedianScore", "Score20th", "Score80th"), names(display_data))
+    # Format score columns if they exist - UPDATED
+    score_cols_available <- intersect(c("MedianScore", "Score80th"), names(display_data))
     if (length(score_cols_available) > 0) {
       dt <- tryCatch({
         dt %>% formatRound(score_cols_available, 1)
@@ -2949,8 +3053,8 @@ server <- function(input, output, session) {
       })
     }
     
-    # Format win percentages if they exist
-    win_pct_cols_available <- intersect(c("Win6Pct", "Win5PlusPct", "Win4PlusPct"), names(display_data))
+    # Format win percentages if they exist - UPDATED
+    win_pct_cols_available <- intersect(c("Win6Pct", "Win5PlusPct"), names(display_data))
     if (length(win_pct_cols_available) > 0) {
       dt <- tryCatch({
         dt %>% formatRound(win_pct_cols_available, 2)
