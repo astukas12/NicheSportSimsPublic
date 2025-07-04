@@ -2600,7 +2600,6 @@ server <- function(input, output, session) {
         )
       }
       
-      # Update excluded players selectInput
       if (!is.null(expanded_lineups)) {
         # Get unique players from all lineups
         player_cols <- grep("^Name[1-6]$", names(expanded_lineups), value = TRUE)
@@ -2608,22 +2607,40 @@ server <- function(input, output, session) {
         for(col in player_cols) {
           all_players <- c(all_players, expanded_lineups[[col]])
         }
-        all_players <- unique(all_players)
+        all_players <- unique(all_players[!is.na(all_players)])  # Remove NA values
         
-        # Create labels with ownership percentages
-        player_labels <- sapply(all_players, function(player) {
-          gto <- rv$dk_player_exposure$OptimalRate[rv$dk_player_exposure$Player == player]
-          sprintf("%s (%.1f%%)", player, gto)
+        # Calculate pool exposure for each player
+        pool_exposure <- sapply(all_players, function(player) {
+          # Count appearances in optimal lineups
+          player_appears <- logical(nrow(expanded_lineups))
+          for(col in player_cols) {
+            player_appears <- player_appears | (expanded_lineups[[col]] == player)
+          }
+          exposure_pct <- (sum(player_appears) / nrow(expanded_lineups)) * 100
+          return(exposure_pct)
         })
+        
+        # Create labels with pool exposure percentages
+        player_labels <- sapply(all_players, function(player) {
+          exposure <- pool_exposure[player]
+          sprintf("%s (%.1f%%)", player, exposure)
+        })
+        
+        # Sort by exposure descending
+        sorted_indices <- order(pool_exposure, decreasing = TRUE)
+        sorted_players <- all_players[sorted_indices]
+        sorted_labels <- player_labels[sorted_indices]
         
         # Update the selectInput
         updateSelectizeInput(
           session, 
           "excluded_players",
-          choices = setNames(all_players, player_labels),
+          choices = setNames(sorted_players, sorted_labels),
           selected = NULL
         )
       }
+      
+
       
       # Remove the processing modal
       removeModal()
