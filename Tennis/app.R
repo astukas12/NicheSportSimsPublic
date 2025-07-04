@@ -631,8 +631,6 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
 }
 
 
-
-# Calculate player exposure
 calculate_player_exposure <- function(optimal_lineups, player_stats, random_lineups = NULL) {
   # Quick validation
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -655,23 +653,55 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
   
   player_cols <- grep(name_pattern, names(optimal_lineups), value = TRUE)
   
-  # Get all players from the optimal lineups
-  all_players <- unique(unlist(optimal_lineups[, ..player_cols]))
+  # Get all players from both optimal and random lineups
+  all_players_optimal <- unique(unlist(optimal_lineups[, ..player_cols]))
+  
+  if(!is.null(random_lineups)) {
+    # Determine player column pattern in random lineups
+    random_pattern <- if(any(grepl("^Name[1-6]$", names(random_lineups)))) {
+      "^Name[1-6]$"
+    } else if(any(grepl("^Player[1-6]$", names(random_lineups)))) {
+      "^Player[1-6]$"
+    } else {
+      NULL
+    }
+    
+    if(!is.null(random_pattern)) {
+      random_player_cols <- grep(random_pattern, names(random_lineups), value = TRUE)
+      all_players_random <- unique(unlist(random_lineups[, ..random_player_cols]))
+      all_players <- unique(c(all_players_optimal, all_players_random))
+    } else {
+      all_players <- all_players_optimal
+    }
+  } else {
+    all_players <- all_players_optimal
+  }
+  
+  # Start with all players from player_stats to ensure complete list
+  if(!is.null(player_stats) && nrow(player_stats) > 0) {
+    # Get all unique players from player_stats
+    stats_players <- if("Player" %in% names(player_stats)) {
+      unique(player_stats$Player)
+    } else if("Name" %in% names(player_stats)) {
+      unique(player_stats$Name)
+    } else {
+      character(0)
+    }
+    all_players <- unique(c(all_players, stats_players))
+  }
   
   # Initialize metrics data frame
   metrics_data <- data.table(
     Player = all_players,
     Salary = NA_real_,
     DKOwn = NA_real_,
-    OptimalRate = 0,
-    EliteRate = 0,
-    FloorRate = 0,
-    AppearanceRate = 0,
-    Exposure = 0,
-    Leverage = 0
+    Pool_Exposure = 0,
+    Randomized_Exposure = 0,
+    Pool_Leverage = 0,
+    Randomized_Leverage = 0
   )
   
-  # Match with fantasy analysis data using direct matching
+  # Match with player stats using direct matching
   if(!is.null(player_stats) && nrow(player_stats) > 0) {
     for(i in 1:nrow(metrics_data)) {
       player_name <- metrics_data$Player[i]
@@ -697,81 +727,19 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
     }
   }
   
-  # Calculate OptimalRate (percentage of Top1Count lineups with this player)
-  total_top1 <- sum(optimal_lineups$Top1Count, na.rm = TRUE)
-  if(total_top1 > 0) {
-    for(player in all_players) {
-      # Find lineups with this player
-      player_appears <- logical(nrow(optimal_lineups))
-      for(col in player_cols) {
-        player_appears <- player_appears | (optimal_lineups[[col]] == player)
-      }
-      player_matches <- which(player_appears)
-      
-      # Calculate optimal rate percentage
-      player_total <- sum(optimal_lineups$Top1Count[player_matches], na.rm = TRUE)
-      metrics_data[Player == player, OptimalRate := (player_total / total_top1) * 100]
-    }
-  }
-  
-  # Calculate EliteRate (top 10% of lineups by Top1Count)
-  if(nrow(optimal_lineups) >= 10) {
-    elite_lineups <- copy(optimal_lineups)
-    elite_lineups <- elite_lineups[order(-Top1Count, -Top5Count)]
-    
-    n_elite <- max(1, round(nrow(elite_lineups) * 0.1))
-    elite_lineups <- elite_lineups[1:n_elite]
-    
-    for(player in all_players) {
-      # Count appearances in elite lineups
-      player_appears <- logical(nrow(elite_lineups))
-      for(col in player_cols) {
-        player_appears <- player_appears | (elite_lineups[[col]] == player)
-      }
-      player_elite_count <- sum(player_appears)
-      
-      # Calculate elite rate
-      metrics_data[Player == player, EliteRate := (player_elite_count / n_elite) * 100]
-    }
-  }
-  
-  # Calculate FloorRate (top 20% of lineups by Top5Count)
-  if(nrow(optimal_lineups) >= 5) {
-    floor_lineups <- copy(optimal_lineups)
-    floor_lineups <- floor_lineups[order(-Top5Count, -Top1Count)]
-    
-    n_floor <- max(1, round(nrow(floor_lineups) * 0.2))
-    floor_lineups <- floor_lineups[1:n_floor]
-    
-    for(player in all_players) {
-      # Count appearances in floor lineups
-      player_appears <- logical(nrow(floor_lineups))
-      for(col in player_cols) {
-        player_appears <- player_appears | (floor_lineups[[col]] == player)
-      }
-      player_floor_count <- sum(player_appears)
-      
-      # Calculate floor rate
-      metrics_data[Player == player, FloorRate := (player_floor_count / n_floor) * 100]
-    }
-  }
-  
-  # Calculate AppearanceRate (percentage of all lineups with this player)
+  # Calculate Pool Exposure (from optimal lineups)
   if(nrow(optimal_lineups) > 0) {
     for(player in all_players) {
-      # Count appearances in all lineups
+      # Count appearances in optimal lineups
       player_appears <- logical(nrow(optimal_lineups))
       for(col in player_cols) {
         player_appears <- player_appears | (optimal_lineups[[col]] == player)
       }
-      player_appearance_count <- sum(player_appears)
-      
-      # Calculate appearance rate
-      metrics_data[Player == player, AppearanceRate := (player_appearance_count / nrow(optimal_lineups)) * 100]
+      metrics_data[Player == player, Pool_Exposure := (sum(player_appears) / nrow(optimal_lineups)) * 100]
     }
   }
   
-  # Calculate Exposure from random lineups
+  # Calculate Randomized Exposure from random lineups
   if(!is.null(random_lineups) && nrow(random_lineups) > 0) {
     # Determine player column pattern in random lineups
     random_pattern <- if(any(grepl("^Name[1-6]$", names(random_lineups)))) {
@@ -791,17 +759,18 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
           for(col in random_player_cols) {
             player_appears <- player_appears | (random_lineups[[col]] == player)
           }
-          metrics_data[Player == player, Exposure := (sum(player_appears) / nrow(random_lineups)) * 100]
+          metrics_data[Player == player, Randomized_Exposure := (sum(player_appears) / nrow(random_lineups)) * 100]
         }
       }
     }
   }
   
-  # Calculate leverage
-  metrics_data[!is.na(DKOwn), Leverage := Exposure - (DKOwn*100)]
+  # Calculate leverage (only where we have ownership projections)
+  metrics_data[!is.na(DKOwn), Pool_Leverage := Pool_Exposure - (DKOwn * 100)]
+  metrics_data[!is.na(DKOwn), Randomized_Leverage := Randomized_Exposure - (DKOwn * 100)]
   
-  # Sort by OptimalRate
-  setorder(metrics_data, -OptimalRate)
+  # Sort by Pool Exposure descending
+  setorder(metrics_data, -Pool_Exposure)
   
   return(as.data.frame(metrics_data))
 }
@@ -1796,7 +1765,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
     }
     
     # Show progress with timing estimates (more frequent updates)
-    if (i %% 25 == 0 || i == nrow(lineup_counter)) {
+    if (i %% 1000 == 0 || i == nrow(lineup_counter)) {
       current_time <- Sys.time()
       elapsed_time <- difftime(current_time, score_calc_start_time, units = "secs")
       
@@ -2110,9 +2079,6 @@ ui <- dashboardPage(
       ),
       
       # Lineup Builder Tab
-      # Lineup Builder Tab
-      # Replace the entire lineup_builder tabItem with this updated version:
-      
       tabItem(tabName = "lineup_builder",
               conditionalPanel(
                 condition = "!output.optimization_complete",
@@ -2129,56 +2095,50 @@ ui <- dashboardPage(
                 condition = "output.optimization_complete === 'true'",
                 fluidRow(
                   box(width = 12,
-                      title = "Lineup Count Thresholds",
-                      DTOutput("lineup_count_thresholds") %>% withSpinner(color = "#FFD700")
-                  )
-                ),
-                fluidRow(
-                  box(width = 12,
                       title = "Lineup Filters",
                       # Row 1: Top Count Filters
                       fluidRow(
                         column(3,
-                               numericInput("min_top1_count", "Min Top 1 Count:", 
-                                            value = 0, min = 0)
+                               sliderInput("min_top1_count", "Min Top 1 Count:", 
+                                           min = 0, max = 100, value = 0, step = 1)
                         ),
                         column(3,
-                               numericInput("min_top2_count", "Min Top 2 Count:", 
-                                            value = 0, min = 0)
+                               sliderInput("min_top2_count", "Min Top 2 Count:", 
+                                           min = 0, max = 100, value = 0, step = 1)
                         ),
                         column(3,
-                               numericInput("min_top3_count", "Min Top 3 Count:", 
-                                            value = 0, min = 0)
+                               sliderInput("min_top3_count", "Min Top 3 Count:", 
+                                           min = 0, max = 100, value = 0, step = 1)
                         ),
                         column(3,
-                               numericInput("min_top5_count", "Min Top 5 Count:", 
-                                            value = 0, min = 0)
+                               sliderInput("min_top5_count", "Min Top 5 Count:", 
+                                           min = 0, max = 100, value = 0, step = 1)
                         )
                       ),
                       # Row 2: EW and Win Percentage Filters
                       fluidRow(
                         column(3,
-                               numericInput("min_total_ew", "Min Total EW:", 
-                                            value = 0, min = 0, step = 0.01)
+                               sliderInput("min_total_ew", "Min Total EW:", 
+                                           min = 0, max = 6, value = 0, step = 0.1)
                         ),
                         column(3,
-                               numericInput("min_win6_pct", "Min 6-Win %:", 
-                                            value = 0, min = 0, max = 100, step = 0.01)
+                               sliderInput("min_win6_pct", "Min 6-Win %:", 
+                                           min = 0, max = 100, value = 0, step = 0.1)
                         ),
                         column(3,
-                               numericInput("min_win5plus_pct", "Min 5+ Win %:", 
-                                            value = 0, min = 0, max = 100, step = 0.01)
+                               sliderInput("min_win5plus_pct", "Min 5+ Win %:", 
+                                           min = 0, max = 100, value = 0, step = 0.1)
                         )
                       ),
-                      # Row 3: NEW Score Filters
+                      # Row 3: Score Filters
                       fluidRow(
                         column(4,
-                               numericInput("min_median_score", "Min Median Score:", 
-                                            value = 0, min = 0, step = 0.1)
+                               sliderInput("min_median_score", "Min Median Score:", 
+                                           min = 0, max = 500, value = 0, step = 1)
                         ),
                         column(4,
-                               numericInput("min_score80th", "Min 80th %ile Score:", 
-                                            value = 0, min = 0, step = 0.1)
+                               sliderInput("min_score80th", "Min 80th %ile Score:", 
+                                           min = 0, max = 500, value = 0, step = 1)
                         )
                       ),
                       # Row 4: Player Exclusion and Number of Lineups
@@ -3123,12 +3083,10 @@ server <- function(input, output, session) {
     )
   })
   
-  # 1. Replace the output$filtered_pool_size section with this updated version:
-  
   output$filtered_pool_size <- renderText({
     req(rv$dk_optimal_lineups)
     
-    # Create filters - NOW INCLUDING score filters
+    # Create filters from slider values
     filters <- list(
       min_top1_count = input$min_top1_count,
       min_top2_count = input$min_top2_count,
@@ -3137,11 +3095,7 @@ server <- function(input, output, session) {
       min_total_ew = input$min_total_ew,
       min_win6_pct = input$min_win6_pct,
       min_win5plus_pct = input$min_win5plus_pct,
-      min_win4plus_pct = input$min_win4plus_pct,
-      # NEW: Add score filters
-      min_avg_score = input$min_avg_score,
       min_median_score = input$min_median_score,
-      min_score20th = input$min_score20th,
       min_score80th = input$min_score80th,
       excluded_players = input$excluded_players
     )
@@ -3152,12 +3106,92 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  # 2. Replace the observeEvent(input$generate_lineups section with this updated version:
+  observeEvent(rv$dk_optimal_lineups, {
+    req(rv$dk_optimal_lineups)
+    
+    if (!is.null(rv$dk_optimal_lineups)) {
+      # Update Top Count sliders based on actual data
+      updateSliderInput(session, "min_top1_count",
+                        min = min(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE), 
+                        max = max(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE), 
+                        value = min(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE))
+      
+      updateSliderInput(session, "min_top2_count",
+                        min = min(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE), 
+                        max = max(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE), 
+                        value = min(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE))
+      
+      updateSliderInput(session, "min_top3_count",
+                        min = min(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE), 
+                        max = max(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE), 
+                        value = min(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE))
+      
+      updateSliderInput(session, "min_top5_count",
+                        min = min(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE), 
+                        max = max(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE), 
+                        value = min(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE))
+      
+      # Update TotalEW slider if the column exists
+      if ("TotalEW" %in% names(rv$dk_optimal_lineups)) {
+        ew_min <- min(rv$dk_optimal_lineups$TotalEW, na.rm = TRUE)
+        ew_max <- max(rv$dk_optimal_lineups$TotalEW, na.rm = TRUE)
+        updateSliderInput(session, "min_total_ew",
+                          min = round(ew_min, 2), 
+                          max = round(ew_max, 2), 
+                          value = round(ew_min, 2),
+                          step = 0.01)
+      }
+      
+      # Update Win6Pct slider if the column exists
+      if ("Win6Pct" %in% names(rv$dk_optimal_lineups)) {
+        win6_min <- min(rv$dk_optimal_lineups$Win6Pct, na.rm = TRUE)
+        win6_max <- max(rv$dk_optimal_lineups$Win6Pct, na.rm = TRUE)
+        updateSliderInput(session, "min_win6_pct",
+                          min = round(win6_min, 2), 
+                          max = round(win6_max, 2), 
+                          value = round(win6_min, 2),
+                          step = 0.01)
+      }
+      
+      # Update Win5PlusPct slider if the column exists
+      if ("Win5PlusPct" %in% names(rv$dk_optimal_lineups)) {
+        win5_min <- min(rv$dk_optimal_lineups$Win5PlusPct, na.rm = TRUE)
+        win5_max <- max(rv$dk_optimal_lineups$Win5PlusPct, na.rm = TRUE)
+        updateSliderInput(session, "min_win5plus_pct",
+                          min = round(win5_min, 2), 
+                          max = round(win5_max, 2), 
+                          value = round(win5_min, 2),
+                          step = 0.01)
+      }
+      
+      # Update MedianScore slider if the column exists
+      if ("MedianScore" %in% names(rv$dk_optimal_lineups)) {
+        median_min <- min(rv$dk_optimal_lineups$MedianScore, na.rm = TRUE)
+        median_max <- max(rv$dk_optimal_lineups$MedianScore, na.rm = TRUE)
+        updateSliderInput(session, "min_median_score",
+                          min = round(median_min, 1), 
+                          max = round(median_max, 1), 
+                          value = round(median_min, 1),
+                          step = 0.5)
+      }
+      
+      # Update Score80th slider if the column exists
+      if ("Score80th" %in% names(rv$dk_optimal_lineups)) {
+        score80_min <- min(rv$dk_optimal_lineups$Score80th, na.rm = TRUE)
+        score80_max <- max(rv$dk_optimal_lineups$Score80th, na.rm = TRUE)
+        updateSliderInput(session, "min_score80th",
+                          min = round(score80_min, 1), 
+                          max = round(score80_max, 1), 
+                          value = round(score80_min, 1),
+                          step = 0.5)
+      }
+    }
+  })
   
   observeEvent(input$generate_lineups, {
     req(rv$dk_optimal_lineups)
     
-    # Create filters for lineup generation - NOW INCLUDING score filters
+    # Create filters from slider values
     filters <- list(
       min_top1_count = input$min_top1_count,
       min_top2_count = input$min_top2_count,
@@ -3166,11 +3200,7 @@ server <- function(input, output, session) {
       min_total_ew = input$min_total_ew,
       min_win6_pct = input$min_win6_pct,
       min_win5plus_pct = input$min_win5plus_pct,
-      min_win4plus_pct = input$min_win4plus_pct,
-      # NEW: Add score filters
-      min_avg_score = input$min_avg_score,
       min_median_score = input$min_median_score,
-      min_score20th = input$min_score20th,
       min_score80th = input$min_score80th,
       excluded_players = input$excluded_players,
       num_lineups = input$num_lineups
@@ -3181,12 +3211,19 @@ server <- function(input, output, session) {
       # Generate random lineups
       rv$dk_random_lineups <- generate_random_lineups(rv$dk_optimal_lineups, filters)
       
-      # Update player exposure data
+      # Update player exposure data with new calculation
       if(!is.null(rv$dk_random_lineups)) {
         rv$dk_player_exposure <- calculate_player_exposure(
-          rv$dk_optimal_lineups, 
-          rv$player_projections, 
-          rv$dk_random_lineups
+          rv$dk_optimal_lineups,  # This represents the filtered pool
+          rv$player_projections,
+          rv$dk_random_lineups    # This represents the generated lineups
+        )
+      } else {
+        # If no random lineups, still calculate exposure for filtered pool only
+        rv$dk_player_exposure <- calculate_player_exposure(
+          rv$dk_optimal_lineups,
+          rv$player_projections,
+          NULL
         )
       }
       
@@ -3207,28 +3244,32 @@ server <- function(input, output, session) {
     })
   })
   
-  # Player exposure table
   output$player_exposure_table <- renderDT({
     req(rv$dk_player_exposure)
     
-    # Reorganize data for display
+    # Get the exposure data
     display_data <- rv$dk_player_exposure
+    
+    # Reorder columns and sort by Pool Exposure descending
+    display_data <- display_data[, c("Player", "Salary", "Randomized_Exposure", "Pool_Exposure", "DKOwn", "Randomized_Leverage", "Pool_Leverage")]
+    display_data <- display_data[order(display_data$Pool_Exposure, decreasing = TRUE), ]
     
     datatable(
       display_data,
       options = list(
-        pageLength = -1,
-        dom = "t",
+        pageLength = 25,
         scrollX = TRUE,
-        order = list(list(3, 'desc')),  # Sort by OptimalRate by default
-        rownames = FALSE  # Remove row numbers
+        dom = "tip",
+        ordering = TRUE
       ),
-      rownames = FALSE
+      rownames = FALSE,
+      colnames = c("Player", "Salary", "Randomized %", "Pool %", "DKOwn %", "Randomized Leverage", "Pool Leverage")
     ) %>%
-      formatCurrency('Salary', currency = "$", digits = 0) %>%
-      formatRound(c('OptimalRate', 'EliteRate', 'FloorRate', 'AppearanceRate', 'Exposure', 'Leverage'), digits = 1)
+      formatCurrency("Salary", "$", digits = 0) %>%
+      formatRound(c("Randomized_Exposure", "Pool_Exposure"), 1) %>%
+      formatPercentage("DKOwn", 1) %>%
+      formatRound(c("Randomized_Leverage", "Pool_Leverage"), 1)
   })
-  
   
   # Generated lineups table
   output$generated_lineups_table <- renderDT({
