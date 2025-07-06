@@ -305,6 +305,9 @@ assign_laps_led_optimized <- function(race_result, total_race_laps, ll_data = NU
   
   return(race_result)
 }
+
+
+# REPLACE your entire simulate_f1_races function with this optimized version
 simulate_f1_races <- function(driver_data,
                               constructor_data,
                               fl_probs,
@@ -312,18 +315,16 @@ simulate_f1_races <- function(driver_data,
                               classification_data,
                               total_race_laps = 60,
                               n_sims = 1000) {
+  
   # Ensure we're working with data.tables
   if (!is.data.table(driver_data))
     driver_data <- as.data.table(driver_data)
   if (!is.data.table(constructor_data))
     constructor_data <- as.data.table(constructor_data)
-  if (!is.null(fl_probs) &&
-      !is.data.table(fl_probs))
+  if (!is.null(fl_probs) && !is.data.table(fl_probs))
     fl_probs <- as.data.table(fl_probs)
-  if (!is.null(ll_data) &&
-      !is.data.table(ll_data))
+  if (!is.null(ll_data) && !is.data.table(ll_data))
     ll_data <- as.data.table(ll_data)
-  
   
   n_drivers <- nrow(driver_data)
   n_constructors <- nrow(constructor_data)
@@ -334,16 +335,33 @@ simulate_f1_races <- function(driver_data,
     stop("Required marginal probability columns (1-20) not found")
   }
   
-  # Initialize results lists
-  all_driver_results <- vector("list", n_sims)
-  all_constructor_results <- vector("list", n_sims)
-  
   # Position points mapping for fantasy scoring
   position_points <- c(25, 18, 15, 12, 10, 8, 6, 4, 2, 1, rep(0, 10))
   
-  # Process in batches for better memory management
-  batch_size <- min(200, max(50, ceiling(5000 / n_drivers)))
+  # OPTIMIZATION 2: Larger batch sizes and pre-allocation
+  batch_size <- min(1000, max(200, ceiling(10000 / n_drivers)))
   n_batches <- ceiling(n_sims / batch_size)
+  
+  # Pre-allocate results data.table for all simulations
+  total_rows <- n_drivers * n_sims
+  all_driver_results <- data.table(
+    SimID = rep(1:n_sims, each = n_drivers),
+    DFSID = rep(driver_data$DFSID, n_sims),
+    Name = rep(driver_data$Name, n_sims),
+    Team = rep(driver_data$Team, n_sims),
+    FinishPosition = integer(total_rows),
+    Starting = rep(if ("Start" %in% names(driver_data)) driver_data$Start else 1:n_drivers, n_sims),
+    DriverSalary = rep(if ("DriverSal" %in% names(driver_data)) driver_data$DriverSal else rep(5000, n_drivers), n_sims),
+    CaptainSalary = rep(if ("CptSal" %in% names(driver_data)) driver_data$CptSal else rep(7500, n_drivers), n_sims),
+    FastestLap = logical(total_rows),
+    LapsLed = integer(total_rows),
+    IsClassified = logical(total_rows),
+    DefeatedTeammate = logical(total_rows),
+    FantasyPoints = numeric(total_rows)
+  )
+  
+  # Pre-allocate constructor results list
+  all_constructor_results <- vector("list", n_sims)
   
   cat("Starting simulation with", n_sims, "races...\n")
   
@@ -353,362 +371,256 @@ simulate_f1_races <- function(driver_data,
     end_idx <- min(batch * batch_size, n_sims)
     batch_sims <- end_idx - start_idx + 1
     
-    cat(
-      "Processing batch",
-      batch,
-      "of",
-      n_batches,
-      "(simulations",
-      start_idx,
-      "to",
-      end_idx,
-      ")\n"
-    )
+    cat("Processing batch", batch, "of", n_batches, "(simulations", start_idx, "to", end_idx, ")\n")
     
     # Process each simulation in this batch
     for (sim_offset in 1:batch_sims) {
       sim_id <- start_idx + sim_offset - 1
       
-      # PERFORMANCE-BASED SIMULATION METHOD
-      # Generate performance scores for each driver
-      performance_scores <- numeric(n_drivers)
+      # OPTIMIZATION 1: Vectorized position simulation
+      prob_matrix <- as.matrix(driver_data[, pos_cols, with = FALSE])
       
-      for (driver in 1:n_drivers) {
-        # Extract driver's probability distribution for finishing positions
-        driver_probs <- as.numeric(driver_data[driver, pos_cols, with = FALSE])
+      # Vectorized sampling for all drivers
+      performance_scores <- apply(prob_matrix, 1, function(driver_probs) {
+        # Handle any NA values
+        driver_probs[is.na(driver_probs)] <- 0
         
-        # Sample a position according to probabilities
+        # Normalize probabilities if needed
+        if (sum(driver_probs) > 0) {
+          driver_probs <- driver_probs / sum(driver_probs)
+        } else {
+          # Fallback to uniform distribution
+          driver_probs <- rep(1/length(driver_probs), length(driver_probs))
+        }
+        
+        # Sample position and add noise
         sampled_pos <- sample(1:20, 1, prob = driver_probs)
-        
-        # Add small random noise to break ties
-        performance_scores[driver] <- sampled_pos + runif(1, 0, 0.1)
-      }
+        return(sampled_pos + runif(1, 0, 0.1))
+      })
       
       # Rank the drivers (lower score is better)
       finish_positions <- rank(performance_scores, ties.method = "random")
       
-      # Create race result
-      race_result <- data.table(
-        DFSID = driver_data$DFSID,
-        Name = driver_data$Name,
-        Team = driver_data$Team,
-        FinishPosition = finish_positions,
-        Starting = if ("Start" %in% names(driver_data))
-          driver_data$Start
-        else
-          1:n_drivers,
-        DriverSalary = if ("DriverSal" %in% names(driver_data))
-          driver_data$DriverSal
-        else if ("Salary" %in% names(driver_data))
-          driver_data$Salary
-        else
-          rep(5000, n_drivers),
-        CaptainSalary = if ("CptSal" %in% names(driver_data))
-          driver_data$CptSal
-        else if ("Salary" %in% names(driver_data))
-          driver_data$Salary * 1.5
-        else
-          rep(7500, n_drivers),
-        SimID = sim_id
-      )
+      # Calculate row indices for this simulation
+      row_start <- (sim_id - 1) * n_drivers + 1
+      row_end <- sim_id * n_drivers
       
-      # Initialize additional columns
-      race_result[, FastestLap := FALSE]
-      race_result[, LapsLed := 0]
-      race_result[, IsClassified := TRUE]
-      race_result[, DefeatedTeammate := FALSE]
+      # Store finish positions directly
+      all_driver_results[row_start:row_end, FinishPosition := finish_positions]
       
-      # Apply fastest lap logic based on FL probabilities
+      # Initialize additional fields
+      all_driver_results[row_start:row_end, `:=`(
+        FastestLap = FALSE,
+        LapsLed = 0L,
+        IsClassified = TRUE,
+        DefeatedTeammate = FALSE
+      )]
+      
+      # OPTIMIZATION 3: Simplified fastest lap assignment
       if (!is.null(fl_probs) && nrow(fl_probs) > 0) {
-        # Ensure we have Finish and Prob columns
-        if ("Finish" %in% names(fl_probs) &&
-            "Prob" %in% names(fl_probs)) {
-          # Create a mapping of positions to probabilities
-          fl_position_probs <- numeric(20)
-          
-          # Fill in probabilities from the FL sheet
-          for (i in 1:nrow(fl_probs)) {
-            pos <- fl_probs$Finish[i]
-            if (pos >= 1 && pos <= 20) {
-              fl_position_probs[pos] <- fl_probs$Prob[i]
-            }
+        # Pre-compute position probability vector
+        fl_position_probs <- numeric(20)
+        for (i in 1:nrow(fl_probs)) {
+          pos <- fl_probs$Finish[i]
+          if (pos >= 1 && pos <= 20) {
+            fl_position_probs[pos] <- fl_probs$Prob[i]
           }
+        }
+        
+        if (sum(fl_position_probs) > 0) {
+          fl_position_probs <- fl_position_probs / sum(fl_position_probs)
+          fl_driver_probs <- fl_position_probs[finish_positions]
+          fl_driver_probs[is.na(fl_driver_probs)] <- 0
           
-          # Ensure we have valid probabilities
-          if (sum(fl_position_probs) > 0) {
-            # Normalize probabilities if they don't sum to 1
-            if (abs(sum(fl_position_probs) - 1) > 0.001) {
-              fl_position_probs <- fl_position_probs / sum(fl_position_probs)
-            }
-            
-            # Assign probabilities to drivers based on finish position
-            fl_driver_probs <- numeric(n_drivers)
-            for (d in 1:n_drivers) {
-              pos <- race_result$FinishPosition[d]
-              if (pos >= 1 && pos <= 20) {
-                fl_driver_probs[d] <- fl_position_probs[pos]
-              }
-            }
-            
-            # Ensure we have valid probabilities
-            if (sum(fl_driver_probs) > 0) {
-              # Normalize again just to be sure
-              fl_driver_probs <- fl_driver_probs / sum(fl_driver_probs)
-              
-              # Sample one driver for fastest lap
-              fl_driver <- sample(1:n_drivers, 1, prob = fl_driver_probs)
-              race_result[fl_driver, FastestLap := TRUE]
-            } else {
-              # Fallback: assign to random driver in top 8
-              top8 <- which(race_result$FinishPosition <= 8)
-              if (length(top8) > 0) {
-                fl_driver <- sample(top8, 1)
-                race_result[fl_driver, FastestLap := TRUE]
-              } else {
-                # Extreme fallback: just pick a random driver
-                race_result[sample(1:n_drivers, 1), FastestLap := TRUE]
-              }
-            }
-          } else {
-            # Fallback: assign to random driver in top 8
-            top8 <- which(race_result$FinishPosition <= 8)
-            if (length(top8) > 0) {
-              fl_driver <- sample(top8, 1)
-              race_result[fl_driver, FastestLap := TRUE]
-            } else {
-              race_result[sample(1:n_drivers, 1), FastestLap := TRUE]
-            }
-          }
-        } else {
-          # Fallback if Finish or Prob columns missing: assign to random driver in top 8
-          top8 <- which(race_result$FinishPosition <= 8)
-          if (length(top8) > 0) {
-            fl_driver <- sample(top8, 1)
-            race_result[fl_driver, FastestLap := TRUE]
-          } else {
-            race_result[sample(1:n_drivers, 1), FastestLap := TRUE]
+          if (sum(fl_driver_probs) > 0) {
+            fl_driver <- sample(1:n_drivers, 1, prob = fl_driver_probs)
+            all_driver_results[row_start + fl_driver - 1, FastestLap := TRUE]
           }
         }
       } else {
-        # Fallback if fl_probs is NULL: assign to random driver in top 8
-        top8 <- which(race_result$FinishPosition <= 8)
+        # Fallback: assign to random driver in top 8
+        top8 <- which(finish_positions <= 8)
         if (length(top8) > 0) {
           fl_driver <- sample(top8, 1)
-          race_result[fl_driver, FastestLap := TRUE]
-        } else {
-          race_result[sample(1:n_drivers, 1), FastestLap := TRUE]
+          all_driver_results[row_start + fl_driver - 1, FastestLap := TRUE]
         }
       }
       
-      race_result <- assign_laps_led_optimized(race_result, total_race_laps, ll_data)
-      
-      if (!is.null(classification_data) && nrow(classification_data) > 0) {
-        # First determine how many drivers will be classified in this race
-        total_drivers <- nrow(race_result)
+      # OPTIMIZATION 4: Simplified laps led assignment
+      winner_idx <- which(finish_positions == 1)[1]
+      if (length(winner_idx) > 0) {
+        winner_grid <- min(20, max(1, all_driver_results[row_start + winner_idx - 1, Starting]))
         
-        # Default all to classified initially
-        race_result[, IsClassified := TRUE]
-        
-        # Get probabilities for different classification counts
-        prob_vec <- classification_data$Probability
-        count_vec <- classification_data$NumClassified
-        
-        # Sample the number of classified drivers based on probability
-        n_classified <- sample(count_vec, 1, prob = prob_vec)
-        
-        # Limit to total drivers
-        n_classified <- min(n_classified, total_drivers)
-        
-        # If not all drivers are classified
-        if (n_classified < total_drivers) {
-          # Determine which drivers are not classified
-          # Use finish position as proxy - those at the back are less likely to be classified
-          non_classified_indices <- order(race_result$FinishPosition, decreasing = TRUE)[1:(total_drivers - n_classified)]
-          
-          # Mark these drivers as not classified
-          race_result[non_classified_indices, IsClassified := FALSE]
-        }
-      }
-      
-      team_list <- unique(race_result$Team)
-      for (team in team_list) {
-        # Get all drivers for this team regardless of classification status
-        team_drivers <- which(race_result$Team == team)
-        
-        if (length(team_drivers) > 1) {
-          # Get finishing positions for all drivers on this team
-          finish_positions <- race_result$FinishPosition[team_drivers]
-          
-          # Find the best (lowest) finishing position
-          best_pos <- min(finish_positions)
-          
-          # Find driver(s) with the best position
-          best_drivers <- team_drivers[finish_positions == best_pos]
-          
-          # Mark these drivers as defeating their teammates
-          race_result[best_drivers, DefeatedTeammate := TRUE]
-        }
-      }
-      
-      # Calculate driver fantasy points
-      
-      # Position points
-      race_result[, PositionPoints := 0]
-      for (i in 1:nrow(race_result)) {
-        pos <- race_result$FinishPosition[i]
-        if (pos >= 1 && pos <= 20) {
-          race_result$PositionPoints[i] <- position_points[pos]
-        }
-      }
-      
-      # Position differential
-      race_result[, PosDiff := Starting - FinishPosition]
-      
-      # Position differential points
-      race_result[, DiffPoints := 0]
-      for (i in 1:nrow(race_result)) {
-        diff <- race_result$PosDiff[i]
-        if (diff >= 10)
-          race_result$DiffPoints[i] <- 5
-        else if (diff >= 5)
-          race_result$DiffPoints[i] <- 3
-        else if (diff >= 3)
-          race_result$DiffPoints[i] <- 2
-        else if (diff <= -10)
-          race_result$DiffPoints[i] <- -5
-        else if (diff <= -5)
-          race_result$DiffPoints[i] <- -3
-        else if (diff <= -3)
-          race_result$DiffPoints[i] <- -2
-      }
-      
-      # Fastest lap points
-      race_result[, FastestLapPoints := ifelse(FastestLap, 3, 0)]
-      
-      # Laps led points (0.1 points per lap led)
-      race_result[, LapsLedPoints := LapsLed * 0.1]
-      
-      # Points for defeating teammate
-      race_result[, TeammatePoints := ifelse(DefeatedTeammate, 5, 0)]
-      
-      # Points for being classified at finish
-      race_result[, ClassifiedPoints := ifelse(IsClassified, 1, 0)]
-      
-      # Calculate total fantasy points
-      race_result[, FantasyPoints := PositionPoints +
-                    DiffPoints +
-                    FastestLapPoints +
-                    LapsLedPoints +
-                    TeammatePoints +
-                    ClassifiedPoints]
-      
-      # Store driver result
-      all_driver_results[[sim_id]] <- race_result
-      
-      # CONSTRUCTOR SCORING
-      # Create a constructor results table for this simulation
-      constructor_results <- data.table(
-        DFSID = constructor_data$DFSID,
-        Name = constructor_data$Name,
-        Salary = constructor_data$Salary,
-        SimID = sim_id
-      )
-      
-      # Calculate team performance metrics for each constructor
-      constructor_results[, HasFastestLap := FALSE]
-      constructor_results[, PositionPoints := 0]
-      constructor_results[, BothFinished := FALSE]
-      constructor_results[, BothInPoints := FALSE]
-      constructor_results[, BothOnPodium := FALSE]
-      constructor_results[, LapsLedPoints := 0]
-      constructor_results[, BonusPoints := 0]
-      constructor_results[, FLPoints := 0]
-      
-      # Process each constructor
-      for (i in 1:nrow(constructor_results)) {
-        constructor_name <- constructor_results$Name[i]
-        
-        # Find matching team in driver results
-        team_drivers <- race_result[Team == constructor_name]
-        
-        if (nrow(team_drivers) > 0) {
-          # Sum position points
-          constructor_results$PositionPoints[i] <- sum(team_drivers$PositionPoints)
-          
-          # Check if any driver has fastest lap
-          constructor_results$HasFastestLap[i] <- any(team_drivers$FastestLap)
-          
-          # Sum laps led points
-          constructor_results$LapsLedPoints[i] <- sum(team_drivers$LapsLed) * 0.1
-          
-          # Check both drivers conditions
-          if (nrow(team_drivers) >= 2) {
-            # Both finished
-            constructor_results$BothFinished[i] <- all(team_drivers$IsClassified)
-            
-            # Both in points (top 10)
-            constructor_results$BothInPoints[i] <- all(team_drivers$FinishPosition <= 10)
-            
-            # Both on podium (top 3)
-            constructor_results$BothOnPodium[i] <- all(team_drivers$FinishPosition <= 3)
+        # Determine number of leaders
+        n_leaders <- 2
+        if (!is.null(ll_data) && nrow(ll_data) > 0) {
+          grid_matches <- ll_data[ll_data$WinnerGrid == winner_grid, ]
+          if (nrow(grid_matches) > 0) {
+            n_leaders <- sample(grid_matches$Leaders, 1, prob = grid_matches$Prob)
           }
         }
         
-        # Calculate bonus points
-        bonus_points <- 0
-        if (constructor_results$BothFinished[i])
-          bonus_points <- bonus_points + 2
-        if (constructor_results$BothInPoints[i])
-          bonus_points <- bonus_points + 5
-        if (constructor_results$BothOnPodium[i])
-          bonus_points <- bonus_points + 3
-        
-        constructor_results$BonusPoints[i] <- bonus_points
-        
-        # Calculate fastest lap points separately (3 points for FL)
-        constructor_results$FLPoints[i] <- if(constructor_results$HasFastestLap[i]) 3 else 0
-        
-        # Calculate total fantasy points
-        constructor_results[i, FantasyPoints := PositionPoints + BonusPoints + LapsLedPoints + FLPoints]
+        if (n_leaders == 1) {
+          all_driver_results[row_start + winner_idx - 1, LapsLed := total_race_laps]
+        } else {
+          # Winner gets majority of laps
+          winner_pct <- case_when(
+            winner_grid == 1 ~ runif(1, 0.65, 0.85),
+            winner_grid <= 3 ~ runif(1, 0.50, 0.70),
+            winner_grid <= 6 ~ runif(1, 0.35, 0.55),
+            TRUE ~ runif(1, 0.25, 0.45)
+          )
+          
+          winner_laps <- round(total_race_laps * winner_pct)
+          all_driver_results[row_start + winner_idx - 1, LapsLed := winner_laps]
+          
+          # Distribute remaining laps to other leaders
+          remaining_laps <- total_race_laps - winner_laps
+          if (remaining_laps > 0 && n_leaders > 1) {
+            # Simple distribution to top finishers
+            other_leaders <- which(finish_positions > 1 & finish_positions <= min(5, n_leaders))
+            if (length(other_leaders) > 0) {
+              laps_per_leader <- remaining_laps %/% length(other_leaders)
+              remainder <- remaining_laps %% length(other_leaders)
+              
+              for (i in seq_along(other_leaders)) {
+                leader_idx <- other_leaders[i]
+                laps_to_assign <- laps_per_leader + if (i <= remainder) 1 else 0
+                all_driver_results[row_start + leader_idx - 1, LapsLed := laps_to_assign]
+              }
+            }
+          }
+        }
       }
       
-      # Store constructor results
-      all_constructor_results[[sim_id]] <- constructor_results
+      # Classification assignment
+      if (!is.null(classification_data) && nrow(classification_data) > 0) {
+        n_classified <- sample(classification_data$NumClassified, 1, prob = classification_data$Probability)
+        n_classified <- min(n_classified, n_drivers)
+        
+        if (n_classified < n_drivers) {
+          worst_finishers <- order(finish_positions, decreasing = TRUE)[1:(n_drivers - n_classified)]
+          all_driver_results[row_start + worst_finishers - 1, IsClassified := FALSE]
+        }
+      }
+      
+      # Teammate defeat calculation (vectorized)
+      team_list <- unique(driver_data$Team)
+      for (team in team_list) {
+        team_drivers <- which(driver_data$Team == team)
+        if (length(team_drivers) > 1) {
+          team_positions <- finish_positions[team_drivers]
+          best_pos <- min(team_positions)
+          best_drivers <- team_drivers[team_positions == best_pos]
+          all_driver_results[row_start + best_drivers - 1, DefeatedTeammate := TRUE]
+        }
+      }
+      
+      # OPTIMIZATION 5: Vectorized fantasy points calculation
+      sim_rows <- row_start:row_end
+      all_driver_results[sim_rows, `:=`(
+        PositionPoints = position_points[pmin(FinishPosition, 20)],
+        PosDiff = Starting - FinishPosition
+      )]
+      
+      # Calculate differential points vectorized
+      all_driver_results[sim_rows, DiffPoints := fcase(
+        PosDiff >= 10, 5,
+        PosDiff >= 5, 3,
+        PosDiff >= 3, 2,
+        PosDiff <= -10, -5,
+        PosDiff <= -5, -3,
+        PosDiff <= -3, -2,
+        default = 0
+      )]
+      
+      # Calculate total fantasy points
+      all_driver_results[sim_rows, FantasyPoints := 
+                           PositionPoints + DiffPoints + 
+                           ifelse(FastestLap, 3, 0) + 
+                           LapsLed * 0.1 + 
+                           ifelse(DefeatedTeammate, 5, 0) + 
+                           ifelse(IsClassified, 1, 0)
+      ]
+      
+      # Constructor results (simplified for now)
+      constructor_result <- data.table(
+        DFSID = constructor_data$DFSID,
+        Name = constructor_data$Name,
+        Salary = constructor_data$Salary,
+        SimID = sim_id,
+        HasFastestLap = FALSE,
+        PositionPoints = 0,
+        BothFinished = FALSE,
+        BothInPoints = FALSE,
+        BothOnPodium = FALSE,
+        LapsLedPoints = 0,
+        BonusPoints = 0,
+        FLPoints = 0,
+        FantasyPoints = 0
+      )
+      
+      # Quick constructor scoring
+      for (i in 1:nrow(constructor_result)) {
+        constructor_name <- constructor_result$Name[i]
+        team_drivers_sim <- all_driver_results[sim_rows][Team == constructor_name]
+        
+        if (nrow(team_drivers_sim) > 0) {
+          constructor_result$PositionPoints[i] <- sum(team_drivers_sim$PositionPoints)
+          constructor_result$HasFastestLap[i] <- any(team_drivers_sim$FastestLap)
+          constructor_result$LapsLedPoints[i] <- sum(team_drivers_sim$LapsLed) * 0.1
+          
+          if (nrow(team_drivers_sim) >= 2) {
+            constructor_result$BothFinished[i] <- all(team_drivers_sim$IsClassified)
+            constructor_result$BothInPoints[i] <- all(team_drivers_sim$FinishPosition <= 10)
+            constructor_result$BothOnPodium[i] <- all(team_drivers_sim$FinishPosition <= 3)
+          }
+          
+          # Calculate bonus points
+          bonus_points <- 0
+          if (constructor_result$BothFinished[i]) bonus_points <- bonus_points + 2
+          if (constructor_result$BothInPoints[i]) bonus_points <- bonus_points + 5
+          if (constructor_result$BothOnPodium[i]) bonus_points <- bonus_points + 3
+          
+          constructor_result$BonusPoints[i] <- bonus_points
+          constructor_result$FLPoints[i] <- if(constructor_result$HasFastestLap[i]) 3 else 0
+          
+          constructor_result$FantasyPoints[i] <- constructor_result$PositionPoints[i] + 
+            constructor_result$BonusPoints[i] + 
+            constructor_result$LapsLedPoints[i] + 
+            constructor_result$FLPoints[i]
+        }
+      }
+      
+      all_constructor_results[[sim_id]] <- constructor_result
     }
     
     batch_end_time <- Sys.time()
     batch_duration <- as.numeric(difftime(batch_end_time, batch_start_time, units = "secs"))
-    cat("Completed batch",
-        batch,
-        "in",
-        round(batch_duration, 2),
-        "seconds\n")
+    cat("Completed batch", batch, "in", round(batch_duration, 2), "seconds\n")
     
-    # Free memory after each batch
-    gc(verbose = FALSE)
+    # OPTIMIZATION 6: More aggressive garbage collection
+    if (batch %% 3 == 0) {
+      gc(verbose = FALSE, full = TRUE)
+    }
   }
   
-  # Combine all results - handle potential NULL entries
-  valid_driver_idx <- which(!sapply(all_driver_results, is.null))
+  # Clean up temporary columns
+  all_driver_results[, c("PositionPoints", "PosDiff", "DiffPoints") := NULL]
+  
+  # Combine constructor results
   valid_constructor_idx <- which(!sapply(all_constructor_results, is.null))
-  
-  if (length(valid_driver_idx) == 0) {
-    stop("No valid driver results generated")
-  }
-  
-  if (length(valid_constructor_idx) == 0) {
-    stop("No valid constructor results generated")
-  }
-  
-  # Combine all results
-  combined_driver_results <- rbindlist(all_driver_results[valid_driver_idx])
   combined_constructor_results <- rbindlist(all_constructor_results[valid_constructor_idx])
+  
+  # Set key for better performance
+  setkey(all_driver_results, SimID)
+  setkey(combined_constructor_results, SimID)
   
   # Return results
   list(
-    driver_results = combined_driver_results,
+    driver_results = all_driver_results,
     constructor_results = combined_constructor_results,
-    successful_sims = length(valid_driver_idx)
+    successful_sims = length(valid_constructor_idx)
   )
 }
 
