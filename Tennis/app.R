@@ -170,8 +170,9 @@ cleanup_memory <- function(verbose = FALSE) {
   }
 }
 
-# Calculate Expected Wins and high-win percentages from simulation results
-calculate_ew_metrics <- function(simulation_results, n_simulations) {
+
+# Updated calculate_ew_metrics function that accounts for same-match constraints
+calculate_ew_metrics <- function(simulation_results, n_simulations, dk_data = NULL) {
   cat("Calculating EW metrics from simulation results...\n")
   
   # Convert to data.table for performance
@@ -191,16 +192,137 @@ calculate_ew_metrics <- function(simulation_results, n_simulations) {
                                by = c("Iteration", "Player"), all.x = TRUE)
   win_counts_complete[is.na(N), N := 0]
   
-  # Calculate metrics for each player
-  ew_metrics <- win_counts_complete[, .(
-    EW = mean(N, na.rm = TRUE),  # Expected Wins
+  # Calculate basic metrics for each player (individual EW without constraints)
+  individual_ew_metrics <- win_counts_complete[, .(
+    Individual_EW = mean(N, na.rm = TRUE),  # Individual Expected Wins
     Win6Plus = mean(N >= 6, na.rm = TRUE) * 100,  # 6+ win %
     Win5Plus = mean(N >= 5, na.rm = TRUE) * 100   # 5+ win %
   ), by = Player]
   
-  cat("EW metrics calculated for", nrow(ew_metrics), "players\n")
-  return(ew_metrics)
+  # If we have dk_data, create match mapping for constraint-aware EW calculation
+  if (!is.null(dk_data)) {
+    cat("Creating match mapping for constraint-aware EW calculation...\n")
+    
+    # Create player to match mapping
+    dk_dt <- as.data.table(dk_data)
+    player_match_map <- setNames(dk_dt$`Game Info`, dk_dt$Name)
+    
+    # Function to calculate constraint-aware EW for a lineup
+    calculate_lineup_constraint_ew <- function(player_names) {
+      # Get matches for each player
+      player_matches <- player_match_map[player_names]
+      
+      # Group players by match
+      match_groups <- split(player_names, player_matches)
+      
+      total_ew <- 0
+      
+      for (match_players in match_groups) {
+        if (length(match_players) == 1) {
+          # Single player from this match - use individual EW
+          player_ew <- individual_ew_metrics[Player == match_players[1], Individual_EW]
+          if (length(player_ew) > 0) {
+            total_ew <- total_ew + player_ew
+          }
+        } else if (length(match_players) == 2) {
+          # Two players from same match - EW is exactly 1.0
+          total_ew <- total_ew + 1.0
+        } else {
+          # This shouldn't happen in tennis (more than 2 players from same match)
+          warning("More than 2 players from same match detected: ", paste(match_players, collapse = ", "))
+          total_ew <- total_ew + 1.0
+        }
+      }
+      
+      return(total_ew)
+    }
+    
+    # Add constraint-aware EW to the metrics
+    individual_ew_metrics[, Constraint_EW := Individual_EW]  # Default to individual EW
+    
+    # For display purposes, we'll use Individual_EW but note that lineup-level 
+    # calculations should use the constraint-aware method
+    cat("EW metrics calculated with match constraint awareness\n")
+    
+    # Add a helper function to the global environment for lineup calculations
+    assign("calculate_lineup_constraint_ew", calculate_lineup_constraint_ew, envir = .GlobalEnv)
+    assign("player_match_map", player_match_map, envir = .GlobalEnv)
+    assign("individual_ew_metrics", individual_ew_metrics, envir = .GlobalEnv)
+  } else {
+    cat("No DK data provided - using individual EW only\n")
+  }
+  
+  # Return individual metrics (constraint-aware calculations happen at lineup level)
+  final_metrics <- individual_ew_metrics[, .(
+    Player = Player,
+    EW = Individual_EW,  # This represents individual player EW
+    Win6Plus = Win6Plus,
+    Win5Plus = Win5Plus
+  )]
+  
+  cat("EW metrics calculated for", nrow(final_metrics), "players\n")
+  return(final_metrics)
 }
+
+# Updated function to calculate constraint-aware TotalEW for lineups
+calculate_lineup_total_ew <- function(lineup_players, individual_ew_metrics, player_match_map) {
+  # Get matches for each player
+  player_matches <- player_match_map[lineup_players]
+  
+  # Group players by match
+  match_groups <- split(lineup_players, player_matches)
+  
+  total_ew <- 0
+  
+  for (match_players in match_groups) {
+    if (length(match_players) == 1) {
+      # Single player from this match - use individual EW
+      player_ew <- individual_ew_metrics[Player == match_players[1], EW]
+      if (length(player_ew) > 0) {
+        total_ew <- total_ew + player_ew
+      }
+    } else if (length(match_players) == 2) {
+      # Two players from same match - EW is exactly 1.0
+      total_ew <- total_ew + 1.0
+    } else {
+      # This shouldn't happen in tennis
+      warning("More than 2 players from same match detected: ", paste(match_players, collapse = ", "))
+      total_ew <- total_ew + 1.0
+    }
+  }
+  
+  return(total_ew)
+}
+
+calculate_lineup_total_ew <- function(lineup_players, individual_ew_metrics, player_match_map) {
+  # Get matches for each player
+  player_matches <- player_match_map[lineup_players]
+  
+  # Group players by match
+  match_groups <- split(lineup_players, player_matches)
+  
+  total_ew <- 0
+  
+  for (match_players in match_groups) {
+    if (length(match_players) == 1) {
+      # Single player from this match - use individual EW
+      player_ew <- individual_ew_metrics[Player == match_players[1], EW]
+      if (length(player_ew) > 0) {
+        total_ew <- total_ew + player_ew
+      }
+    } else if (length(match_players) == 2) {
+      # Two players from same match - EW is exactly 1.0
+      total_ew <- total_ew + 1.0
+    } else {
+      # This shouldn't happen in tennis
+      warning("More than 2 players from same match detected: ", paste(match_players, collapse = ", "))
+      total_ew <- total_ew + 1.0
+    }
+  }
+  
+  return(total_ew)
+}
+
 
 calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Validate inputs before proceeding
@@ -1330,7 +1452,7 @@ find_optimal_lineup <- function(player_scores, salary_cap = 50000, roster_size =
   return(optimal_lineup)
 }
 
-find_all_optimal_lineups <- function(simulation_results, player_data) {
+find_all_optimal_lineups <- function(simulation_results, player_data, dk_data = NULL) {
   overall_start_time <- Sys.time()
   cat("\n=== LINEUP OPTIMIZATION STARTED ===\n")
   cat("Timestamp:", format(overall_start_time, "%Y-%m-%d %H:%M:%S"), "\n")
@@ -1586,20 +1708,29 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
   cat("\n=== CALCULATING EXPECTED WINS (EW) FOR ALL LINEUPS ===\n")
   ew_calc_start_time <- Sys.time()
   
-  # Calculate EW for each lineup using the EW metrics from the server
-  # We need to get EW metrics first
+  # Calculate EW for each lineup using constraint-aware method
   cat("Calculating EW metrics from simulation results...\n")
   ew_metrics <- tryCatch({
-    calculate_ew_metrics(sim_dt, total_iterations)
+    calculate_ew_metrics(sim_dt, total_iterations, dk_data)  # Use the passed dk_data
   }, error = function(e) {
     cat("Error calculating EW metrics:", e$message, "\n")
     return(NULL)
   })
   
   if (!is.null(ew_metrics)) {
-    # Create EW lookup
+    # Create EW lookup for individual players
     ew_lookup <- setNames(ew_metrics$EW, ew_metrics$Player)
     cat(sprintf("EW metrics calculated for %d players\n", length(ew_lookup)))
+    
+    # Create player-to-match mapping if dk_data is available
+    if (!is.null(dk_data)) {
+      dk_dt <- as.data.table(dk_data)
+      player_match_map <- setNames(dk_dt$`Game Info`, dk_dt$Name)
+      cat("Using constraint-aware EW calculation (accounts for same-match pairs)\n")
+    } else {
+      player_match_map <- NULL
+      cat("Using simple additive EW calculation\n")
+    }
     
     # Calculate TotalEW for each lineup
     for (i in seq_along(lineup_ids)) {
@@ -1610,14 +1741,18 @@ find_all_optimal_lineups <- function(simulation_results, player_data) {
       if (!is.null(counts$players)) {
         lineup_players <- counts$players
       } else {
-        # Fallback: parse from lineup_id
         lineup_players <- unlist(strsplit(lineup_id, "\\|"))
       }
       
-      # Calculate total EW for this lineup
-      player_ew <- ew_lookup[lineup_players]
-      player_ew[is.na(player_ew)] <- 0
-      total_ew <- sum(player_ew, na.rm = TRUE)
+      # Calculate total EW using constraint-aware method if mapping available
+      if (!is.null(player_match_map)) {
+        total_ew <- calculate_lineup_total_ew(lineup_players, ew_metrics, player_match_map)
+      } else {
+        # Fallback to simple additive method
+        player_ew <- ew_lookup[lineup_players]
+        player_ew[is.na(player_ew)] <- 0
+        total_ew <- sum(player_ew, na.rm = TRUE)
+      }
       
       set(lineup_counter, i, 7L, total_ew)  # TotalEW
       
@@ -2537,7 +2672,7 @@ server <- function(input, output, session) {
       cat("Number of simulation rows:", ifelse(!is.null(rv$simulation_results), nrow(rv$simulation_results), 0), "\n")
       
       ew_metrics <- tryCatch({
-        calculate_ew_metrics(rv$simulation_results, input$n_sims)
+        calculate_ew_metrics(rv$simulation_results, input$n_sims, rv$dk_data)  # Add rv$dk_data here
       }, error = function(e) {
         cat("Error calculating EW metrics:", e$message, "\n")
         return(NULL)
@@ -2562,7 +2697,8 @@ server <- function(input, output, session) {
       incProgress(0.3, detail = "Finding optimal lineups...")
       optimal_lineups <- find_all_optimal_lineups(
         rv$simulation_results, 
-        rv$dk_data
+        rv$dk_data,
+        rv$dk_data  # Pass dk_data as third parameter
       )
       
       # Step 3: Expand lineup details with EW metrics
