@@ -144,6 +144,71 @@ SCORE_HISTORY <- load_historical_data()
 DK_ROSTER_SIZE <- 6
 DK_SALARY_CAP <- 50000
 
+
+
+apply_lineup_filters <- function(optimal_lineups, filters) {
+  # Convert to data.table for efficiency
+  filtered_lineups <- as.data.table(copy(optimal_lineups))
+  
+  # Apply all the same filters as in generate_random_lineups
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
+    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+  }
+  
+  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
+    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  }
+  
+  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
+    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+  }
+  
+  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
+    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  
+  if (!is.null(filters$min_total_ew) && filters$min_total_ew > 0) {
+    filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
+  }
+  
+  if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0) {
+    filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
+  }
+  
+  if (!is.null(filters$min_win5plus_pct) && filters$min_win5plus_pct > 0) {
+    filtered_lineups <- filtered_lineups[Win5PlusPct >= filters$min_win5plus_pct]
+  }
+  
+  if (!is.null(filters$min_median_score) && filters$min_median_score > 0) {
+    filtered_lineups <- filtered_lineups[MedianScore >= filters$min_median_score]
+  }
+  
+  if (!is.null(filters$min_score80th) && filters$min_score80th > 0) {
+    filtered_lineups <- filtered_lineups[Score80th >= filters$min_score80th]
+  }
+  
+  # Apply player exclusion filter
+  if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
+    player_cols <- if(any(grepl("^Name[1-6]$", names(filtered_lineups)))) {
+      grep("^Name[1-6]$", names(filtered_lineups), value = TRUE)
+    } else {
+      grep("^Player[1-6]$", names(filtered_lineups), value = TRUE)
+    }
+    
+    if(length(player_cols) > 0) {
+      for(excluded_player in filters$excluded_players) {
+        exclude_condition <- rep(TRUE, nrow(filtered_lineups))
+        for(col in player_cols) {
+          exclude_condition <- exclude_condition & (filtered_lineups[[col]] != excluded_player)
+        }
+        filtered_lineups <- filtered_lineups[exclude_condition]
+      }
+    }
+  }
+  
+  return(as.data.frame(filtered_lineups))
+}
+
 # Helper functions for odds conversion
 odds_to_probability <- function(odds) {
   if (odds > 0) {
@@ -3345,20 +3410,23 @@ server <- function(input, output, session) {
     
     # Show progress
     withProgress(message = 'Generating lineups...', value = 0, {
-      # Generate random lineups
+      # FIRST: Apply filters to get the filtered pool
+      filtered_optimal_lineups <- apply_lineup_filters(rv$dk_optimal_lineups, filters)
+      
+      # Generate random lineups from filtered pool
       rv$dk_random_lineups <- generate_random_lineups(rv$dk_optimal_lineups, filters)
       
-      # Update player exposure data with new calculation
+      # Update player exposure data using FILTERED pool for Pool_Exposure
       if(!is.null(rv$dk_random_lineups)) {
         rv$dk_player_exposure <- calculate_player_exposure(
-          rv$dk_optimal_lineups,  # This represents the filtered pool
+          filtered_optimal_lineups,  # Use FILTERED lineups for Pool_Exposure calculation
           rv$player_projections,
-          rv$dk_random_lineups    # This represents the generated lineups
+          rv$dk_random_lineups      # Generated lineups for Randomized_Exposure
         )
       } else {
         # If no random lineups, still calculate exposure for filtered pool only
         rv$dk_player_exposure <- calculate_player_exposure(
-          rv$dk_optimal_lineups,
+          filtered_optimal_lineups,  # Use FILTERED lineups
           rv$player_projections,
           NULL
         )
@@ -3379,6 +3447,36 @@ server <- function(input, output, session) {
         ))
       }
     })
+  })
+  
+  # Reactive observer to update player exposure when filters change
+  observe({
+    req(rv$dk_optimal_lineups)
+    
+    # Create filters from current slider values
+    filters <- list(
+      min_top1_count = input$min_top1_count,
+      min_top2_count = input$min_top2_count,
+      min_top3_count = input$min_top3_count,
+      min_top5_count = input$min_top5_count,
+      min_total_ew = input$min_total_ew,
+      min_win6_pct = input$min_win6_pct,
+      min_win5plus_pct = input$min_win5plus_pct,
+      min_median_score = input$min_median_score,
+      min_score80th = input$min_score80th,
+      excluded_players = input$excluded_players
+    )
+    
+    # Apply filters to get the filtered pool
+    filtered_optimal_lineups <- apply_lineup_filters(rv$dk_optimal_lineups, filters)
+    
+    # Update player exposure using filtered pool for Pool_Exposure
+    # Keep existing random lineups if they exist
+    rv$dk_player_exposure <- calculate_player_exposure(
+      filtered_optimal_lineups,  # Use FILTERED lineups for Pool_Exposure
+      rv$player_projections,
+      rv$dk_random_lineups      # Keep existing generated lineups (may be NULL)
+    )
   })
   
   output$player_exposure_table <- renderDT({
