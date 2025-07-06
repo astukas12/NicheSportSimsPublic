@@ -3188,23 +3188,7 @@ server <- function(input, output, session) {
       })
     }
     
-    # Format Top1Count if it exists
-    top1_exists <- "Top1Count" %in% names(display_data)
-    if (top1_exists) {
-      dt <- tryCatch({
-        dt %>% formatStyle(
-          "Top1Count",
-          backgroundColor = styleInterval(
-            c(1, 5, 10, 20), 
-            c("white", "#fff3cd", "#ffeaa7", "#fdcb6e", "#e17055")
-          ),
-          fontWeight = styleInterval(10, c("normal", "bold"))
-        )
-      }, error = function(e) {
-        cat("Top1Count formatting error:", e$message, "\n")
-        dt
-      })
-    }
+
     
     return(dt)
   })
