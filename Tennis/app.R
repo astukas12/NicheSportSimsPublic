@@ -244,7 +244,7 @@ calculate_ew_metrics <- function(simulation_results, n_simulations, dk_data = NU
   sim_dt <- as.data.table(simulation_results)
   
   # Calculate win counts per iteration for each player
-  win_counts <- sim_dt[Result == "Winner", .N, by = .(Iteration, Player)]
+  win_counts <- sim_dt[Result == "Winner" & Outcome != "WO", .N, by = .(Iteration, Player)]
   
   # Create a complete grid of all iterations and players (including 0 wins)
   all_iterations <- unique(sim_dt$Iteration)
@@ -536,6 +536,7 @@ calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
   ))
 }
 
+
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
   overall_start_time <- Sys.time()
@@ -587,141 +588,205 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     
     cat(sprintf(" (%s vs %s)", p1$Name, p2$Name))
     
-    # Calculate ML probabilities
-    p1_ml <- odds_to_probability(as.numeric(p1$ML))
-    p2_ml <- odds_to_probability(as.numeric(p2$ML))
+    # Check for walkover scenario
+    p1_tour <- p1$Tour
+    p2_tour <- p2$Tour
     
-    # Normalize to sum to 1
-    total_ml_prob <- p1_ml + p2_ml
-    p1_ml_prob <- p1_ml / total_ml_prob
-    p2_ml_prob <- p2_ml / total_ml_prob
+    # Check if this is a walkover match
+    is_walkover <- any(c(p1_tour, p2_tour) %in% c("WD", "WO"))
     
-    # Calculate SS probabilities
-    p1_ss <- odds_to_probability(as.numeric(p1$SS))
-    p2_ss <- odds_to_probability(as.numeric(p2$SS))
-    
-    p1_nss <- p1_ml - p1_ss
-    p2_nss <- p2_ml - p2_ss
-    
-    # Normalize to 1
-    p1_ss_prob <- p1_ss / total_ml_prob
-    p2_ss_prob <- p2_ss / total_ml_prob
-    p1_nss_prob <- p1_nss / total_ml_prob
-    p2_nss_prob <- p2_nss / total_ml_prob
-    
-    # Create probability bins for sampling
-    cum_probs <- c(0, p1_ss_prob, p1_ss_prob + p1_nss_prob, 
-                   p1_ss_prob + p1_nss_prob + p2_ss_prob, 1)
-    
-    # Generate ALL simulation outcomes at once for this match
-    random_values <- runif(n_simulations)
-    
-    # Pre-allocate results for this match
-    match_output <- data.table(
-      iteration = 1:n_simulations,
-      winner = character(n_simulations),
-      loser = character(n_simulations),
-      outcome = character(n_simulations),
-      winner_prob = numeric(n_simulations),
-      loser_prob = numeric(n_simulations),
-      winner_score = numeric(n_simulations),
-      loser_score = numeric(n_simulations)
-    )
-    
-    # Figure out which bin each random value falls into
-    outcome_bins <- findInterval(random_values, cum_probs)
-    
-    # Assign winners, losers and outcome types based on bins
-    match_output[outcome_bins == 1, `:=`(
-      winner = p1$Name, loser = p2$Name, outcome = "SS",
-      winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
-    )]
-    
-    match_output[outcome_bins == 2, `:=`(
-      winner = p1$Name, loser = p2$Name, outcome = "NSS",
-      winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
-    )]
-    
-    match_output[outcome_bins == 3, `:=`(
-      winner = p2$Name, loser = p1$Name, outcome = "SS",
-      winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
-    )]
-    
-    match_output[outcome_bins == 4, `:=`(
-      winner = p2$Name, loser = p1$Name, outcome = "NSS",
-      winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
-    )]
-    
-    # Now assign scores based on outcome types
-    outcome_groups <- match_output[, .N, by = .(winner, loser, outcome)]
-    
-    score_assignment_start <- Sys.time()
-    
-    # For each distinct outcome configuration
-    for (j in 1:nrow(outcome_groups)) {
-      winner <- outcome_groups$winner[j]
-      loser <- outcome_groups$loser[j]
-      outcome_type <- outcome_groups$outcome[j]
-      count <- outcome_groups$N[j]
+    if (is_walkover) {
+      cat(" - WALKOVER DETECTED")
       
-      # Get rows matching this outcome
-      outcome_indices <- which(
-        match_output$winner == winner & 
-          match_output$loser == loser & 
-          match_output$outcome == outcome_type
+      # Determine who withdraws and who gets the walkover win
+      if (p1_tour == "WD" && p2_tour == "WO") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WO" && p2_tour == "WD") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WD") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p2_tour == "WD") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WO") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p2_tour == "WO") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else {
+        cat(" - ERROR: Invalid walkover configuration")
+        next
+      }
+      
+      # Create walkover results for all iterations
+      match_output <- data.table(
+        iteration = 1:n_simulations,
+        winner = rep(winner_name, n_simulations),
+        loser = rep(loser_name, n_simulations),
+        outcome = rep("WO", n_simulations),
+        winner_prob = rep(1.0, n_simulations),
+        loser_prob = rep(0.0, n_simulations),
+        winner_score = rep(winner_score, n_simulations),
+        loser_score = rep(loser_score, n_simulations)
       )
       
-      # Get one example row to extract probabilities
-      example_row <- match_output[outcome_indices[1]]
-      winner_prob <- example_row$winner_prob
-      loser_prob <- example_row$loser_prob
+      cat(sprintf(" (%s withdraws, %s gets walkover)", loser_name, winner_name))
       
-      # Create match info for finding similar historical matches
-      tour <- match_players$Tour[1]
-      is_straight_sets <- as.integer(outcome_type == "SS")
-      best_of_value <- ifelse(tour == "ATP", 5, 3)
+    } else {
+      # NORMAL MATCH SIMULATION
       
-      # Find similar historical matches
-      similar_matches <- hist_dt[
-        Tour == tour & 
-          best_of == best_of_value &
-          straight_sets == is_straight_sets
-      ]
+      # Calculate ML probabilities
+      p1_ml <- odds_to_probability(as.numeric(p1$ML))
+      p2_ml <- odds_to_probability(as.numeric(p2$ML))
       
-      # If not enough matches, relax constraints
-      if (nrow(similar_matches) < 10) {
-        similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
-      }
-      if (nrow(similar_matches) < 10) {
-        similar_matches <- hist_dt[Tour == tour]
-      }
+      # Normalize to sum to 1
+      total_ml_prob <- p1_ml + p2_ml
+      p1_ml_prob <- p1_ml / total_ml_prob
+      p2_ml_prob <- p2_ml / total_ml_prob
       
-      # Calculate similarity scores and assign scores
-      if (nrow(similar_matches) > 0) {
-        similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
-        setorder(similar_matches, odds_diff)
+      # Calculate SS probabilities
+      p1_ss <- odds_to_probability(as.numeric(p1$SS))
+      p2_ss <- odds_to_probability(as.numeric(p2$SS))
+      
+      p1_nss <- p1_ml - p1_ss
+      p2_nss <- p2_ml - p2_ss
+      
+      # Normalize to 1
+      p1_ss_prob <- p1_ss / total_ml_prob
+      p2_ss_prob <- p2_ss / total_ml_prob
+      p1_nss_prob <- p1_nss / total_ml_prob
+      p2_nss_prob <- p2_nss / total_ml_prob
+      
+      # Create probability bins for sampling
+      cum_probs <- c(0, p1_ss_prob, p1_ss_prob + p1_nss_prob, 
+                     p1_ss_prob + p1_nss_prob + p2_ss_prob, 1)
+      
+      # Generate ALL simulation outcomes at once for this match
+      random_values <- runif(n_simulations)
+      
+      # Pre-allocate results for this match
+      match_output <- data.table(
+        iteration = 1:n_simulations,
+        winner = character(n_simulations),
+        loser = character(n_simulations),
+        outcome = character(n_simulations),
+        winner_prob = numeric(n_simulations),
+        loser_prob = numeric(n_simulations),
+        winner_score = numeric(n_simulations),
+        loser_score = numeric(n_simulations)
+      )
+      
+      # Figure out which bin each random value falls into
+      outcome_bins <- findInterval(random_values, cum_probs)
+      
+      # Assign winners, losers and outcome types based on bins
+      match_output[outcome_bins == 1, `:=`(
+        winner = p1$Name, loser = p2$Name, outcome = "SS",
+        winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
+      )]
+      
+      match_output[outcome_bins == 2, `:=`(
+        winner = p1$Name, loser = p2$Name, outcome = "NSS",
+        winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
+      )]
+      
+      match_output[outcome_bins == 3, `:=`(
+        winner = p2$Name, loser = p1$Name, outcome = "SS",
+        winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
+      )]
+      
+      match_output[outcome_bins == 4, `:=`(
+        winner = p2$Name, loser = p1$Name, outcome = "NSS",
+        winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
+      )]
+      
+      # Now assign scores based on outcome types
+      outcome_groups <- match_output[, .N, by = .(winner, loser, outcome)]
+      
+      score_assignment_start <- Sys.time()
+      
+      # For each distinct outcome configuration
+      for (j in 1:nrow(outcome_groups)) {
+        winner <- outcome_groups$winner[j]
+        loser <- outcome_groups$loser[j]
+        outcome_type <- outcome_groups$outcome[j]
+        count <- outcome_groups$N[j]
         
-        n_similar <- min(40, nrow(similar_matches))
-        top_matches <- similar_matches[1:n_similar]
+        # Get rows matching this outcome
+        outcome_indices <- which(
+          match_output$winner == winner & 
+            match_output$loser == loser & 
+            match_output$outcome == outcome_type
+        )
         
-        sample_indices <- sample(1:n_similar, length(outcome_indices), replace = TRUE)
+        # Get one example row to extract probabilities
+        example_row <- match_output[outcome_indices[1]]
+        winner_prob <- example_row$winner_prob
+        loser_prob <- example_row$loser_prob
         
-        match_output[outcome_indices, `:=`(
-          winner_score = top_matches$w_dk_score[sample_indices],
-          loser_score = top_matches$l_dk_score[sample_indices]
-        )]
-      } else {
-        match_output[outcome_indices, `:=`(
-          winner_score = runif(length(outcome_indices), 50, 70),
-          loser_score = runif(length(outcome_indices), 20, 40)
-        )]
+        # Create match info for finding similar historical matches
+        tour <- match_players$Tour[1]
+        is_straight_sets <- as.integer(outcome_type == "SS")
+        best_of_value <- ifelse(tour == "ATP", 5, 3)
+        
+        # Find similar historical matches
+        similar_matches <- hist_dt[
+          Tour == tour & 
+            best_of == best_of_value &
+            straight_sets == is_straight_sets
+        ]
+        
+        # If not enough matches, relax constraints
+        if (nrow(similar_matches) < 10) {
+          similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
+        }
+        if (nrow(similar_matches) < 10) {
+          similar_matches <- hist_dt[Tour == tour]
+        }
+        
+        # Calculate similarity scores and assign scores
+        if (nrow(similar_matches) > 0) {
+          similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
+          setorder(similar_matches, odds_diff)
+          
+          n_similar <- min(40, nrow(similar_matches))
+          top_matches <- similar_matches[1:n_similar]
+          
+          sample_indices <- sample(1:n_similar, length(outcome_indices), replace = TRUE)
+          
+          match_output[outcome_indices, `:=`(
+            winner_score = top_matches$w_dk_score[sample_indices],
+            loser_score = top_matches$l_dk_score[sample_indices]
+          )]
+        } else {
+          match_output[outcome_indices, `:=`(
+            winner_score = runif(length(outcome_indices), 50, 70),
+            loser_score = runif(length(outcome_indices), 20, 40)
+          )]
+        }
       }
+      
+      # Randomly shuffle the iterations
+      shuffled_indices <- sample(1:n_simulations)
+      match_output <- match_output[shuffled_indices]
+      match_output[, iteration := 1:n_simulations]
     }
-    
-    # Randomly shuffle the iterations
-    shuffled_indices <- sample(1:n_simulations)
-    match_output <- match_output[shuffled_indices]
-    match_output[, iteration := 1:n_simulations]
     
     # Store this match's results
     match_results[[match_name]] <- match_output
@@ -1198,7 +1263,6 @@ generate_match_score <- function(current_match, historical_data, cache = NULL) {
   return(result)
 }
 
-
 pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
   # Convert to data.table for performance
   dk_dt <- as.data.table(dk_data)
@@ -1229,123 +1293,188 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
     p1 <- match_players[1]
     p2 <- match_players[2]
     
-    # Calculate ML probabilities
-    p1_ml_prob <- odds_to_probability(as.numeric(p1$ML))
-    p2_ml_prob <- odds_to_probability(as.numeric(p2$ML))
+    # Check for walkover scenario
+    p1_tour <- p1$Tour
+    p2_tour <- p2$Tour
     
-    # Normalize to sum to 1
-    total_ml_prob <- p1_ml_prob + p2_ml_prob
-    p1_ml_prob <- p1_ml_prob / total_ml_prob
-    p2_ml_prob <- p2_ml_prob / total_ml_prob
+    # Check if this is a walkover match
+    is_walkover <- any(c(p1_tour, p2_tour) %in% c("WD", "WO"))
     
-    # Calculate SS probabilities
-    p1_ss_prob <- odds_to_probability(as.numeric(p1$SS))
-    p2_ss_prob <- odds_to_probability(as.numeric(p2$SS))
-    
-    # Ensure SS probability doesn't exceed win probability
-    p1_ss_prob <- min(p1_ss_prob, p1_ml_prob)
-    p2_ss_prob <- min(p2_ss_prob, p2_ml_prob)
-    
-    # Calculate NSS probabilities
-    p1_nss_prob <- p1_ml_prob - p1_ss_prob
-    p2_nss_prob <- p2_ml_prob - p2_ss_prob
-    
-    # Create four possible outcomes with their probabilities
-    outcomes <- list(
-      list(winner = p1$Name, loser = p2$Name, outcome = "SS", prob = p1_ss_prob),
-      list(winner = p1$Name, loser = p2$Name, outcome = "NSS", prob = p1_nss_prob),
-      list(winner = p2$Name, loser = p1$Name, outcome = "SS", prob = p2_ss_prob),
-      list(winner = p2$Name, loser = p1$Name, outcome = "NSS", prob = p2_nss_prob)
-    )
-    
-    # Pre-generate scores for each outcome
-    match_scores <- list()
-    
-    for (outcome_info in outcomes) {
-      # Extract outcome details
-      winner <- outcome_info$winner
-      loser <- outcome_info$loser
-      outcome <- outcome_info$outcome
-      probability <- outcome_info$prob
-      winner_prob <- ifelse(winner == p1$Name, p1_ml_prob, p2_ml_prob)
-      loser_prob <- ifelse(loser == p1$Name, p1_ml_prob, p2_ml_prob)
+    if (is_walkover) {
+      cat(" - WALKOVER DETECTED")
       
-      # Only generate samples if probability > 0
-      if (probability > 0) {
-        # Create match info for similarity matching
-        tour <- p1$Tour
-        best_of_value <- ifelse(tour == "ATP", 5, 3)
-        
-        match_info <- list(
-          Tour = tour,
-          best_of = best_of_value,
-          straight_sets = ifelse(outcome == "SS", 1, 0),
-          WIO = winner_prob,
-          LIO = loser_prob
-        )
-        
-        # Find similar historical matches - now including best_of
-        similar_matches <- hist_dt[
-          Tour == match_info$Tour & 
-            best_of == match_info$best_of &
-            straight_sets == match_info$straight_sets
-        ]
-        
-        # If not enough matches, relax straight_sets constraint but keep best_of
-        if (nrow(similar_matches) < 10) {
-          similar_matches <- hist_dt[
-            Tour == match_info$Tour &
-              best_of == match_info$best_of
-          ]
-        }
-        
-        # If still not enough matches, relax best_of constraint
-        if (nrow(similar_matches) < 10) {
-          similar_matches <- hist_dt[Tour == match_info$Tour]
-        }
-        
-        # Generate n_samples scores
-        outcome_scores <- data.table(
-          outcome_id = paste(winner, outcome, loser, sep = "_"),
-          winner_name = winner,
-          loser_name = loser,
-          outcome_type = outcome,
-          probability = probability,
-          winner_score = numeric(n_samples),
-          loser_score = numeric(n_samples)
-        )
-        
-        if (nrow(similar_matches) > 0) {
-          # Calculate similarity scores
-          similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
-          setorder(similar_matches, odds_diff)
-          
-          # Take top 50 most similar matches
-          sample_size <- min(50, nrow(similar_matches))
-          top_matches <- similar_matches[1:sample_size]
-          
-          # Sample n_samples scores with replacement
-          sample_indices <- sample(1:sample_size, n_samples, replace = TRUE)
-          
-          for (i in 1:n_samples) {
-            idx <- sample_indices[i]
-            outcome_scores$winner_score[i] <- top_matches$w_dk_score[idx]
-            outcome_scores$loser_score[i] <- top_matches$l_dk_score[idx]
-          }
-        } else {
-          # Default scores if no similar matches
-          outcome_scores$winner_score <- runif(n_samples, 50, 70)
-          outcome_scores$loser_score <- runif(n_samples, 20, 40)
-        }
-        
-        # Add to match scores
-        match_scores[[length(match_scores) + 1]] <- outcome_scores
+      # Determine who withdraws and who gets the walkover win
+      if (p1_tour == "WD" && p2_tour == "WO") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WO" && p2_tour == "WD") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WD") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p2_tour == "WD") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p1_tour == "WO") {
+        winner_name <- p1$Name
+        loser_name <- p2$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else if (p2_tour == "WO") {
+        winner_name <- p2$Name
+        loser_name <- p1$Name
+        winner_score <- 30
+        loser_score <- 0
+      } else {
+        cat(" - ERROR: Invalid walkover configuration")
+        next
       }
-    }
-    
-    # Combine all outcomes for this match
-    if (length(match_scores) > 0) {
-      all_match_outcomes[[match_name]] <- rbindlist(match_scores)
+      
+      # Create walkover outcome (single outcome with probability 1.0)
+      outcome_scores <- data.table(
+        outcome_id = paste(winner_name, "WO", loser_name, sep = "_"),
+        winner_name = winner_name,
+        loser_name = loser_name,
+        outcome_type = "WO",
+        probability = 1.0,
+        winner_score = rep(winner_score, n_samples),
+        loser_score = rep(loser_score, n_samples)
+      )
+      
+      all_match_outcomes[[match_name]] <- outcome_scores
+      
+      cat(sprintf(" (%s withdraws, %s gets walkover)", loser_name, winner_name))
+      
+    } else {
+      # NORMAL MATCH LOGIC
+      
+      # Calculate ML probabilities
+      p1_ml_prob <- odds_to_probability(as.numeric(p1$ML))
+      p2_ml_prob <- odds_to_probability(as.numeric(p2$ML))
+      
+      # Normalize to sum to 1
+      total_ml_prob <- p1_ml_prob + p2_ml_prob
+      p1_ml_prob <- p1_ml_prob / total_ml_prob
+      p2_ml_prob <- p2_ml_prob / total_ml_prob
+      
+      # Calculate SS probabilities
+      p1_ss_prob <- odds_to_probability(as.numeric(p1$SS))
+      p2_ss_prob <- odds_to_probability(as.numeric(p2$SS))
+      
+      # Ensure SS probability doesn't exceed win probability
+      p1_ss_prob <- min(p1_ss_prob, p1_ml_prob)
+      p2_ss_prob <- min(p2_ss_prob, p2_ml_prob)
+      
+      # Calculate NSS probabilities
+      p1_nss_prob <- p1_ml_prob - p1_ss_prob
+      p2_nss_prob <- p2_ml_prob - p2_ss_prob
+      
+      # Create four possible outcomes with their probabilities
+      outcomes <- list(
+        list(winner = p1$Name, loser = p2$Name, outcome = "SS", prob = p1_ss_prob),
+        list(winner = p1$Name, loser = p2$Name, outcome = "NSS", prob = p1_nss_prob),
+        list(winner = p2$Name, loser = p1$Name, outcome = "SS", prob = p2_ss_prob),
+        list(winner = p2$Name, loser = p1$Name, outcome = "NSS", prob = p2_nss_prob)
+      )
+      
+      # Pre-generate scores for each outcome
+      match_scores <- list()
+      
+      for (outcome_info in outcomes) {
+        # Extract outcome details
+        winner <- outcome_info$winner
+        loser <- outcome_info$loser
+        outcome <- outcome_info$outcome
+        probability <- outcome_info$prob
+        winner_prob <- ifelse(winner == p1$Name, p1_ml_prob, p2_ml_prob)
+        loser_prob <- ifelse(loser == p1$Name, p1_ml_prob, p2_ml_prob)
+        
+        # Only generate samples if probability > 0
+        if (probability > 0) {
+          # Create match info for similarity matching
+          tour <- p1$Tour
+          best_of_value <- ifelse(tour == "ATP", 5, 3)
+          
+          match_info <- list(
+            Tour = tour,
+            best_of = best_of_value,
+            straight_sets = ifelse(outcome == "SS", 1, 0),
+            WIO = winner_prob,
+            LIO = loser_prob
+          )
+          
+          # Find similar historical matches - now including best_of
+          similar_matches <- hist_dt[
+            Tour == match_info$Tour & 
+              best_of == match_info$best_of &
+              straight_sets == match_info$straight_sets
+          ]
+          
+          # If not enough matches, relax straight_sets constraint but keep best_of
+          if (nrow(similar_matches) < 10) {
+            similar_matches <- hist_dt[
+              Tour == match_info$Tour &
+                best_of == match_info$best_of
+            ]
+          }
+          
+          # If still not enough matches, relax best_of constraint
+          if (nrow(similar_matches) < 10) {
+            similar_matches <- hist_dt[Tour == match_info$Tour]
+          }
+          
+          # Generate n_samples scores
+          outcome_scores <- data.table(
+            outcome_id = paste(winner, outcome, loser, sep = "_"),
+            winner_name = winner,
+            loser_name = loser,
+            outcome_type = outcome,
+            probability = probability,
+            winner_score = numeric(n_samples),
+            loser_score = numeric(n_samples)
+          )
+          
+          if (nrow(similar_matches) > 0) {
+            # Calculate similarity scores
+            similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
+            setorder(similar_matches, odds_diff)
+            
+            # Take top 50 most similar matches
+            sample_size <- min(50, nrow(similar_matches))
+            top_matches <- similar_matches[1:sample_size]
+            
+            # Sample n_samples scores with replacement
+            sample_indices <- sample(1:sample_size, n_samples, replace = TRUE)
+            
+            for (i in 1:n_samples) {
+              idx <- sample_indices[i]
+              outcome_scores$winner_score[i] <- top_matches$w_dk_score[idx]
+              outcome_scores$loser_score[i] <- top_matches$l_dk_score[idx]
+            }
+          } else {
+            # Default scores if no similar matches
+            outcome_scores$winner_score <- runif(n_samples, 50, 70)
+            outcome_scores$loser_score <- runif(n_samples, 20, 40)
+          }
+          
+          # Add to match scores
+          match_scores[[length(match_scores) + 1]] <- outcome_scores
+        }
+      }
+      
+      # Combine all outcomes for this match
+      if (length(match_scores) > 0) {
+        all_match_outcomes[[match_name]] <- rbindlist(match_scores)
+      }
     }
   }
   
