@@ -1728,7 +1728,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data, dk_data = 
       if (nrow(player_scores) < 6) next
       
       # Calculate win counts for this iteration for later lineup analysis
-      win_counts <- iter_results[Result == "Winner", .N, by = Player]
+      win_counts <- iter_results[Result == "Winner" & Outcome != "WO", .N, by = Player]
       setnames(win_counts, "N", "wins")
       
       # Find top 5 lineups for this iteration
@@ -2030,7 +2030,7 @@ find_all_optimal_lineups <- function(simulation_results, player_data, dk_data = 
     iter_results <- sim_dt[Iteration == iter]
     
     # Calculate win counts for this iteration
-    win_counts <- iter_results[Result == "Winner", .N, by = Player]
+    win_counts <- iter_results[Result == "Winner" & Outcome != "WO", .N, by = Player]
     
     # Fill the matrix row
     for (j in 1:nrow(win_counts)) {
