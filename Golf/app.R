@@ -444,7 +444,7 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
 }
 
 # Helper function to filter and randomize lineups
-generate_filtered_mme_lineups <- function(optimal_lineups, filters) {
+generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = NULL) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
   
@@ -520,7 +520,7 @@ generate_filtered_mme_lineups <- function(optimal_lineups, filters) {
                        "Player5",
                        "Player6")
       
-      early_late_counts <- apply(filtered_lineups[, player_cols, with = FALSE], 1, function(lineup) {
+      early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
         player_waves <- wave_lookup[lineup]
         sum(player_waves == "EarlyLate", na.rm = TRUE)
       })
@@ -1936,58 +1936,47 @@ server <- function(input, output, session) {
       filtered_lineups <- filtered_lineups[filtered_lineups$CeilingProj >= input$dk_min_ceiling_proj, ]
     }
     if (input$dk_min_6_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast6 >= input$dk_min_6_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast6 >= input$dk_min_6_pct / 100, ]
     }
     if (input$dk_min_5plus_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast5 >= input$dk_min_5plus_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast5 >= input$dk_min_5plus_pct / 100, ]
     }
     if (input$dk_min_4plus_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$dk_min_4plus_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$dk_min_4plus_pct / 100, ]
     }
     
     # Apply golfer exclusion filter
-    if (!is.null(input$dk_excluded_golfers) &&
-        length(input$dk_excluded_golfers) > 0) {
-      player_cols <- c("Player1",
-                       "Player2",
-                       "Player3",
-                       "Player4",
-                       "Player5",
-                       "Player6")
+    if (!is.null(input$dk_excluded_golfers) && length(input$dk_excluded_golfers) > 0) {
+      player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
       
       for (excluded_golfer in input$dk_excluded_golfers) {
         exclude_condition <- rep(TRUE, nrow(filtered_lineups))
         
         for (col in player_cols) {
-          exclude_condition <- exclude_condition &
-            (filtered_lineups[[col]] != excluded_golfer)
+          exclude_condition <- exclude_condition & (filtered_lineups[[col]] != excluded_golfer)
         }
         
         filtered_lineups <- filtered_lineups[exclude_condition, ]
       }
     }
+    
     # Apply wave filtering
-    if (!is.null(input$dk_min_early_late) &&
-        !is.null(input$dk_max_early_late)) {
+    if (!is.null(input$dk_min_early_late) && !is.null(input$dk_max_early_late)) {
       if ("Wave" %in% names(rv$mme_data)) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
-        player_cols <- c("Player1",
-                         "Player2",
-                         "Player3",
-                         "Player4",
-                         "Player5",
-                         "Player6")
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
-        early_late_counts <- apply(filtered_lineups[, player_cols], 1, function(lineup) {
+        # Convert to data.table if needed for efficient column selection
+        if (!is.data.table(filtered_lineups)) {
+          setDT(filtered_lineups)
+        }
+        
+        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
         
-        wave_condition <- early_late_counts >= input$dk_min_early_late &
-          early_late_counts <= input$dk_max_early_late
+        wave_condition <- early_late_counts >= input$dk_min_early_late & early_late_counts <= input$dk_max_early_late
         filtered_lineups <- filtered_lineups[wave_condition, ]
       }
     }
@@ -2002,8 +1991,7 @@ server <- function(input, output, session) {
       generated_exposures <- calculate_exposures(rv$generated_dk_mme_lineups, rv$mme_data, "dk")
     }
     
-    if (is.null(random_exposures))
-      return(NULL)
+    if (is.null(random_exposures)) return(NULL)
     
     # Get salary information
     salary_lookup <- setNames(rv$mme_data[["DKSal"]], rv$mme_data$Golfer)
@@ -2023,10 +2011,8 @@ server <- function(input, output, session) {
     combined_data$Random_Exposure[is.na(combined_data$Random_Exposure)] <- 0
     
     # Add filtered pool exposures
-    if (!is.null(filtered_exposures) &&
-        nrow(filtered_exposures) > 0) {
-      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct,
-                                  filtered_exposures$Golfer)
+    if (!is.null(filtered_exposures) && nrow(filtered_exposures) > 0) {
+      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
       combined_data$Filtered_Exposure <- filtered_lookup[combined_data$Golfer]
       combined_data$Filtered_Exposure[is.na(combined_data$Filtered_Exposure)] <- 0
     } else {
@@ -2034,10 +2020,8 @@ server <- function(input, output, session) {
     }
     
     # Add generated lineups exposure (current randomized set)
-    if (!is.null(generated_exposures) &&
-        nrow(generated_exposures) > 0) {
-      generated_lookup <- setNames(generated_exposures$Exposure_Pct,
-                                   generated_exposures$Golfer)
+    if (!is.null(generated_exposures) && nrow(generated_exposures) > 0) {
+      generated_lookup <- setNames(generated_exposures$Exposure_Pct, generated_exposures$Golfer)
       combined_data$Generated_Exposure <- generated_lookup[combined_data$Golfer]
       combined_data$Generated_Exposure[is.na(combined_data$Generated_Exposure)] <- 0
     } else {
@@ -2048,14 +2032,8 @@ server <- function(input, output, session) {
     ownership_lookup <- setNames(rv$mme_data[["DKOP"]] * 100, rv$mme_data$Golfer)
     combined_data$Ownership_Proj <- ownership_lookup[combined_data$Golfer]
     
-    # Reorder columns and sort by random exposure
-    combined_data <- combined_data[, c(
-      "Golfer",
-      "Salary",
-      "Generated_Exposure",
-      "Filtered_Exposure",
-      "Ownership_Proj"
-    )]
+    # Reorder columns and sort by filtered exposure
+    combined_data <- combined_data[, c("Golfer", "Salary", "Generated_Exposure", "Filtered_Exposure", "Ownership_Proj")]
     combined_data <- combined_data[order(combined_data$Filtered_Exposure, decreasing = TRUE), ]
     
     datatable(
@@ -2067,21 +2045,10 @@ server <- function(input, output, session) {
         ordering = TRUE
       ),
       rownames = FALSE,
-      colnames = c(
-        "Golfer",
-        "Salary",
-        "Current Set %",
-        "Filtered Pool %",
-        "Ownership Proj %"
-      )
+      colnames = c("Golfer", "Salary", "Current Set %", "Filtered Pool %", "Ownership Proj %")
     ) %>%
       formatCurrency("Salary", "$", digits = 0) %>%
-      formatRound(c(
-        "Generated_Exposure",
-        "Filtered_Exposure",
-        "Ownership_Proj"
-      ),
-      1)
+      formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
   
   # FD Exposure table (reactive to filter changes)
@@ -2101,58 +2068,47 @@ server <- function(input, output, session) {
       filtered_lineups <- filtered_lineups[filtered_lineups$CeilingProj >= input$fd_min_ceiling_proj, ]
     }
     if (input$fd_min_6_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast6 >= input$fd_min_6_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast6 >= input$fd_min_6_pct / 100, ]
     }
     if (input$fd_min_5plus_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast5 >= input$fd_min_5plus_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast5 >= input$fd_min_5plus_pct / 100, ]
     }
     if (input$fd_min_4plus_pct > 0) {
-      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$fd_min_4plus_pct /
-                                             100, ]
+      filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$fd_min_4plus_pct / 100, ]
     }
     
     # Apply golfer exclusion filter
-    if (!is.null(input$fd_excluded_golfers) &&
-        length(input$fd_excluded_golfers) > 0) {
-      player_cols <- c("Player1",
-                       "Player2",
-                       "Player3",
-                       "Player4",
-                       "Player5",
-                       "Player6")
+    if (!is.null(input$fd_excluded_golfers) && length(input$fd_excluded_golfers) > 0) {
+      player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
       
       for (excluded_golfer in input$fd_excluded_golfers) {
         exclude_condition <- rep(TRUE, nrow(filtered_lineups))
         
         for (col in player_cols) {
-          exclude_condition <- exclude_condition &
-            (filtered_lineups[[col]] != excluded_golfer)
+          exclude_condition <- exclude_condition & (filtered_lineups[[col]] != excluded_golfer)
         }
         
         filtered_lineups <- filtered_lineups[exclude_condition, ]
       }
     }
     
-    if (!is.null(input$fd_min_early_late) &&
-        !is.null(input$fd_max_early_late)) {
+    # Apply wave filtering
+    if (!is.null(input$fd_min_early_late) && !is.null(input$fd_max_early_late)) {
       if ("Wave" %in% names(rv$mme_data)) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
-        player_cols <- c("Player1",
-                         "Player2",
-                         "Player3",
-                         "Player4",
-                         "Player5",
-                         "Player6")
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
-        early_late_counts <- apply(filtered_lineups[, player_cols], 1, function(lineup) {
+        # Convert to data.table if needed for efficient column selection
+        if (!is.data.table(filtered_lineups)) {
+          setDT(filtered_lineups)
+        }
+        
+        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
         
-        wave_condition <- early_late_counts >= input$fd_min_early_late &
-          early_late_counts <= input$fd_max_early_late
+        wave_condition <- early_late_counts >= input$fd_min_early_late & early_late_counts <= input$fd_max_early_late
         filtered_lineups <- filtered_lineups[wave_condition, ]
       }
     }
@@ -2167,8 +2123,7 @@ server <- function(input, output, session) {
       generated_exposures <- calculate_exposures(rv$generated_fd_mme_lineups, rv$mme_data, "fd")
     }
     
-    if (is.null(random_exposures))
-      return(NULL)
+    if (is.null(random_exposures)) return(NULL)
     
     # Get salary information
     salary_lookup <- setNames(rv$mme_data[["FDSal"]], rv$mme_data$Golfer)
@@ -2188,10 +2143,8 @@ server <- function(input, output, session) {
     combined_data$Random_Exposure[is.na(combined_data$Random_Exposure)] <- 0
     
     # Add filtered pool exposures
-    if (!is.null(filtered_exposures) &&
-        nrow(filtered_exposures) > 0) {
-      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct,
-                                  filtered_exposures$Golfer)
+    if (!is.null(filtered_exposures) && nrow(filtered_exposures) > 0) {
+      filtered_lookup <- setNames(filtered_exposures$Exposure_Pct, filtered_exposures$Golfer)
       combined_data$Filtered_Exposure <- filtered_lookup[combined_data$Golfer]
       combined_data$Filtered_Exposure[is.na(combined_data$Filtered_Exposure)] <- 0
     } else {
@@ -2199,10 +2152,8 @@ server <- function(input, output, session) {
     }
     
     # Add generated lineups exposure (current randomized set)
-    if (!is.null(generated_exposures) &&
-        nrow(generated_exposures) > 0) {
-      generated_lookup <- setNames(generated_exposures$Exposure_Pct,
-                                   generated_exposures$Golfer)
+    if (!is.null(generated_exposures) && nrow(generated_exposures) > 0) {
+      generated_lookup <- setNames(generated_exposures$Exposure_Pct, generated_exposures$Golfer)
       combined_data$Generated_Exposure <- generated_lookup[combined_data$Golfer]
       combined_data$Generated_Exposure[is.na(combined_data$Generated_Exposure)] <- 0
     } else {
@@ -2214,13 +2165,7 @@ server <- function(input, output, session) {
     combined_data$Ownership_Proj <- ownership_lookup[combined_data$Golfer]
     
     # Reorder columns and sort by filtered exposure
-    combined_data <- combined_data[, c(
-      "Golfer",
-      "Salary",
-      "Generated_Exposure",
-      "Filtered_Exposure",
-      "Ownership_Proj"
-    )]
+    combined_data <- combined_data[, c("Golfer", "Salary", "Generated_Exposure", "Filtered_Exposure", "Ownership_Proj")]
     combined_data <- combined_data[order(combined_data$Filtered_Exposure, decreasing = TRUE), ]
     
     datatable(
@@ -2232,22 +2177,14 @@ server <- function(input, output, session) {
         ordering = TRUE
       ),
       rownames = FALSE,
-      colnames = c(
-        "Golfer",
-        "Salary",
-        "Current Set %",
-        "Filtered Pool %",
-        "Ownership Proj %"
-      )
+      colnames = c("Golfer", "Salary", "Current Set %", "Filtered Pool %", "Ownership Proj %")
     ) %>%
       formatCurrency("Salary", "$", digits = 0) %>%
-      formatRound(c(
-        "Generated_Exposure",
-        "Filtered_Exposure",
-        "Ownership_Proj"
-      ),
-      1)
+      formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
+  
+
+  
   
   # Generate DK MME lineups from filters
   observeEvent(input$generate_dk_mme_lineups, {
