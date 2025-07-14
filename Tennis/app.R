@@ -743,7 +743,8 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
         # Create match info for finding similar historical matches
         tour <- match_players$Tour[1]
         is_straight_sets <- as.integer(outcome_type == "SS")
-        best_of_value <- ifelse(tour == "ATP", 5, 3)
+        #best_of_value <- ifelse(tour == "ATP", 5, 3)
+        best_of_value <- 3
         
         # Find similar historical matches
         similar_matches <- hist_dt[
@@ -1179,7 +1180,8 @@ find_similar_matches <- function(current_match, historical_data, n_matches = 50,
   }
   
   # Determine best_of based on tour
-  best_of_value <- ifelse(current_match$Tour == "ATP", 5, 3)
+  #best_of_value <- ifelse(current_match$Tour == "ATP", 5, 3)
+  best_of_value <- 3
   
   # Create cache key including best_of
   cache_key <- paste(
@@ -1402,7 +1404,8 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
         if (probability > 0) {
           # Create match info for similarity matching
           tour <- p1$Tour
-          best_of_value <- ifelse(tour == "ATP", 5, 3)
+          #best_of_value <- ifelse(tour == "ATP", 5, 3)
+          best_of_value <- 3
           
           match_info <- list(
             Tour = tour,
