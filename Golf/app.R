@@ -153,7 +153,8 @@ calculate_cut_distribution <- function(cut_probs) {
   return(list(exact = exact_probs, atleast = atleast_probs))
 }
 
-# Generate cash lineups (ECM optimization)
+# Update the generate_cash_lineups function to include ownership metrics
+
 generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
   # Prepare data
   players <- player_data$Golfer
@@ -170,6 +171,21 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
     player_data$DKCeil
   else
     player_data$FDCeil
+  
+  # Get ownership projections (convert from decimal to percentage if needed)
+  ownership <- if ("DKSal" %in% names(player_data)) {
+    if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
+      player_data$DKOP * 100  # Convert from decimal to percentage
+    } else {
+      player_data$DKOP  # Already in percentage
+    }
+  } else {
+    if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
+      player_data$FDOP * 100  # Convert from decimal to percentage
+    } else {
+      player_data$FDOP  # Already in percentage
+    }
+  }
   
   n_players <- length(players)
   lineups <- list()
@@ -243,11 +259,16 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
     lineup_salaries <- salaries[selected]
     lineup_std_proj <- std_proj[selected]
     lineup_ceil_proj <- ceil_proj[selected]
+    lineup_ownership <- ownership[selected]
     
     expected_cuts <- sum(lineup_cut_probs)
     total_salary <- sum(lineup_salaries)
     total_std_proj <- sum(lineup_std_proj)
     total_ceil_proj <- sum(lineup_ceil_proj)
+    
+    # Calculate ownership metrics
+    cumulative_ownership <- sum(lineup_ownership)
+    geometric_mean_ownership <- exp(mean(log(pmax(lineup_ownership, 0.01))))  # Use 0.01 as minimum to avoid log(0)
     
     # Calculate cut distributions
     cut_dist <- calculate_cut_distribution(lineup_cut_probs)
@@ -264,6 +285,8 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
       TotalSalary = total_salary,
       StandardProj = total_std_proj,
       CeilingProj = total_ceil_proj,
+      CumulativeOwnership = cumulative_ownership,
+      GeometricMeanOwnership = geometric_mean_ownership,
       Exactly0 = cut_dist$exact[1],
       Exactly1 = cut_dist$exact[2],
       Exactly2 = cut_dist$exact[3],
@@ -303,7 +326,8 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
   }
 }
 
-# Generate MME lineups (fast diverse generation with 6-cut focus)
+# Update the generate_mme_lineups function to include ownership metrics
+
 generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
   # Prepare data
   players <- player_data$Golfer
@@ -320,6 +344,21 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
     player_data$DKCeil
   else
     player_data$FDCeil
+  
+  # Get ownership projections (convert from decimal to percentage if needed)
+  ownership <- if ("DKSal" %in% names(player_data)) {
+    if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
+      player_data$DKOP * 100  # Convert from decimal to percentage
+    } else {
+      player_data$DKOP  # Already in percentage
+    }
+  } else {
+    if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
+      player_data$FDOP * 100  # Convert from decimal to percentage
+    } else {
+      player_data$FDOP  # Already in percentage
+    }
+  }
   
   n_players <- length(players)
   lineups <- list()
@@ -381,10 +420,15 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
     lineup_salaries <- salaries[selected_indices]
     lineup_std_proj <- std_proj[selected_indices]
     lineup_ceil_proj <- ceil_proj[selected_indices]
+    lineup_ownership <- ownership[selected_indices]
     
     expected_cuts <- sum(lineup_cut_probs)
     total_std_proj <- sum(lineup_std_proj)
     total_ceil_proj <- sum(lineup_ceil_proj)
+    
+    # Calculate ownership metrics
+    cumulative_ownership <- sum(lineup_ownership)
+    geometric_mean_ownership <- exp(mean(log(pmax(lineup_ownership, 0.01))))  # Use 0.01 as minimum to avoid log(0)
     
     # Calculate cut distributions
     cut_dist <- calculate_cut_distribution(lineup_cut_probs)
@@ -402,6 +446,8 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
       TotalSalary = total_salary,
       StandardProj = total_std_proj,
       CeilingProj = total_ceil_proj,
+      CumulativeOwnership = cumulative_ownership,
+      GeometricMeanOwnership = geometric_mean_ownership,
       Exactly0 = cut_dist$exact[1],
       Exactly1 = cut_dist$exact[2],
       Exactly2 = cut_dist$exact[3],
@@ -443,7 +489,8 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
   }
 }
 
-# Helper function to filter and randomize lineups
+# Update the generate_filtered_mme_lineups function to include ownership filters
+
 generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = NULL) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
@@ -478,6 +525,23 @@ generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = N
       filters$min_4plus_pct > 0) {
     filtered_lineups <- filtered_lineups[AtLeast4 >= filters$min_4plus_pct /
                                            100]
+  }
+  
+  # Apply ownership range filters
+  if (!is.null(filters$cumulative_ownership_range) && 
+      length(filters$cumulative_ownership_range) == 2) {
+    filtered_lineups <- filtered_lineups[
+      CumulativeOwnership >= filters$cumulative_ownership_range[1] &
+        CumulativeOwnership <= filters$cumulative_ownership_range[2]
+    ]
+  }
+  
+  if (!is.null(filters$geometric_mean_ownership_range) && 
+      length(filters$geometric_mean_ownership_range) == 2) {
+    filtered_lineups <- filtered_lineups[
+      GeometricMeanOwnership >= filters$geometric_mean_ownership_range[1] &
+        GeometricMeanOwnership <= filters$geometric_mean_ownership_range[2]
+    ]
   }
   
   # Apply golfer exclusion filter
@@ -744,7 +808,6 @@ ui <- dashboardPage(
           )
         ))
       ),
-      
       # DraftKings Builder Tab
       tabItem(
         tabName = "dk_builder",
@@ -825,7 +888,6 @@ ui <- dashboardPage(
                   )
                 )
               ),
-              # Row 2: Cut Percentage Filters
               # Row 2: Cut Percentage and Wave Filters
               fluidRow(
                 column(
@@ -893,7 +955,36 @@ ui <- dashboardPage(
                   )
                 )
               ),
-              # Row 3: Pool Stats and Generate Button
+              # Row 3: Ownership Range Filters
+              fluidRow(
+                column(
+                  4,
+                  sliderInput(
+                    "dk_cumulative_ownership_range",
+                    "Cumulative Ownership Range:",
+                    min = 0,
+                    max = 600,
+                    value = c(0, 600),
+                    step = 1
+                  )
+                ),
+                column(
+                  4,
+                  sliderInput(
+                    "dk_geometric_mean_ownership_range",
+                    "Geometric Mean Ownership Range:",
+                    min = 0,
+                    max = 100,
+                    value = c(0, 100),
+                    step = 0.1
+                  )
+                ),
+                column(
+                  4,
+                  div(style = "height: 75px;")  # Spacing column
+                )
+              ),
+              # Row 4: Pool Stats and Generate Button
               fluidRow(column(
                 6, div(
                   class = "well well-sm",
@@ -1018,7 +1109,6 @@ ui <- dashboardPage(
                   )
                 )
               ),
-              # Row 2: Cut Percentage Filters
               # Row 2: Cut Percentage and Wave Filters
               fluidRow(
                 column(
@@ -1086,7 +1176,36 @@ ui <- dashboardPage(
                   )
                 )
               ),
-              # Row 3: Pool Stats and Generate Button
+              # Row 3: Ownership Range Filters
+              fluidRow(
+                column(
+                  4,
+                  sliderInput(
+                    "fd_cumulative_ownership_range",
+                    "Cumulative Ownership Range:",
+                    min = 0,
+                    max = 600,
+                    value = c(0, 600),
+                    step = 1
+                  )
+                ),
+                column(
+                  4,
+                  sliderInput(
+                    "fd_geometric_mean_ownership_range",
+                    "Geometric Mean Ownership Range:",
+                    min = 0,
+                    max = 100,
+                    value = c(0, 100),
+                    step = 0.1
+                  )
+                ),
+                column(
+                  4,
+                  div(style = "height: 75px;")  # Spacing column
+                )
+              ),
+              # Row 4: Pool Stats and Generate Button
               fluidRow(column(
                 6, div(
                   class = "well well-sm",
@@ -1181,24 +1300,29 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "fd_mme_complete", suspendWhenHidden = FALSE)
   
-  # Handle golf file upload
+  # Replace the existing observeEvent(input$golf_file, {}) section with this:
+  
   observeEvent(input$golf_file, {
     req(input$golf_file)
     
     tryCatch({
-      # Read both tabs
-      cash_data <- read_excel(input$golf_file$datapath, sheet = "cash")
-      mme_data <- read_excel(input$golf_file$datapath, sheet = "MMEPool")
+      # Read the single PlayerPool tab
+      player_pool <- read_excel(input$golf_file$datapath, sheet = "PlayerPool")
       
-      # Combine and deduplicate for display only
-      combined_data <- bind_rows(cash_data, mme_data)
-      golf_data_display <- combined_data %>%
-        distinct(Golfer, .keep_all = TRUE)
+      # Filter for DraftKings cash pool (DKCashPool == "Y")
+      dk_cash_data <- player_pool %>%
+        filter(DKCashPool == "Y")
       
-      # Store all three versions
-      rv$cash_data <- cash_data
-      rv$mme_data <- mme_data
-      rv$golf_data_display <- golf_data_display
+      # Filter for FanDuel cash pool (FDCashPool == "Y") 
+      fd_cash_data <- player_pool %>%
+        filter(FDCashPool == "Y")
+
+      
+      # Store all versions
+      rv$dk_cash_data <- dk_cash_data  # DK-specific for cash generation
+      rv$fd_cash_data <- fd_cash_data  # FD-specific for cash generation
+      rv$mme_data <- player_pool  # Full pool for MME
+      rv$golf_data_display <- player_pool  # Full pool for cut analysis
       rv$file_uploaded <- TRUE
       rv$mme_loaded <- TRUE
       
@@ -1218,7 +1342,10 @@ server <- function(input, output, session) {
       showModal(
         modalDialog(
           title = "Success",
-          "Golf data uploaded successfully!",
+          sprintf("Golf data uploaded successfully!\nDK Cash Pool: %d players\nFD Cash Pool: %d players\nTotal MME Pool: %d players", 
+                  nrow(dk_cash_data), 
+                  nrow(fd_cash_data), 
+                  nrow(player_pool)),
           easyClose = TRUE
         )
       )
@@ -1234,11 +1361,11 @@ server <- function(input, output, session) {
   
   # Cut analysis table with platform toggle
   output$cut_analysis_table <- renderDT({
-    req(rv$golf_data_display, input$platform_toggle)
+    req(rv$mme_pool, input$platform_toggle)
     
     # Select columns based on platform
     if (input$platform_toggle == "dk") {
-      analysis_data <- rv$golf_data_display %>%
+      analysis_data <- rv$mme_pool %>%
         arrange(desc(CutPct)) %>%
         select(Golfer, CutPct, DKSal, DKProj, DKCeil, DKOP) %>%
         rename(
@@ -1248,7 +1375,7 @@ server <- function(input, output, session) {
           Ownership = DKOP
         )
     } else {
-      analysis_data <- rv$golf_data_display %>%
+      analysis_data <- rv$mme_pool %>%
         arrange(desc(CutPct)) %>%
         select(Golfer, CutPct, FDSal, FDProj, FDCeil, FDOP) %>%
         rename(
@@ -1314,105 +1441,10 @@ server <- function(input, output, session) {
     ggplotly(p, tooltip = c("text", "x", "y", "size", "color"))
   })
   
-  # Single cash lineups table with platform toggle
-  output$cash_lineups_table <- renderDT({
-    req(rv$dk_cash_lineups,
-        rv$fd_cash_lineups,
-        input$cash_platform_toggle)
-    
-    # Select data based on platform
-    if (input$cash_platform_toggle == "dk") {
-      lineup_data <- rv$dk_cash_lineups
-    } else {
-      lineup_data <- rv$fd_cash_lineups
-    }
-    
-    # Add EarlyLate count column if Wave data is available
-    if (!is.null(rv$cash_data) && "Wave" %in% names(rv$cash_data)) {
-      wave_lookup <- setNames(rv$cash_data$Wave, rv$cash_data$Golfer)
-      player_cols <- c("Player1",
-                       "Player2",
-                       "Player3",
-                       "Player4",
-                       "Player5",
-                       "Player6")
-      
-      lineup_data$EarlyLate_Count <- apply(lineup_data[, player_cols], 1, function(lineup) {
-        player_waves <- wave_lookup[lineup]
-        sum(player_waves == "EarlyLate", na.rm = TRUE)
-      })
-    }
-    
-    # Select and rename columns for display
-    if ("EarlyLate_Count" %in% names(lineup_data)) {
-      display_data <- lineup_data %>%
-        select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          EarlyLate_Count,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
-        ) %>%
-        rename(
-          "AM/PM Count" = EarlyLate_Count,
-          "6" = AtLeast6,
-          "5+" = AtLeast5,
-          "4+" = AtLeast4
-        )
-    } else {
-      display_data <- lineup_data %>%
-        select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
-        ) %>%
-        rename("6" = AtLeast6,
-               "5+" = AtLeast5,
-               "4+" = AtLeast4)
-    }
-    
-    # Create datatable with conditional formatting
-    dt <- datatable(
-      display_data,
-      options = list(
-        scrollX = TRUE,
-        pageLength = 25,
-        dom = "tip"
-      ),
-      rownames = FALSE
-    ) %>%
-      formatRound(c("ExpectedCuts", "StandardProj", "CeilingProj"), 2) %>%
-      formatCurrency("TotalSalary", "$", digits = 0) %>%
-      formatPercentage(c("6", "5+", "4+"), 1)
-    
-    # Add integer formatting for AM/PM Count if it exists
-    if ("AM/PM Count" %in% names(display_data)) {
-      dt <- dt %>% formatRound("AM/PM Count", 0)
-    }
-    
-    return(dt)
-  })
+
   
-  # Download handler for cash lineups
+  # Update the download handler for cash lineups to use the correct data source:
+  
   output$download_cash <- downloadHandler(
     filename = function() {
       platform <- if (input$cash_platform_toggle == "dk")
@@ -1429,25 +1461,21 @@ server <- function(input, output, session) {
       )
     },
     content = function(file) {
-      # Select data based on platform
+      # Select data and source based on platform
       if (input$cash_platform_toggle == "dk") {
         lineup_data <- rv$dk_cash_lineups
         platform_id_col <- "DKID"
+        source_data <- rv$dk_cash_data  # Use DK-specific cash data for ID lookup
       } else {
         lineup_data <- rv$fd_cash_lineups
         platform_id_col <- "FDID"
+        source_data <- rv$fd_cash_data  # Use FD-specific cash data for ID lookup
       }
       
       # Add EarlyLate count column if Wave data is available
-      if (!is.null(rv$cash_data) &&
-          "Wave" %in% names(rv$cash_data)) {
-        wave_lookup <- setNames(rv$cash_data$Wave, rv$cash_data$Golfer)
-        player_cols <- c("Player1",
-                         "Player2",
-                         "Player3",
-                         "Player4",
-                         "Player5",
-                         "Player6")
+      if (!is.null(source_data) && "Wave" %in% names(source_data)) {
+        wave_lookup <- setNames(source_data$Wave, source_data$Golfer)
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
         lineup_data$EarlyLate_Count <- apply(lineup_data[, player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
@@ -1455,27 +1483,16 @@ server <- function(input, output, session) {
         })
       }
       
-      # Create ID lookup from cash data
-      id_lookup <- setNames(rv$cash_data[[platform_id_col]], rv$cash_data$Golfer)
+      # Create ID lookup from appropriate cash data source
+      id_lookup <- setNames(source_data[[platform_id_col]], source_data$Golfer)
       
       # Replace player names with IDs and select columns
       if ("EarlyLate_Count" %in% names(lineup_data)) {
         download_data <- lineup_data %>%
           select(
-            Player1,
-            Player2,
-            Player3,
-            Player4,
-            Player5,
-            Player6,
-            ExpectedCuts,
-            StandardProj,
-            CeilingProj,
-            TotalSalary,
-            EarlyLate_Count,
-            AtLeast6,
-            AtLeast5,
-            AtLeast4
+            Player1, Player2, Player3, Player4, Player5, Player6,
+            ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+            EarlyLate_Count, AtLeast6, AtLeast5, AtLeast4
           ) %>%
           mutate(
             Player1 = id_lookup[Player1],
@@ -1487,26 +1504,14 @@ server <- function(input, output, session) {
           ) %>%
           rename(
             "AM/PM Count" = EarlyLate_Count,
-            "6" = AtLeast6,
-            "5+" = AtLeast5,
-            "4+" = AtLeast4
+            "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
           )
       } else {
         download_data <- lineup_data %>%
           select(
-            Player1,
-            Player2,
-            Player3,
-            Player4,
-            Player5,
-            Player6,
-            ExpectedCuts,
-            StandardProj,
-            CeilingProj,
-            TotalSalary,
-            AtLeast6,
-            AtLeast5,
-            AtLeast4
+            Player1, Player2, Player3, Player4, Player5, Player6,
+            ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+            AtLeast6, AtLeast5, AtLeast4
           ) %>%
           mutate(
             Player1 = id_lookup[Player1],
@@ -1516,27 +1521,25 @@ server <- function(input, output, session) {
             Player5 = id_lookup[Player5],
             Player6 = id_lookup[Player6]
           ) %>%
-          rename("6" = AtLeast6,
-                 "5+" = AtLeast5,
-                 "4+" = AtLeast4)
+          rename("6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4)
       }
       
       write.csv(download_data, file, row.names = FALSE)
     }
   )
   
-  # Generate cash lineups
+  
   observeEvent(input$generate_cash, {
-    req(rv$cash_data)
+    req(rv$dk_cash_data, rv$fd_cash_data)
     
     withProgress(message = 'Generating cash lineups...', value = 0, {
-      # Generate DraftKings lineups
+      # Generate DraftKings lineups using DK-specific pool
       incProgress(0.3, detail = "Generating DraftKings lineups...")
-      rv$dk_cash_lineups <- generate_cash_lineups(rv$cash_data, DK_SALARY_CAP, 50)
+      rv$dk_cash_lineups <- generate_cash_lineups(rv$dk_cash_data, DK_SALARY_CAP, 50)
       
-      # Generate FanDuel lineups
+      # Generate FanDuel lineups using FD-specific pool
       incProgress(0.6, detail = "Generating FanDuel lineups...")
-      rv$fd_cash_lineups <- generate_cash_lineups(rv$cash_data, FD_SALARY_CAP, 50)
+      rv$fd_cash_lineups <- generate_cash_lineups(rv$fd_cash_data, FD_SALARY_CAP, 50)
       
       rv$cash_complete <- TRUE
       
@@ -1562,7 +1565,6 @@ server <- function(input, output, session) {
       ))
     })
   })
-  
   
   # DraftKings MME Lineup Generation
   observeEvent(input$run_dk_mme_optimization, {
@@ -1710,8 +1712,29 @@ server <- function(input, output, session) {
         value = floor(min(rv$dk_mme_lineups$AtLeast4) * 100),
         step = 0.5
       )
+      
+      updateSliderInput(
+        session,
+        "dk_cumulative_ownership_range",
+        min = floor(min(rv$dk_mme_lineups$CumulativeOwnership)),
+        max = ceiling(max(rv$dk_mme_lineups$CumulativeOwnership)),
+        value = c(floor(min(rv$dk_mme_lineups$CumulativeOwnership)), 
+                  ceiling(max(rv$dk_mme_lineups$CumulativeOwnership))),
+        step = 1
+      )
+      
+      updateSliderInput(
+        session,
+        "dk_geometric_mean_ownership_range",
+        min = floor(min(rv$dk_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+        max = ceiling(max(rv$dk_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+        value = c(floor(min(rv$dk_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+                  ceiling(max(rv$dk_mme_lineups$GeometricMeanOwnership) * 10) / 10),
+        step = 0.1
+      )
     }
   })
+ 
   
   # Update FD slider ranges when MME lineups are generated
   observeEvent(rv$fd_mme_lineups, {
@@ -1767,10 +1790,30 @@ server <- function(input, output, session) {
         value = floor(min(rv$fd_mme_lineups$AtLeast4) * 100),
         step = 0.5
       )
+      # Update ownership range sliders based on actual data
+      updateSliderInput(
+        session,
+        "fd_cumulative_ownership_range",
+        min = floor(min(rv$fd_mme_lineups$CumulativeOwnership)),
+        max = ceiling(max(rv$fd_mme_lineups$CumulativeOwnership)),
+        value = c(floor(min(rv$fd_mme_lineups$CumulativeOwnership)), 
+                  ceiling(max(rv$fd_mme_lineups$CumulativeOwnership))),
+        step = 1
+      )
+      
+      updateSliderInput(
+        session,
+        "fd_geometric_mean_ownership_range",
+        min = floor(min(rv$fd_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+        max = ceiling(max(rv$fd_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+        value = c(floor(min(rv$fd_mme_lineups$GeometricMeanOwnership) * 10) / 10,
+                  ceiling(max(rv$fd_mme_lineups$GeometricMeanOwnership) * 10) / 10),
+        step = 0.1
+      )
     }
   })
   
-  # DK Filtered pool size calculation (reactive to all filter changes)
+  # Update DK filtered pool size calculation to include ownership filters
   output$dk_filtered_mme_pool_size <- renderText({
     req(rv$dk_mme_lineups)
     
@@ -1787,27 +1830,34 @@ server <- function(input, output, session) {
       filtered_count <- filtered_count[filtered_count$CeilingProj >= input$dk_min_ceiling_proj, ]
     }
     if (input$dk_min_6_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast6 >= input$dk_min_6_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast6 >= input$dk_min_6_pct / 100, ]
     }
     if (input$dk_min_5plus_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast5 >= input$dk_min_5plus_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast5 >= input$dk_min_5plus_pct / 100, ]
     }
     if (input$dk_min_4plus_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast4 >= input$dk_min_4plus_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast4 >= input$dk_min_4plus_pct / 100, ]
+    }
+    
+    # Apply ownership range filters
+    if (!is.null(input$dk_cumulative_ownership_range) && 
+        length(input$dk_cumulative_ownership_range) == 2) {
+      filtered_count <- filtered_count[
+        filtered_count$CumulativeOwnership >= input$dk_cumulative_ownership_range[1] &
+          filtered_count$CumulativeOwnership <= input$dk_cumulative_ownership_range[2], ]
+    }
+    
+    if (!is.null(input$dk_geometric_mean_ownership_range) && 
+        length(input$dk_geometric_mean_ownership_range) == 2) {
+      filtered_count <- filtered_count[
+        filtered_count$GeometricMeanOwnership >= input$dk_geometric_mean_ownership_range[1] &
+          filtered_count$GeometricMeanOwnership <= input$dk_geometric_mean_ownership_range[2], ]
     }
     
     # Apply golfer exclusion filter
     if (!is.null(input$dk_excluded_golfers) &&
         length(input$dk_excluded_golfers) > 0) {
-      player_cols <- c("Player1",
-                       "Player2",
-                       "Player3",
-                       "Player4",
-                       "Player5",
-                       "Player6")
+      player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
       
       for (excluded_golfer in input$dk_excluded_golfers) {
         exclude_condition <- rep(TRUE, nrow(filtered_count))
@@ -1825,12 +1875,7 @@ server <- function(input, output, session) {
         !is.null(input$dk_max_early_late)) {
       if ("Wave" %in% names(rv$mme_data)) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
-        player_cols <- c("Player1",
-                         "Player2",
-                         "Player3",
-                         "Player4",
-                         "Player5",
-                         "Player6")
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
         early_late_counts <- apply(filtered_count[, player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
@@ -1846,7 +1891,7 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", nrow(filtered_count))
   })
   
-  # FD Filtered pool size calculation (reactive to all filter changes)
+  # Update FD filtered pool size calculation to include ownership filters
   output$fd_filtered_mme_pool_size <- renderText({
     req(rv$fd_mme_lineups)
     
@@ -1859,28 +1904,38 @@ server <- function(input, output, session) {
     if (input$fd_min_standard_proj > 0) {
       filtered_count <- filtered_count[filtered_count$StandardProj >= input$fd_min_standard_proj, ]
     }
+    if (input$fd_min_ceiling_proj > 0) {
+      filtered_count <- filtered_count[filtered_count$CeilingProj >= input$fd_min_ceiling_proj, ]
+    }
     if (input$fd_min_6_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast6 >= input$fd_min_6_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast6 >= input$fd_min_6_pct / 100, ]
     }
     if (input$fd_min_5plus_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast5 >= input$fd_min_5plus_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast5 >= input$fd_min_5plus_pct / 100, ]
     }
     if (input$fd_min_4plus_pct > 0) {
-      filtered_count <- filtered_count[filtered_count$AtLeast4 >= input$fd_min_4plus_pct /
-                                         100, ]
+      filtered_count <- filtered_count[filtered_count$AtLeast4 >= input$fd_min_4plus_pct / 100, ]
+    }
+    
+    # Apply ownership range filters
+    if (!is.null(input$fd_cumulative_ownership_range) && 
+        length(input$fd_cumulative_ownership_range) == 2) {
+      filtered_count <- filtered_count[
+        filtered_count$CumulativeOwnership >= input$fd_cumulative_ownership_range[1] &
+          filtered_count$CumulativeOwnership <= input$fd_cumulative_ownership_range[2], ]
+    }
+    
+    if (!is.null(input$fd_geometric_mean_ownership_range) && 
+        length(input$fd_geometric_mean_ownership_range) == 2) {
+      filtered_count <- filtered_count[
+        filtered_count$GeometricMeanOwnership >= input$fd_geometric_mean_ownership_range[1] &
+          filtered_count$GeometricMeanOwnership <= input$fd_geometric_mean_ownership_range[2], ]
     }
     
     # Apply golfer exclusion filter
     if (!is.null(input$fd_excluded_golfers) &&
         length(input$fd_excluded_golfers) > 0) {
-      player_cols <- c("Player1",
-                       "Player2",
-                       "Player3",
-                       "Player4",
-                       "Player5",
-                       "Player6")
+      player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
       
       for (excluded_golfer in input$fd_excluded_golfers) {
         exclude_condition <- rep(TRUE, nrow(filtered_count))
@@ -1898,12 +1953,7 @@ server <- function(input, output, session) {
         !is.null(input$fd_max_early_late)) {
       if ("Wave" %in% names(rv$mme_data)) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
-        player_cols <- c("Player1",
-                         "Player2",
-                         "Player3",
-                         "Player4",
-                         "Player5",
-                         "Player6")
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
         early_late_counts <- apply(filtered_count[, player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
@@ -1919,7 +1969,7 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", nrow(filtered_count))
   })
   
-  # DK Exposure table (reactive to filter changes)
+  # Update DK exposure table to include ownership filters
   output$dk_exposure_table <- renderDT({
     req(rv$dk_mme_lineups, rv$mme_data)
     
@@ -1943,6 +1993,21 @@ server <- function(input, output, session) {
     }
     if (input$dk_min_4plus_pct > 0) {
       filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$dk_min_4plus_pct / 100, ]
+    }
+    
+    # Apply ownership range filters
+    if (!is.null(input$dk_cumulative_ownership_range) && 
+        length(input$dk_cumulative_ownership_range) == 2) {
+      filtered_lineups <- filtered_lineups[
+        filtered_lineups$CumulativeOwnership >= input$dk_cumulative_ownership_range[1] &
+          filtered_lineups$CumulativeOwnership <= input$dk_cumulative_ownership_range[2], ]
+    }
+    
+    if (!is.null(input$dk_geometric_mean_ownership_range) && 
+        length(input$dk_geometric_mean_ownership_range) == 2) {
+      filtered_lineups <- filtered_lineups[
+        filtered_lineups$GeometricMeanOwnership >= input$dk_geometric_mean_ownership_range[1] &
+          filtered_lineups$GeometricMeanOwnership <= input$dk_geometric_mean_ownership_range[2], ]
     }
     
     # Apply golfer exclusion filter
@@ -2051,7 +2116,8 @@ server <- function(input, output, session) {
       formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
   
-  # FD Exposure table (reactive to filter changes)
+  
+  # Update FD exposure table to include ownership filters
   output$fd_exposure_table <- renderDT({
     req(rv$fd_mme_lineups, rv$mme_data)
     
@@ -2075,6 +2141,21 @@ server <- function(input, output, session) {
     }
     if (input$fd_min_4plus_pct > 0) {
       filtered_lineups <- filtered_lineups[filtered_lineups$AtLeast4 >= input$fd_min_4plus_pct / 100, ]
+    }
+    
+    # Apply ownership range filters
+    if (!is.null(input$fd_cumulative_ownership_range) && 
+        length(input$fd_cumulative_ownership_range) == 2) {
+      filtered_lineups <- filtered_lineups[
+        filtered_lineups$CumulativeOwnership >= input$fd_cumulative_ownership_range[1] &
+          filtered_lineups$CumulativeOwnership <= input$fd_cumulative_ownership_range[2], ]
+    }
+    
+    if (!is.null(input$fd_geometric_mean_ownership_range) && 
+        length(input$fd_geometric_mean_ownership_range) == 2) {
+      filtered_lineups <- filtered_lineups[
+        filtered_lineups$GeometricMeanOwnership >= input$fd_geometric_mean_ownership_range[1] &
+          filtered_lineups$GeometricMeanOwnership <= input$fd_geometric_mean_ownership_range[2], ]
     }
     
     # Apply golfer exclusion filter
@@ -2182,15 +2263,14 @@ server <- function(input, output, session) {
       formatCurrency("Salary", "$", digits = 0) %>%
       formatRound(c("Generated_Exposure", "Filtered_Exposure", "Ownership_Proj"), 1)
   })
-  
 
   
   
-  # Generate DK MME lineups from filters
+  # Update the generate DK MME lineups function to include ownership filters
   observeEvent(input$generate_dk_mme_lineups, {
     req(rv$dk_mme_lineups)
     
-    # Create filters
+    # Create filters including ownership ranges
     filters <- list(
       min_expected_cuts = input$dk_min_expected_cuts,
       min_standard_proj = input$dk_min_standard_proj,
@@ -2201,6 +2281,8 @@ server <- function(input, output, session) {
       excluded_golfers = input$dk_excluded_golfers,
       min_early_late = input$dk_min_early_late,
       max_early_late = input$dk_max_early_late,
+      cumulative_ownership_range = input$dk_cumulative_ownership_range,
+      geometric_mean_ownership_range = input$dk_geometric_mean_ownership_range,
       num_lineups = input$dk_num_mme_lineups
     )
     
@@ -2229,11 +2311,11 @@ server <- function(input, output, session) {
     })
   })
   
-  # Generate FD MME lineups from filters
+  # Update the generate FD MME lineups function to include ownership filters
   observeEvent(input$generate_fd_mme_lineups, {
     req(rv$fd_mme_lineups)
     
-    # Create filters
+    # Create filters including ownership ranges
     filters <- list(
       min_expected_cuts = input$fd_min_expected_cuts,
       min_standard_proj = input$fd_min_standard_proj,
@@ -2244,6 +2326,8 @@ server <- function(input, output, session) {
       excluded_golfers = input$fd_excluded_golfers,
       min_early_late = input$fd_min_early_late,
       max_early_late = input$fd_max_early_late,
+      cumulative_ownership_range = input$fd_cumulative_ownership_range,
+      geometric_mean_ownership_range = input$fd_geometric_mean_ownership_range,
       num_lineups = input$fd_num_mme_lineups
     )
     
@@ -2272,30 +2356,102 @@ server <- function(input, output, session) {
     })
   })
   
-  # Generated DK MME lineups table
+  # Update all table display functions to include ownership metrics
+  
+  # Update cash lineups table display:
+  output$cash_lineups_table <- renderDT({
+    req(rv$dk_cash_lineups, rv$fd_cash_lineups, input$cash_platform_toggle)
+    
+    # Select data based on platform
+    if (input$cash_platform_toggle == "dk") {
+      lineup_data <- rv$dk_cash_lineups
+      source_data <- rv$dk_cash_data
+    } else {
+      lineup_data <- rv$fd_cash_lineups
+      source_data <- rv$fd_cash_data
+    }
+    
+    # Add EarlyLate count column if Wave data is available
+    if (!is.null(source_data) && "Wave" %in% names(source_data)) {
+      wave_lookup <- setNames(source_data$Wave, source_data$Golfer)
+      player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
+      
+      lineup_data$EarlyLate_Count <- apply(lineup_data[, player_cols], 1, function(lineup) {
+        player_waves <- wave_lookup[lineup]
+        sum(player_waves == "EarlyLate", na.rm = TRUE)
+      })
+    }
+    
+    # Select and rename columns for display
+    if ("EarlyLate_Count" %in% names(lineup_data)) {
+      display_data <- lineup_data %>%
+        select(
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          EarlyLate_Count, AtLeast6, AtLeast5, AtLeast4
+        ) %>%
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "AM/PM Count" = EarlyLate_Count,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
+    } else {
+      display_data <- lineup_data %>%
+        select(
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          AtLeast6, AtLeast5, AtLeast4
+        ) %>%
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
+    }
+    
+    # Create datatable with conditional formatting
+    dt <- datatable(
+      display_data,
+      options = list(
+        scrollX = TRUE,
+        pageLength = 25,
+        dom = "tip"
+      ),
+      rownames = FALSE
+    ) %>%
+      formatRound(c("ExpectedCuts", "StandardProj", "CeilingProj"), 2) %>%
+      formatCurrency("TotalSalary", "$", digits = 0) %>%
+      formatRound(c("TotalOwn", "GeoMeanOwn"), 1) %>%
+      formatPercentage(c("6", "5+", "4+"), 1)
+    
+    # Add integer formatting for AM/PM Count if it exists
+    if ("AM/PM Count" %in% names(display_data)) {
+      dt <- dt %>% formatRound("AM/PM Count", 0)
+    }
+    
+    return(dt)
+  })
+  
+  # Update generated DK MME lineups table:
   output$generated_dk_mme_lineups_table <- renderDT({
     req(rv$generated_dk_mme_lineups)
     
     # Select and rename columns for display
     display_data <- rv$generated_dk_mme_lineups %>%
       select(
-        Player1,
-        Player2,
-        Player3,
-        Player4,
-        Player5,
-        Player6,
-        ExpectedCuts,
-        StandardProj,
-        CeilingProj,
-        TotalSalary,
-        AtLeast6,
-        AtLeast5,
-        AtLeast4
+        Player1, Player2, Player3, Player4, Player5, Player6,
+        ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+        CumulativeOwnership, GeometricMeanOwnership,
+        AtLeast6, AtLeast5, AtLeast4
       ) %>%
-      rename("6" = AtLeast6,
-             "5+" = AtLeast5,
-             "4+" = AtLeast4)
+      rename(
+        "TotalOwn" = CumulativeOwnership,
+        "GeoMeanOwn" = GeometricMeanOwnership,
+        "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+      )
     
     datatable(
       display_data,
@@ -2308,33 +2464,27 @@ server <- function(input, output, session) {
     ) %>%
       formatRound(c("ExpectedCuts", "StandardProj", "CeilingProj"), 2) %>%
       formatCurrency("TotalSalary", "$", digits = 0) %>%
+      formatRound(c("TotalOwn", "GeoMeanOwn"), 1) %>%
       formatPercentage(c("6", "5+", "4+"), 1)
   })
   
-  # Generated FD MME lineups table
+  # Update generated FD MME lineups table:
   output$generated_fd_mme_lineups_table <- renderDT({
     req(rv$generated_fd_mme_lineups)
     
     # Select and rename columns for display
     display_data <- rv$generated_fd_mme_lineups %>%
       select(
-        Player1,
-        Player2,
-        Player3,
-        Player4,
-        Player5,
-        Player6,
-        ExpectedCuts,
-        StandardProj,
-        CeilingProj,
-        TotalSalary,
-        AtLeast6,
-        AtLeast5,
-        AtLeast4
+        Player1, Player2, Player3, Player4, Player5, Player6,
+        ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+        CumulativeOwnership, GeometricMeanOwnership,
+        AtLeast6, AtLeast5, AtLeast4
       ) %>%
-      rename("6" = AtLeast6,
-             "5+" = AtLeast5,
-             "4+" = AtLeast4)
+      rename(
+        "TotalOwn" = CumulativeOwnership,
+        "GeoMeanOwn" = GeometricMeanOwnership,
+        "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+      )
     
     datatable(
       display_data,
@@ -2347,10 +2497,105 @@ server <- function(input, output, session) {
     ) %>%
       formatRound(c("ExpectedCuts", "StandardProj", "CeilingProj"), 2) %>%
       formatCurrency("TotalSalary", "$", digits = 0) %>%
+      formatRound(c("TotalOwn", "GeoMeanOwn"), 1) %>%
       formatPercentage(c("6", "5+", "4+"), 1)
   })
   
-  # Download top 15k DK lineups by AtLeast6
+  # Update download handlers to include ownership metrics
+  
+  # Update cash download handler:
+  output$download_cash <- downloadHandler(
+    filename = function() {
+      platform <- if (input$cash_platform_toggle == "dk")
+        "DraftKings"
+      else
+        "FanDuel"
+      paste(
+        "golf_cash_lineups_",
+        platform,
+        "_",
+        format(Sys.time(), "%Y%m%d_%H%M%S"),
+        ".csv",
+        sep = ""
+      )
+    },
+    content = function(file) {
+      # Select data and source based on platform
+      if (input$cash_platform_toggle == "dk") {
+        lineup_data <- rv$dk_cash_lineups
+        platform_id_col <- "DKID"
+        source_data <- rv$dk_cash_data
+      } else {
+        lineup_data <- rv$fd_cash_lineups
+        platform_id_col <- "FDID"
+        source_data <- rv$fd_cash_data
+      }
+      
+      # Add EarlyLate count column if Wave data is available
+      if (!is.null(source_data) && "Wave" %in% names(source_data)) {
+        wave_lookup <- setNames(source_data$Wave, source_data$Golfer)
+        player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
+        
+        lineup_data$EarlyLate_Count <- apply(lineup_data[, player_cols], 1, function(lineup) {
+          player_waves <- wave_lookup[lineup]
+          sum(player_waves == "EarlyLate", na.rm = TRUE)
+        })
+      }
+      
+      # Create ID lookup from appropriate cash data source
+      id_lookup <- setNames(source_data[[platform_id_col]], source_data$Golfer)
+      
+      # Replace player names with IDs and select columns
+      if ("EarlyLate_Count" %in% names(lineup_data)) {
+        download_data <- lineup_data %>%
+          select(
+            Player1, Player2, Player3, Player4, Player5, Player6,
+            ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+            CumulativeOwnership, GeometricMeanOwnership,
+            EarlyLate_Count, AtLeast6, AtLeast5, AtLeast4
+          ) %>%
+          mutate(
+            Player1 = id_lookup[Player1],
+            Player2 = id_lookup[Player2],
+            Player3 = id_lookup[Player3],
+            Player4 = id_lookup[Player4],
+            Player5 = id_lookup[Player5],
+            Player6 = id_lookup[Player6]
+          ) %>%
+          rename(
+            "TotalOwn" = CumulativeOwnership,
+            "GeoMeanOwn" = GeometricMeanOwnership,
+            "AM/PM Count" = EarlyLate_Count,
+            "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+          )
+      } else {
+        download_data <- lineup_data %>%
+          select(
+            Player1, Player2, Player3, Player4, Player5, Player6,
+            ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+            CumulativeOwnership, GeometricMeanOwnership,
+            AtLeast6, AtLeast5, AtLeast4
+          ) %>%
+          mutate(
+            Player1 = id_lookup[Player1],
+            Player2 = id_lookup[Player2],
+            Player3 = id_lookup[Player3],
+            Player4 = id_lookup[Player4],
+            Player5 = id_lookup[Player5],
+            Player6 = id_lookup[Player6]
+          ) %>%
+          rename(
+            "TotalOwn" = CumulativeOwnership,
+            "GeoMeanOwn" = GeometricMeanOwnership,
+            "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+          )
+      }
+      
+      write.csv(download_data, file, row.names = FALSE)
+    }
+  )
+  
+  # Update DK MME download handlers:
   output$download_dk_mme_lineups <- downloadHandler(
     filename = function() {
       paste(
@@ -2372,19 +2617,10 @@ server <- function(input, output, session) {
       # Replace player names with IDs
       download_data <- top_lineups %>%
         select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          AtLeast6, AtLeast5, AtLeast4
         ) %>%
         mutate(
           Player1 = id_lookup[Player1],
@@ -2394,15 +2630,57 @@ server <- function(input, output, session) {
           Player5 = id_lookup[Player5],
           Player6 = id_lookup[Player6]
         ) %>%
-        rename("6" = AtLeast6,
-               "5+" = AtLeast5,
-               "4+" = AtLeast4)
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
       
       write.csv(download_data, file, row.names = FALSE)
     }
   )
   
-  # Download top 15k FD lineups by AtLeast6
+  # Update generated DK download handler:
+  output$download_generated_dk_mme <- downloadHandler(
+    filename = function() {
+      paste(
+        "golf_mme_generated_DraftKings_",
+        format(Sys.time(), "%Y%m%d_%H%M%S"),
+        ".csv",
+        sep = ""
+      )
+    },
+    content = function(file) {
+      # Create ID lookup from MME data
+      id_lookup <- setNames(rv$mme_data[["DKID"]], rv$mme_data$Golfer)
+      
+      # Replace player names with IDs
+      download_data <- rv$generated_dk_mme_lineups %>%
+        select(
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          AtLeast6, AtLeast5, AtLeast4
+        ) %>%
+        mutate(
+          Player1 = id_lookup[Player1],
+          Player2 = id_lookup[Player2],
+          Player3 = id_lookup[Player3],
+          Player4 = id_lookup[Player4],
+          Player5 = id_lookup[Player5],
+          Player6 = id_lookup[Player6]
+        ) %>%
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
+      
+      write.csv(download_data, file, row.names = FALSE)
+    }
+  )
+  
+  # Update FD MME download handlers:
   output$download_fd_mme_lineups <- downloadHandler(
     filename = function() {
       paste("golf_mme_top15k_FanDuel_",
@@ -2422,19 +2700,10 @@ server <- function(input, output, session) {
       # Replace player names with IDs
       download_data <- top_lineups %>%
         select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          AtLeast6, AtLeast5, AtLeast4
         ) %>%
         mutate(
           Player1 = id_lookup[Player1],
@@ -2444,62 +2713,17 @@ server <- function(input, output, session) {
           Player5 = id_lookup[Player5],
           Player6 = id_lookup[Player6]
         ) %>%
-        rename("6" = AtLeast6,
-               "5+" = AtLeast5,
-               "4+" = AtLeast4)
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
       
       write.csv(download_data, file, row.names = FALSE)
     }
   )
   
-  # Download generated DK lineups
-  output$download_generated_dk_mme <- downloadHandler(
-    filename = function() {
-      paste(
-        "golf_mme_generated_DraftKings_",
-        format(Sys.time(), "%Y%m%d_%H%M%S"),
-        ".csv",
-        sep = ""
-      )
-    },
-    content = function(file) {
-      # Create ID lookup from MME data
-      id_lookup <- setNames(rv$mme_data[["DKID"]], rv$mme_data$Golfer)
-      
-      # Replace player names with IDs
-      download_data <- rv$generated_dk_mme_lineups %>%
-        select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
-        ) %>%
-        mutate(
-          Player1 = id_lookup[Player1],
-          Player2 = id_lookup[Player2],
-          Player3 = id_lookup[Player3],
-          Player4 = id_lookup[Player4],
-          Player5 = id_lookup[Player5],
-          Player6 = id_lookup[Player6]
-        ) %>%
-        rename("6" = AtLeast6,
-               "5+" = AtLeast5,
-               "4+" = AtLeast4)
-      
-      write.csv(download_data, file, row.names = FALSE)
-    }
-  )
-  
-  # Download generated FD lineups
+  # Update generated FD download handler:
   output$download_generated_fd_mme <- downloadHandler(
     filename = function() {
       paste(
@@ -2516,19 +2740,10 @@ server <- function(input, output, session) {
       # Replace player names with IDs
       download_data <- rv$generated_fd_mme_lineups %>%
         select(
-          Player1,
-          Player2,
-          Player3,
-          Player4,
-          Player5,
-          Player6,
-          ExpectedCuts,
-          StandardProj,
-          CeilingProj,
-          TotalSalary,
-          AtLeast6,
-          AtLeast5,
-          AtLeast4
+          Player1, Player2, Player3, Player4, Player5, Player6,
+          ExpectedCuts, StandardProj, CeilingProj, TotalSalary,
+          CumulativeOwnership, GeometricMeanOwnership,
+          AtLeast6, AtLeast5, AtLeast4
         ) %>%
         mutate(
           Player1 = id_lookup[Player1],
@@ -2538,9 +2753,11 @@ server <- function(input, output, session) {
           Player5 = id_lookup[Player5],
           Player6 = id_lookup[Player6]
         ) %>%
-        rename("6" = AtLeast6,
-               "5+" = AtLeast5,
-               "4+" = AtLeast4)
+        rename(
+          "TotalOwn" = CumulativeOwnership,
+          "GeoMeanOwn" = GeometricMeanOwnership,
+          "6" = AtLeast6, "5+" = AtLeast5, "4+" = AtLeast4
+        )
       
       write.csv(download_data, file, row.names = FALSE)
     }
