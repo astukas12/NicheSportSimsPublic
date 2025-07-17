@@ -236,6 +236,81 @@ cleanup_memory <- function(verbose = FALSE) {
 }
 
 
+calculate_lineup_ranks <- function(lineups_df) {
+  # Create a copy to avoid modifying original data
+  ranked_lineups <- as.data.frame(lineups_df)
+  
+  # Define columns that should be ranked (higher values = better ranks)
+  rank_columns <- c("TotalEW", "MedianScore", "Score80th", "Win6Pct", "Win5PlusPct", 
+                    "Top1Count", "Top2Count", "Top3Count", "Top5Count")
+  
+  # Only rank columns that exist in the data
+  available_rank_cols <- intersect(rank_columns, names(ranked_lineups))
+  
+  # Calculate ranks for each column (1 = best, higher numbers = worse)
+  for (col in available_rank_cols) {
+    rank_col_name <- paste0(col, "_Rank")
+    if (!all(is.na(ranked_lineups[[col]]))) {
+      ranked_lineups[[rank_col_name]] <- rank(-ranked_lineups[[col]], ties.method = "min")
+    } else {
+      ranked_lineups[[rank_col_name]] <- NA
+    }
+  }
+  
+  return(ranked_lineups)
+}
+
+calculate_weighted_rank <- function(lineups_df, weights) {
+  # Available rank columns based on what exists in the data
+  available_rank_cols <- names(lineups_df)[grepl("_Rank$", names(lineups_df))]
+  
+  # Initialize weighted rank as 0
+  lineups_df$WeightedRank <- 0
+  lineups_df$WeightedScore <- 0
+  
+  # Calculate weighted rank score (lower is better since ranks are 1=best)
+  total_weight <- 0
+  
+  for (rank_col in available_rank_cols) {
+    # Extract the base metric name (remove "_Rank" suffix)
+    base_metric <- gsub("_Rank$", "", rank_col)
+    
+    # Check if we have a weight for this metric
+    weight_key <- switch(base_metric,
+                         "TotalEW" = "weight_totalew",
+                         "MedianScore" = "weight_medianscore", 
+                         "Score80th" = "weight_score80th",
+                         "Win6Pct" = "weight_win6pct",
+                         "Win5PlusPct" = "weight_win5pluspct",
+                         "Top1Count" = "weight_top1count",
+                         "Top2Count" = "weight_top2count", 
+                         "Top3Count" = "weight_top3count",
+                         "Top5Count" = "weight_top5count",
+                         NULL)
+    
+    if (!is.null(weight_key) && !is.null(weights[[weight_key]]) && weights[[weight_key]] > 0) {
+      weight_value <- weights[[weight_key]]
+      
+      # Add weighted rank to the total (multiply rank by weight)
+      lineups_df$WeightedScore <- lineups_df$WeightedScore + 
+        (lineups_df[[rank_col]] * weight_value)
+      
+      total_weight <- total_weight + weight_value
+    }
+  }
+  
+  # Normalize by total weight if any weights were applied
+  if (total_weight > 0) {
+    lineups_df$WeightedScore <- lineups_df$WeightedScore / total_weight
+  }
+  
+  # Calculate final weighted rank (1 = best weighted score)
+  lineups_df$WeightedRank <- rank(lineups_df$WeightedScore, ties.method = "min")
+  
+  return(lineups_df)
+}
+
+
 # Updated calculate_ew_metrics function that accounts for same-match constraints
 calculate_ew_metrics <- function(simulation_results, n_simulations, dk_data = NULL) {
   cat("Calculating EW metrics from simulation results...\n")
@@ -389,153 +464,77 @@ calculate_lineup_total_ew <- function(lineup_players, individual_ew_metrics, pla
 }
 
 
-calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
-  # Validate inputs before proceeding
-  if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
-    return(list(count = 0, thresholds = NULL))
+calculate_weighted_pool_stats <- function(optimal_lineups_ranked, top_x, excluded_players = NULL) {
+  # Validate inputs
+  if(is.null(optimal_lineups_ranked) || nrow(optimal_lineups_ranked) == 0) {
+    return(list(count = 0, rank_range = "N/A", ew_range = "N/A"))
   }
   
-  # Ensure we're working with a data.table
-  filtered_lineups <- tryCatch({
-    as.data.table(optimal_lineups)
-  }, error = function(e) {
-    return(NULL)
-  })
+  # Convert to data.table for efficiency
+  lineups_dt <- as.data.table(optimal_lineups_ranked)
   
-  if(is.null(filtered_lineups) || nrow(filtered_lineups) == 0) {
-    return(list(count = 0, thresholds = NULL))
+  # Sort by WeightedRank if available, otherwise by TotalEW
+  if("WeightedRank" %in% names(lineups_dt)) {
+    setorder(lineups_dt, WeightedRank)
+  } else if("TotalEW" %in% names(lineups_dt)) {
+    setorder(lineups_dt, -TotalEW)
   }
   
-  # Apply existing filters
-  # Apply Top1Count filter safely
-  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
-  }
+  # Take top X lineups
+  top_lineups <- head(lineups_dt, min(top_x, nrow(lineups_dt)))
   
-  # Apply Top2Count filter safely
-  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
-  }
-  
-  # Apply Top3Count filter safely
-  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
-  }
-  
-  # Apply Top5Count filter safely
-  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
-  }
-  
-  # Apply TotalEW filter safely
-  if (!is.null(filters$min_total_ew) && filters$min_total_ew > 0 && "TotalEW" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
-  }
-  
-  # Apply win percentage filters safely - UPDATED to use Win6Pct and Win5PlusPct
-  if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0 && "Win6Pct" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
-  }
-  
-  if (!is.null(filters$min_win5plus_pct) && filters$min_win5plus_pct > 0 && "Win5PlusPct" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Win5PlusPct >= filters$min_win5plus_pct]
-  }
-  
-  # Remove the Win4PlusPct filter since we don't have that column anymore
-  # if (!is.null(filters$min_win4plus_pct) && filters$min_win4plus_pct > 0 && "Win4PlusPct" %in% names(filtered_lineups)) {
-  #   filtered_lineups <- filtered_lineups[Win4PlusPct >= filters$min_win4plus_pct]
-  # }
-  
-  # Apply score filters safely
-  if (!is.null(filters$min_avg_score) && filters$min_avg_score > 0 && "AvgScore" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[AvgScore >= filters$min_avg_score]
-  }
-  
-  if (!is.null(filters$min_median_score) && filters$min_median_score > 0 && "MedianScore" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[MedianScore >= filters$min_median_score]
-  }
-  
-  if (!is.null(filters$min_score20th) && filters$min_score20th > 0 && "Score20th" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Score20th >= filters$min_score20th]
-  }
-  
-  if (!is.null(filters$min_score80th) && filters$min_score80th > 0 && "Score80th" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Score80th >= filters$min_score80th]
-  }
-  
-  # Apply player exclusion filter with better logic
-  if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
-    # Determine the player column naming pattern - check both formats
-    player_pattern <- if(any(grepl("^Name[1-6]$", names(filtered_lineups)))) {
-      "^Name[1-6]$"
-    } else if(any(grepl("^Player[1-6]$", names(filtered_lineups)))) {
-      "^Player[1-6]$"
+  # Apply player exclusion filter if specified
+  if (!is.null(excluded_players) && length(excluded_players) > 0) {
+    # Determine player column pattern
+    player_cols <- if(any(grepl("^Name[1-6]$", names(top_lineups)))) {
+      grep("^Name[1-6]$", names(top_lineups), value = TRUE)
     } else {
-      NULL
+      grep("^Player[1-6]$", names(top_lineups), value = TRUE)
     }
     
-    if(!is.null(player_pattern)) {
-      # Get player columns
-      player_cols <- grep(player_pattern, names(filtered_lineups), value = TRUE)
-      
-      if(length(player_cols) > 0) {
-        # For each excluded player, remove lineups containing that player
-        for(excluded_player in filters$excluded_players) {
-          # Create a condition that checks if the excluded player is NOT in any position
-          exclude_condition <- rep(TRUE, nrow(filtered_lineups))
-          
-          for(col in player_cols) {
-            exclude_condition <- exclude_condition & (filtered_lineups[[col]] != excluded_player)
-          }
-          
-          # Keep only lineups where the excluded player is not present
-          filtered_lineups <- filtered_lineups[exclude_condition]
+    if(length(player_cols) > 0) {
+      for(excluded_player in excluded_players) {
+        # Create condition to exclude lineups containing this player
+        exclude_condition <- rep(TRUE, nrow(top_lineups))
+        for(col in player_cols) {
+          exclude_condition <- exclude_condition & (top_lineups[[col]] != excluded_player)
         }
+        top_lineups <- top_lineups[exclude_condition]
       }
     }
   }
   
-  # Return early with count 0 if no lineups match the filters
-  if(nrow(filtered_lineups) == 0) {
-    return(list(count = 0, thresholds = NULL))
+  # Calculate statistics
+  final_count <- nrow(top_lineups)
+  
+  if(final_count == 0) {
+    return(list(count = 0, rank_range = "N/A", ew_range = "N/A"))
   }
   
-  # Calculate thresholds for display
-  thresholds <- list()
-  threshold_columns <- c("Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalEW", 
-                         "MedianScore", "Score80th")  # Updated to remove AvgScore and Score20th
+  # Rank range
+  if("WeightedRank" %in% names(top_lineups)) {
+    min_rank <- min(top_lineups$WeightedRank, na.rm = TRUE)
+    max_rank <- max(top_lineups$WeightedRank, na.rm = TRUE)
+    rank_range <- paste0("#", min_rank, " - #", max_rank)
+  } else {
+    rank_range <- "N/A"
+  }
   
-  for (col in threshold_columns) {
-    if (col %in% names(filtered_lineups) && !all(is.na(filtered_lineups[[col]]))) {
-      min_val <- min(filtered_lineups[[col]], na.rm = TRUE)
-      max_val <- max(filtered_lineups[[col]], na.rm = TRUE)
-      
-      # Use proper naming convention
-      if (col == "TotalEW") {
-        min_name <- "min_total_ew"
-        max_name <- "max_total_ew"
-      } else if (col == "MedianScore") {
-        min_name <- "min_median_score"
-        max_name <- "max_median_score"
-      } else if (col == "Score80th") {
-        min_name <- "min_score80th"
-        max_name <- "max_score80th"
-      } else {
-        min_name <- paste0("min_", sub("Count", "", tolower(col)))
-        max_name <- paste0("max_", sub("Count", "", tolower(col)))
-      }
-      
-      thresholds[[min_name]] <- min_val
-      thresholds[[max_name]] <- max_val
-    }
+  # EW range
+  if("TotalEW" %in% names(top_lineups)) {
+    min_ew <- min(top_lineups$TotalEW, na.rm = TRUE)
+    max_ew <- max(top_lineups$TotalEW, na.rm = TRUE)
+    ew_range <- paste0(round(min_ew, 2), " - ", round(max_ew, 2))
+  } else {
+    ew_range <- "N/A"
   }
   
   return(list(
-    count = nrow(filtered_lineups),
-    thresholds = thresholds
+    count = final_count,
+    rank_range = rank_range,
+    ew_range = ew_range
   ))
 }
-
 
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
@@ -1028,146 +1027,88 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
   return(as.data.frame(metrics_data))
 }
 
-generate_random_lineups <- function(optimal_lineups, filters) {
+generate_weighted_lineups <- function(optimal_lineups_ranked, top_x, num_lineups, excluded_players = NULL) {
   # Convert to data.table for efficiency
-  setDT(optimal_lineups)
-  filtered_lineups <- copy(optimal_lineups)
+  lineups_dt <- as.data.table(optimal_lineups_ranked)
   
-  # Determine player columns early in the function
-  player_cols <- if(any(grepl("^Name[1-6]$", names(filtered_lineups)))) {
-    grep("^Name[1-6]$", names(filtered_lineups), value = TRUE)
+  # Sort by WeightedRank if available, otherwise by TotalEW
+  if("WeightedRank" %in% names(lineups_dt)) {
+    setorder(lineups_dt, WeightedRank)
+  } else if("TotalEW" %in% names(lineups_dt)) {
+    setorder(lineups_dt, -TotalEW)
+  }
+  
+  # Take top X lineups to form the pool
+  pool_lineups <- head(lineups_dt, min(top_x, nrow(lineups_dt)))
+  
+  # Determine player column pattern
+  player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
+    grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
   } else {
-    grep("^Player[1-6]$", names(filtered_lineups), value = TRUE)
+    grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
   }
   
   if(length(player_cols) == 0) {
     stop("Could not find player columns in the lineup data")
   }
   
-  # Apply existing filters
-  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
-  }
-  
-  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
-  }
-  
-  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
-  }
-  
-  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
-  }
-  
-  if (!is.null(filters$min_total_ew) && filters$min_total_ew > 0) {
-    filtered_lineups <- filtered_lineups[TotalEW >= filters$min_total_ew]
-  }
-  
-  # UPDATED: Use Win6Pct and Win5PlusPct instead of Win6Count, etc.
-  if (!is.null(filters$min_win6_pct) && filters$min_win6_pct > 0) {
-    filtered_lineups <- filtered_lineups[Win6Pct >= filters$min_win6_pct]
-  }
-  
-  if (!is.null(filters$min_win5plus_pct) && filters$min_win5plus_pct > 0) {
-    filtered_lineups <- filtered_lineups[Win5PlusPct >= filters$min_win5plus_pct]
-  }
-  
-  
-  # Apply score filters
-  if (!is.null(filters$min_avg_score) && filters$min_avg_score > 0) {
-    filtered_lineups <- filtered_lineups[AvgScore >= filters$min_avg_score]
-  }
-  
-  if (!is.null(filters$min_median_score) && filters$min_median_score > 0) {
-    filtered_lineups <- filtered_lineups[MedianScore >= filters$min_median_score]
-  }
-  
-  if (!is.null(filters$min_score20th) && filters$min_score20th > 0) {
-    filtered_lineups <- filtered_lineups[Score20th >= filters$min_score20th]
-  }
-  
-  if (!is.null(filters$min_score80th) && filters$min_score80th > 0) {
-    filtered_lineups <- filtered_lineups[Score80th >= filters$min_score80th]
-  }
-  
   # Apply player exclusion filter
-  if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
-    if(length(player_cols) > 0) {
-      # For each excluded player, remove lineups containing that player
-      for(excluded_player in filters$excluded_players) {
-        # Create a condition that checks if the excluded player is NOT in any position
-        exclude_condition <- rep(TRUE, nrow(filtered_lineups))
-        
-        for(col in player_cols) {
-          exclude_condition <- exclude_condition & (filtered_lineups[[col]] != excluded_player)
-        }
-        
-        # Keep only lineups where the excluded player is not present
-        filtered_lineups <- filtered_lineups[exclude_condition]
+  if (!is.null(excluded_players) && length(excluded_players) > 0) {
+    for(excluded_player in excluded_players) {
+      # Create condition to exclude lineups containing this player
+      exclude_condition <- rep(TRUE, nrow(pool_lineups))
+      for(col in player_cols) {
+        exclude_condition <- exclude_condition & (pool_lineups[[col]] != excluded_player)
       }
+      pool_lineups <- pool_lineups[exclude_condition]
     }
   }
   
-  # Check if any lineups match filters
-  if (nrow(filtered_lineups) == 0) {
+  # Check if any lineups remain after filtering
+  if (nrow(pool_lineups) == 0) {
     return(NULL)
   }
   
-  # Prepare for tracking
-  all_players <- unique(unlist(filtered_lineups[, ..player_cols]))
-  player_counts <- setNames(numeric(length(all_players)), all_players)
-  
-  # Sample lineups using Top1Count as weight
-  weight_col <- "Top1Count"
-  selected_lineups <- data.table()
-  selected_indices <- integer(0)
-  
-  # Sampling with minimal attempt tracking
-  attempts <- 0
-  max_attempts <- filters$num_lineups * 10
-  
-  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
-    attempts <- attempts + 1
-    
-    # Available lineups
-    available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0) break
-    
-    # Sample based on weights
-    weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
-    
-    selected_idx <- tryCatch({
-      sample(available_indices, 1, prob = weights)
-    }, error = function(e) {
-      sample(available_indices, 1)
-    })
-    
-    # Add lineup immediately
-    selected_lineups <- rbind(selected_lineups, filtered_lineups[selected_idx])
-    selected_indices <- c(selected_indices, selected_idx)
-    
-    # Update player counts for exposure calculation
-    candidates_players <- unlist(filtered_lineups[selected_idx, ..player_cols])
-    player_counts[candidates_players] <- player_counts[candidates_players] + 1
+  # Sample lineups from the filtered pool
+  # Use inverse rank as weights (better ranks = higher probability)
+  if("WeightedRank" %in% names(pool_lineups)) {
+    # Convert ranks to weights (lower rank = higher weight)
+    max_rank <- max(pool_lineups$WeightedRank, na.rm = TRUE)
+    weights <- (max_rank + 1) - pool_lineups$WeightedRank
+  } else {
+    # Use TotalEW as weights directly
+    weights <- pool_lineups$TotalEW
   }
   
-  if (nrow(selected_lineups) == 0) return(NULL)
+  # Ensure weights are positive
+  weights <- pmax(weights, 0.1)
   
-  # Calculate exposure for attribute
+  # Sample lineups
+  sample_size <- min(num_lineups, nrow(pool_lineups))
+  selected_indices <- sample(1:nrow(pool_lineups), sample_size, replace = FALSE, prob = weights)
+  selected_lineups <- pool_lineups[selected_indices]
+  
+  # Prepare for exposure tracking
+  all_players <- unique(unlist(selected_lineups[, ..player_cols]))
+  player_counts <- setNames(numeric(length(all_players)), all_players)
+  
+  # Calculate player exposure
+  for(i in 1:nrow(selected_lineups)) {
+    lineup_players <- unlist(selected_lineups[i, ..player_cols])
+    player_counts[lineup_players] <- player_counts[lineup_players] + 1
+  }
+  
+  # Calculate exposure percentage
   final_exposure <- (player_counts / nrow(selected_lineups)) * 100
   attr(selected_lineups, "exposure") <- final_exposure
   
-  # Keep only needed columns - UPDATE to use new column names
-  keep_cols <- c(player_cols, "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-                 "TotalSalary", "TotalEW", "MedianScore", "Score80th")  # Updated column list
+  # Keep relevant columns for display
+  keep_cols <- c(player_cols, "WeightedRank", "TotalEW", "MedianScore", "Score80th", 
+                 "Win6Pct", "Win5PlusPct", "Top1Count", "TotalSalary")
   keep_cols <- intersect(keep_cols, names(selected_lineups))
   
   return(as.data.frame(selected_lineups[, ..keep_cols]))
 }
-
 
 
 find_similar_matches <- function(current_match, historical_data, n_matches = 50, cache = NULL) {
@@ -2380,15 +2321,87 @@ ui <- dashboardPage(
                   status = "primary",
                   solidHeader = TRUE,
                   
-                  # Always show a clear, prominent button regardless of simulation status
                   fluidRow(
                     column(6,
                            actionButton("run_dk_optimization", "Calculate Optimal Lineups",
                                         class = "btn-primary", 
                                         style = "width: 100%; margin-top: 10px; padding: 15px; font-size: 16px;")
                     )
-                  ),
-                  
+                  )
+                )
+              ),
+              
+              # Weighted Ranking Controls - only shown when lineups are available
+              conditionalPanel(
+                condition = "output.optimization_complete === 'true'",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "Weighted Ranking Controls",
+                    status = "info",
+                    solidHeader = TRUE,
+                    
+                    h4("Adjust weights for each metric (0 = ignore, higher = more important)"),
+                    
+                    fluidRow(
+                      column(3,
+                             sliderInput("weight_totalew", "TotalEW Weight:", 
+                                         min = 0, max = 10, value = 2,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_medianscore", "Median Score Weight:", 
+                                         min = 0, max = 10, value = 0,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_score80th", "80th %ile Score Weight:", 
+                                         min = 0, max = 10, value = 0,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_win6pct", "6-Win % Weight:", 
+                                         min = 0, max = 10, value = 1,  step = 1)
+                      )
+                    ),
+                    
+                    fluidRow(
+                      column(3,
+                             sliderInput("weight_win5pluspct", "5+ Win % Weight:", 
+                                         min = 0, max = 10, value = 1,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_top1count", "Top 1 Count Weight:", 
+                                         min = 0, max = 10, value = 1,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_top2count", "Top 2 Count Weight:", 
+                                         min = 0, max = 10, value = 0,  step = 1)
+                      ),
+                      column(3,
+                             sliderInput("weight_top3count", "Top 3 Count Weight:", 
+                                         min = 0, max = 10, value = 0,  step = 1)
+                      )
+                    ),
+                    
+                    fluidRow(
+                      column(3,
+                             sliderInput("weight_top5count", "Top 5 Count Weight:", 
+                                         min = 0, max = 10, value = 0, step = 1)  
+                      ),
+                      column(3,
+                             actionButton("apply_weights", "Apply Weights & Re-rank", 
+                                          class = "btn-info", 
+                                          style = "margin-top: 25px; width: 100%;")
+                      ),
+                      column(3,
+                             actionButton("reset_weights", "Reset to Defaults", 
+                                          class = "btn-warning", 
+                                          style = "margin-top: 25px; width: 100%;")
+                      )
+                    ),
+                    
+                    div(style = "margin-top: 15px;",
+                        verbatimTextOutput("weight_summary")
+                    )
+                  )
                 )
               ),
               
@@ -2427,71 +2440,41 @@ ui <- dashboardPage(
                 condition = "output.optimization_complete === 'true'",
                 fluidRow(
                   box(width = 12,
-                      title = "Lineup Filters",
-                      # Row 1: Top Count Filters
-                      fluidRow(
-                        column(3,
-                               sliderInput("min_top1_count", "Min Top 1 Count:", 
-                                           min = 0, max = 100, value = 0, step = 1)
-                        ),
-                        column(3,
-                               sliderInput("min_top2_count", "Min Top 2 Count:", 
-                                           min = 0, max = 100, value = 0, step = 1)
-                        ),
-                        column(3,
-                               sliderInput("min_top3_count", "Min Top 3 Count:", 
-                                           min = 0, max = 100, value = 0, step = 1)
-                        ),
-                        column(3,
-                               sliderInput("min_top5_count", "Min Top 5 Count:", 
-                                           min = 0, max = 100, value = 0, step = 1)
-                        )
-                      ),
-                      # Row 2: EW and Win Percentage Filters
-                      fluidRow(
-                        column(3,
-                               sliderInput("min_total_ew", "Min Total EW:", 
-                                           min = 0, max = 6, value = 0, step = 0.1)
-                        ),
-                        column(3,
-                               sliderInput("min_win6_pct", "Min 6-Win %:", 
-                                           min = 0, max = 100, value = 0, step = 0.1)
-                        ),
-                        column(3,
-                               sliderInput("min_win5plus_pct", "Min 5+ Win %:", 
-                                           min = 0, max = 100, value = 0, step = 0.1)
-                        )
-                      ),
-                      # Row 3: Score Filters
+                      title = "Lineup Selection Controls",
+                      status = "primary",
+                      solidHeader = TRUE,
+                      
+                      h4("Select lineups from the top-ranked pool using your weighted ranking"),
+                      
                       fluidRow(
                         column(4,
-                               sliderInput("min_median_score", "Min Median Score:", 
-                                           min = 0, max = 500, value = 0, step = 1)
+                               numericInput("top_lineups_pool", 
+                                            "Top X Lineups to Select From:", 
+                                            value = 500, 
+                                            min = 10, 
+                                            max = 10000, 
+                                            step = 10)
                         ),
                         column(4,
-                               sliderInput("min_score80th", "Min 80th %ile Score:", 
-                                           min = 0, max = 500, value = 0, step = 1)
-                        )
-                      ),
-                      # Row 4: Player Exclusion and Number of Lineups
-                      fluidRow(
-                        column(6,
+                               numericInput("num_lineups", 
+                                            "Number of Lineups to Generate:", 
+                                            value = 20, 
+                                            min = 1, 
+                                            max = 150)
+                        ),
+                        column(4,
                                selectizeInput("excluded_players", "Exclude Players:",
                                               choices = NULL,
                                               multiple = TRUE,
                                               options = list(plugins = list('remove_button')))
-                        ),
-                        column(6,
-                               numericInput("num_lineups", "Number of Lineups to Generate:", 
-                                            value = 20, min = 1, max = 150)
                         )
                       ),
-                      # Row 5: Pool Stats and Generate Button
+                      
                       fluidRow(
                         column(6,
                                div(class = "well well-sm",
-                                   h4("Filtered Pool Statistics:"),
-                                   textOutput("filtered_pool_size")
+                                   h4("Pool Statistics:"),
+                                   textOutput("weighted_pool_stats")
                                )
                         ),
                         column(6,
@@ -2504,7 +2487,13 @@ ui <- dashboardPage(
                                                   style = "width: 100%;")
                                )
                         )
-                      )
+                      ),
+                      
+                      br(),
+                      div(class = "alert alert-info",
+                          HTML("<strong>How it works:</strong> This system uses your weighted ranking from the Optimal Lineups tab. 
+                         Adjust the weights there first, then come here to select lineups from the top-ranked pool. 
+                         The higher the 'Top X Lineups' number, the more variety in your generated lineups."))
                   )
                 ),
                 fluidRow(
@@ -2535,6 +2524,7 @@ server <- function(input, output, session) {
     simulation_results = NULL,
     player_projections = NULL,
     dk_optimal_lineups = NULL,
+    dk_optimal_lineups_ranked = NULL,
     dk_player_exposure = NULL,
     dk_random_lineups = NULL,
     file_uploaded = FALSE,
@@ -2922,6 +2912,25 @@ server <- function(input, output, session) {
       
       # Store results
       rv$dk_optimal_lineups <- expanded_lineups
+      
+      # Calculate ranks for all metrics
+      rv$dk_optimal_lineups_ranked <- calculate_lineup_ranks(expanded_lineups)
+      
+      # Apply initial weighted ranking with default weights
+      default_weights <- list(
+        weight_totalew = 2,           
+        weight_medianscore = 0,       
+        weight_score80th = 0,         
+        weight_win6pct = 1,           
+        weight_win5pluspct = 1,       
+        weight_top1count = 1,        
+        weight_top2count = 0,         
+        weight_top3count = 0,         
+        weight_top5count = 0      
+      )
+      
+      rv$dk_optimal_lineups_ranked <- calculate_weighted_rank(rv$dk_optimal_lineups_ranked, default_weights)
+      
       rv$optimization_complete <- TRUE
       
       # Calculate initial player exposure
@@ -3236,14 +3245,17 @@ server <- function(input, output, session) {
       layout(margin = list(l = 120)) # Add left margin for player names
   })
   
-  # Replace your existing output$optimal_lineups_table with this updated version:
   
-  # Replace your entire output$optimal_lineups_table with this robust version:
-  
-  # Updated output$optimal_lineups_table for the server section
   output$optimal_lineups_table <- renderDT({
+    # Use ranked data if available, otherwise fall back to unranked
+    lineup_data <- if (!is.null(rv$dk_optimal_lineups_ranked)) {
+      rv$dk_optimal_lineups_ranked
+    } else {
+      rv$dk_optimal_lineups
+    }
+    
     # Validate required data
-    if (is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
+    if (is.null(lineup_data) || nrow(lineup_data) == 0) {
       return(datatable(
         data.frame(Message = "No optimal lineups available. Click 'Calculate Optimal Lineups' button to generate lineups."),
         options = list(dom = "t", ordering = FALSE),
@@ -3253,7 +3265,7 @@ server <- function(input, output, session) {
     
     # Get lineup data and ensure it's a data.frame
     lineups_df <- tryCatch({
-      as.data.frame(rv$dk_optimal_lineups)
+      as.data.frame(lineup_data)
     }, error = function(e) {
       return(data.frame(Message = paste("Error converting lineup data:", e$message)))
     })
@@ -3267,9 +3279,6 @@ server <- function(input, output, session) {
       ))
     }
     
-    # Debug: Show what columns we actually have
-    cat("Available columns:", paste(names(lineups_df), collapse = ", "), "\n")
-    
     # Determine the player column naming pattern used
     player_cols <- character(0)
     if (any(grepl("^Name[1-6]$", names(lineups_df)))) {
@@ -3278,19 +3287,36 @@ server <- function(input, output, session) {
       player_cols <- grep("^Player[1-6]$", names(lineups_df), value = TRUE)
     }
     
-    # Select columns for display - UPDATED for new column structure
-    potential_display_cols <- c(
-      player_cols,
-      "TotalEW",
-      "MedianScore", "Score80th",  # Updated: removed AvgScore and Score20th
-      "TotalSalary", 
-      "Win6Pct", "Win5PlusPct",   # Updated: use new win percentage columns
-      "Top1Count", "Top2Count", "Top3Count", "Top5Count"
-    )
+    # Select columns for display - include both values and ranks
+    base_metric_cols <- c("TotalEW", "MedianScore", "Score80th", "Win6Pct", "Win5PlusPct",
+                          "Top1Count", "Top2Count", "Top3Count", "Top5Count")
+    
+    # Build display columns: players, then alternating metric and rank
+    display_cols <- player_cols
+    
+    # Add WeightedRank first if it exists
+    if ("WeightedRank" %in% names(lineups_df)) {
+      display_cols <- c(display_cols, "WeightedRank")
+    }
+    
+    # Add metric and rank pairs
+    for (metric in base_metric_cols) {
+      if (metric %in% names(lineups_df)) {
+        display_cols <- c(display_cols, metric)
+        rank_col <- paste0(metric, "_Rank")
+        if (rank_col %in% names(lineups_df)) {
+          display_cols <- c(display_cols, rank_col)
+        }
+      }
+    }
+    
+    # Add TotalSalary at the end
+    if ("TotalSalary" %in% names(lineups_df)) {
+      display_cols <- c(display_cols, "TotalSalary")
+    }
     
     # Only use columns that actually exist in the data
-    display_cols <- intersect(potential_display_cols, names(lineups_df))
-    cat("Display columns:", paste(display_cols, collapse = ", "), "\n")
+    display_cols <- intersect(display_cols, names(lineups_df))
     
     # Ensure we have some columns to display
     if (length(display_cols) == 0) {
@@ -3304,12 +3330,12 @@ server <- function(input, output, session) {
     # Use the selected columns from the data frame
     display_data <- lineups_df[, display_cols, drop = FALSE]
     
-    # Sort the data safely
+    # Sort by WeightedRank if available, otherwise by TotalEW
     tryCatch({
-      if ("TotalEW" %in% names(display_data) && "Top1Count" %in% names(display_data)) {
+      if ("WeightedRank" %in% names(display_data)) {
+        display_data <- display_data[order(display_data$WeightedRank), ]
+      } else if ("TotalEW" %in% names(display_data) && "Top1Count" %in% names(display_data)) {
         display_data <- display_data[order(-display_data$TotalEW, -display_data$Top1Count), ]
-      } else if ("Top1Count" %in% names(display_data) && "Top5Count" %in% names(display_data)) {
-        display_data <- display_data[order(-display_data$Top1Count, -display_data$Top5Count), ]
       } else if ("Top1Count" %in% names(display_data)) {
         display_data <- display_data[order(-display_data$Top1Count), ]
       }
@@ -3330,9 +3356,7 @@ server <- function(input, output, session) {
       rownames = FALSE
     )
     
-    # Apply formatting only for columns that exist - use safer checks
-    
-    # Format TotalEW if it exists
+    # Apply formatting for regular metrics (same as before)
     totalew_exists <- "TotalEW" %in% names(display_data)
     if (totalew_exists) {
       dt <- tryCatch({
@@ -3347,47 +3371,133 @@ server <- function(input, output, session) {
             fontWeight = styleInterval(3.0, c("normal", "bold"))
           )
       }, error = function(e) {
-        cat("TotalEW formatting error:", e$message, "\n")
         dt
       })
     }
     
-    # Format score columns if they exist - UPDATED
+    # Format rank columns with different styling
+    rank_cols_available <- grep("_Rank$", names(display_data), value = TRUE)
+    if (length(rank_cols_available) > 0) {
+      dt <- tryCatch({
+        dt %>% 
+          formatStyle(
+            rank_cols_available,
+            backgroundColor = styleInterval(
+              c(10, 25, 50, 100), 
+              c("#d4edd4", "#e8f5e8", "#f5f5f5", "#ffe6e6", "#ffcccc")
+            ),
+            color = styleInterval(
+              c(10, 50), 
+              c("#2e7d32", "#666666", "#c62828")
+            ),
+            fontWeight = styleInterval(25, c("bold", "normal"))
+          )
+      }, error = function(e) {
+        dt
+      })
+    }
+    
+    # Special formatting for WeightedRank
+    if ("WeightedRank" %in% names(display_data)) {
+      dt <- tryCatch({
+        dt %>% 
+          formatStyle(
+            "WeightedRank",
+            backgroundColor = styleInterval(
+              c(5, 15, 30, 60), 
+              c("#ffd700", "#ffeb3b", "#fff9c4", "#f5f5f5", "#ffffff")
+            ),
+            fontWeight = "bold",
+            color = "#1976d2"
+          )
+      }, error = function(e) {
+        dt
+      })
+    }
+    
+    # Apply other formatting (scores, percentages, salary)
     score_cols_available <- intersect(c("MedianScore", "Score80th"), names(display_data))
     if (length(score_cols_available) > 0) {
       dt <- tryCatch({
         dt %>% formatRound(score_cols_available, 1)
       }, error = function(e) {
-        cat("Score formatting error:", e$message, "\n")
         dt
       })
     }
     
-    # Format win percentages if they exist - UPDATED
     win_pct_cols_available <- intersect(c("Win6Pct", "Win5PlusPct"), names(display_data))
     if (length(win_pct_cols_available) > 0) {
       dt <- tryCatch({
         dt %>% formatRound(win_pct_cols_available, 2)
       }, error = function(e) {
-        cat("Win percentage formatting error:", e$message, "\n")
         dt
       })
     }
     
-    # Format salary if present
     salary_exists <- "TotalSalary" %in% names(display_data)
     if (salary_exists) {
       dt <- tryCatch({
         dt %>% formatCurrency("TotalSalary", "$", digits = 0)
       }, error = function(e) {
-        cat("Salary formatting error:", e$message, "\n")
         dt
       })
     }
     
-
-    
     return(dt)
+  })
+  
+  
+
+  # Observer for applying weights
+  observeEvent(input$apply_weights, {
+    req(rv$dk_optimal_lineups_ranked)
+    
+    # Create weights list from input values
+    weights <- list(
+      weight_totalew = input$weight_totalew,
+      weight_medianscore = input$weight_medianscore,
+      weight_score80th = input$weight_score80th,
+      weight_win6pct = input$weight_win6pct,
+      weight_win5pluspct = input$weight_win5pluspct,
+      weight_top1count = input$weight_top1count,
+      weight_top2count = input$weight_top2count,
+      weight_top3count = input$weight_top3count,
+      weight_top5count = input$weight_top5count
+    )
+    
+    # Calculate weighted rank
+    rv$dk_optimal_lineups_ranked <- calculate_weighted_rank(rv$dk_optimal_lineups_ranked, weights)
+    
+    showNotification("Weighted ranking applied successfully!", type = "message")
+  })
+  
+
+  observeEvent(input$reset_weights, {
+    updateSliderInput(session, "weight_totalew", value = 2)      # Changed from 3 to 2
+    updateSliderInput(session, "weight_medianscore", value = 0)  # Changed from 2 to 0
+    updateSliderInput(session, "weight_score80th", value = 0)    # Changed from 2 to 0
+    updateSliderInput(session, "weight_win6pct", value = 1)      # Keep at 1
+    updateSliderInput(session, "weight_win5pluspct", value = 1)  # Keep at 1
+    updateSliderInput(session, "weight_top1count", value = 1)    # Changed from 2 to 1
+    updateSliderInput(session, "weight_top2count", value = 0)    # Changed from 1 to 0
+    updateSliderInput(session, "weight_top3count", value = 0)    # Changed from 1 to 0
+    updateSliderInput(session, "weight_top5count", value = 0)    # Changed from 0.5 to 0
+    
+    showNotification("Weights reset to defaults", type = "message")
+  })
+  
+  
+  # Add weight summary output
+  output$weight_summary <- renderText({
+    total_weight <- input$weight_totalew + input$weight_medianscore + input$weight_score80th + 
+      input$weight_win6pct + input$weight_win5pluspct + input$weight_top1count + 
+      input$weight_top2count + input$weight_top3count + input$weight_top5count
+    
+    paste("Total Weight:", round(total_weight, 1), 
+          "| TotalEW:", round((input$weight_totalew/total_weight)*100, 1), "%",
+          "| Scores:", round(((input$weight_medianscore + input$weight_score80th)/total_weight)*100, 1), "%",
+          "| Wins:", round(((input$weight_win6pct + input$weight_win5pluspct)/total_weight)*100, 1), "%",
+          "| Counts:", round(((input$weight_top1count + input$weight_top2count + input$weight_top3count + input$weight_top5count)/total_weight)*100, 1), "%")
   })
   
   # Lineup count thresholds
@@ -3417,195 +3527,168 @@ server <- function(input, output, session) {
     )
   })
   
-  output$filtered_pool_size <- renderText({
-    req(rv$dk_optimal_lineups)
+  output$weighted_pool_stats <- renderText({
+    req(rv$dk_optimal_lineups_ranked)
     
-    # Create filters from slider values
-    filters <- list(
-      min_top1_count = input$min_top1_count,
-      min_top2_count = input$min_top2_count,
-      min_top3_count = input$min_top3_count,
-      min_top5_count = input$min_top5_count,
-      min_total_ew = input$min_total_ew,
-      min_win6_pct = input$min_win6_pct,
-      min_win5plus_pct = input$min_win5plus_pct,
-      min_median_score = input$min_median_score,
-      min_score80th = input$min_score80th,
-      excluded_players = input$excluded_players
+    stats <- calculate_weighted_pool_stats(
+      rv$dk_optimal_lineups_ranked, 
+      input$top_lineups_pool,
+      input$excluded_players
     )
     
-    # Calculate stats
-    stats <- calculate_filtered_pool_stats(rv$dk_optimal_lineups, filters)
-    
-    paste("Number of lineups in filtered pool:", stats$count)
+    paste0("Pool Size: ", stats$count, " lineups | ",
+           "Rank Range: ", stats$rank_range, " | ",
+           "EW Range: ", stats$ew_range)
   })
   
-  observeEvent(rv$dk_optimal_lineups, {
-    req(rv$dk_optimal_lineups)
+
+  observeEvent(rv$dk_optimal_lineups_ranked, {
+    req(rv$dk_optimal_lineups_ranked)
     
-    if (!is.null(rv$dk_optimal_lineups)) {
-      # Update Top Count sliders based on actual data
-      updateSliderInput(session, "min_top1_count",
-                        min = min(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE), 
-                        max = max(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE), 
-                        value = min(rv$dk_optimal_lineups$Top1Count, na.rm = TRUE))
-      
-      updateSliderInput(session, "min_top2_count",
-                        min = min(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE), 
-                        max = max(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE), 
-                        value = min(rv$dk_optimal_lineups$Top2Count, na.rm = TRUE))
-      
-      updateSliderInput(session, "min_top3_count",
-                        min = min(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE), 
-                        max = max(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE), 
-                        value = min(rv$dk_optimal_lineups$Top3Count, na.rm = TRUE))
-      
-      updateSliderInput(session, "min_top5_count",
-                        min = min(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE), 
-                        max = max(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE), 
-                        value = min(rv$dk_optimal_lineups$Top5Count, na.rm = TRUE))
-      
-      # Update TotalEW slider if the column exists
-      if ("TotalEW" %in% names(rv$dk_optimal_lineups)) {
-        ew_min <- min(rv$dk_optimal_lineups$TotalEW, na.rm = TRUE)
-        ew_max <- max(rv$dk_optimal_lineups$TotalEW, na.rm = TRUE)
-        updateSliderInput(session, "min_total_ew",
-                          min = round(ew_min, 2), 
-                          max = round(ew_max, 2), 
-                          value = round(ew_min, 2),
-                          step = 0.01)
+    if (!is.null(rv$dk_optimal_lineups_ranked)) {
+      # Get unique players from all lineups
+      player_cols <- grep("^Name[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
+      if(length(player_cols) == 0) {
+        player_cols <- grep("^Player[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
       }
       
-      # Update Win6Pct slider if the column exists
-      if ("Win6Pct" %in% names(rv$dk_optimal_lineups)) {
-        win6_min <- min(rv$dk_optimal_lineups$Win6Pct, na.rm = TRUE)
-        win6_max <- max(rv$dk_optimal_lineups$Win6Pct, na.rm = TRUE)
-        updateSliderInput(session, "min_win6_pct",
-                          min = round(win6_min, 2), 
-                          max = round(win6_max, 2), 
-                          value = round(win6_min, 2),
-                          step = 0.01)
+      all_players <- c()
+      for(col in player_cols) {
+        all_players <- c(all_players, rv$dk_optimal_lineups_ranked[[col]])
       }
+      all_players <- unique(all_players[!is.na(all_players)])
       
-      # Update Win5PlusPct slider if the column exists
-      if ("Win5PlusPct" %in% names(rv$dk_optimal_lineups)) {
-        win5_min <- min(rv$dk_optimal_lineups$Win5PlusPct, na.rm = TRUE)
-        win5_max <- max(rv$dk_optimal_lineups$Win5PlusPct, na.rm = TRUE)
-        updateSliderInput(session, "min_win5plus_pct",
-                          min = round(win5_min, 2), 
-                          max = round(win5_max, 2), 
-                          value = round(win5_min, 2),
-                          step = 0.01)
-      }
+      # Calculate pool exposure for each player (from top 1000 lineups)
+      top_pool <- head(rv$dk_optimal_lineups_ranked, 1000)
+      pool_exposure <- sapply(all_players, function(player) {
+        player_appears <- logical(nrow(top_pool))
+        for(col in player_cols) {
+          player_appears <- player_appears | (top_pool[[col]] == player)
+        }
+        exposure_pct <- (sum(player_appears) / nrow(top_pool)) * 100
+        return(exposure_pct)
+      })
       
-      # Update MedianScore slider if the column exists
-      if ("MedianScore" %in% names(rv$dk_optimal_lineups)) {
-        median_min <- min(rv$dk_optimal_lineups$MedianScore, na.rm = TRUE)
-        median_max <- max(rv$dk_optimal_lineups$MedianScore, na.rm = TRUE)
-        updateSliderInput(session, "min_median_score",
-                          min = round(median_min, 1), 
-                          max = round(median_max, 1), 
-                          value = round(median_min, 1),
-                          step = 0.5)
-      }
+      # Create labels with pool exposure percentages
+      player_labels <- sapply(all_players, function(player) {
+        exposure <- pool_exposure[player]
+        sprintf("%s (%.1f%%)", player, exposure)
+      })
       
-      # Update Score80th slider if the column exists
-      if ("Score80th" %in% names(rv$dk_optimal_lineups)) {
-        score80_min <- min(rv$dk_optimal_lineups$Score80th, na.rm = TRUE)
-        score80_max <- max(rv$dk_optimal_lineups$Score80th, na.rm = TRUE)
-        updateSliderInput(session, "min_score80th",
-                          min = round(score80_min, 1), 
-                          max = round(score80_max, 1), 
-                          value = round(score80_min, 1),
-                          step = 0.5)
-      }
+      # Sort by exposure descending
+      sorted_indices <- order(pool_exposure, decreasing = TRUE)
+      sorted_players <- all_players[sorted_indices]
+      sorted_labels <- player_labels[sorted_indices]
+      
+      # Update the selectInput
+      updateSelectizeInput(
+        session, 
+        "excluded_players",
+        choices = setNames(sorted_players, sorted_labels),
+        selected = NULL
+      )
+      
+      # Update the max value for top_lineups_pool
+      updateNumericInput(
+        session,
+        "top_lineups_pool",
+        max = nrow(rv$dk_optimal_lineups_ranked),
+        value = min(500, nrow(rv$dk_optimal_lineups_ranked))
+      )
     }
   })
   
-  observeEvent(input$generate_lineups, {
-    req(rv$dk_optimal_lineups)
+  observe({
+    req(rv$dk_optimal_lineups_ranked)
     
-    # Create filters from slider values
-    filters <- list(
-      min_top1_count = input$min_top1_count,
-      min_top2_count = input$min_top2_count,
-      min_top3_count = input$min_top3_count,
-      min_top5_count = input$min_top5_count,
-      min_total_ew = input$min_total_ew,
-      min_win6_pct = input$min_win6_pct,
-      min_win5plus_pct = input$min_win5plus_pct,
-      min_median_score = input$min_median_score,
-      min_score80th = input$min_score80th,
-      excluded_players = input$excluded_players,
-      num_lineups = input$num_lineups
-    )
+    # This will trigger pool stats update when top_lineups_pool or excluded_players change
+    input$top_lineups_pool
+    input$excluded_players
+    
+    # The output$weighted_pool_stats will automatically update due to this dependency
+  })
+  
+  observeEvent(input$generate_lineups, {
+    req(rv$dk_optimal_lineups_ranked)
     
     # Show progress
-    withProgress(message = 'Generating lineups...', value = 0, {
-      # FIRST: Apply filters to get the filtered pool
-      filtered_optimal_lineups <- apply_lineup_filters(rv$dk_optimal_lineups, filters)
+    withProgress(message = 'Generating lineups from weighted pool...', value = 0, {
       
-      # Generate random lineups from filtered pool
-      rv$dk_random_lineups <- generate_random_lineups(rv$dk_optimal_lineups, filters)
+      # Generate lineups using weighted selection
+      rv$dk_random_lineups <- generate_weighted_lineups(
+        rv$dk_optimal_lineups_ranked,
+        input$top_lineups_pool,
+        input$num_lineups,
+        input$excluded_players
+      )
       
-      # Update player exposure data using FILTERED pool for Pool_Exposure
+      # Update player exposure data
       if(!is.null(rv$dk_random_lineups)) {
-        rv$dk_player_exposure <- calculate_player_exposure(
-          filtered_optimal_lineups,  # Use FILTERED lineups for Pool_Exposure calculation
-          rv$player_projections,
-          rv$dk_random_lineups      # Generated lineups for Randomized_Exposure
+        # Get the filtered pool for Pool_Exposure calculation
+        pool_stats <- calculate_weighted_pool_stats(
+          rv$dk_optimal_lineups_ranked, 
+          input$top_lineups_pool,
+          input$excluded_players
         )
-      } else {
-        # If no random lineups, still calculate exposure for filtered pool only
+        
+        # Calculate exposure from the actual top X pool (before player exclusions)
+        pool_lineups <- head(rv$dk_optimal_lineups_ranked, input$top_lineups_pool)
+        
         rv$dk_player_exposure <- calculate_player_exposure(
-          filtered_optimal_lineups,  # Use FILTERED lineups
+          pool_lineups,  # Use the full top X pool for Pool_Exposure
           rv$player_projections,
-          NULL
+          rv$dk_random_lineups  # Generated lineups for Randomized_Exposure
         )
-      }
-      
-      # Show message based on result
-      if(is.null(rv$dk_random_lineups)) {
+        
         showModal(modalDialog(
-          title = "Error",
-          "No lineups match the selected filters. Try adjusting your criteria.",
+          title = "Success",
+          sprintf("Generated %d lineups from top %d ranked lineups!", 
+                  nrow(rv$dk_random_lineups), input$top_lineups_pool),
           easyClose = TRUE
         ))
       } else {
         showModal(modalDialog(
-          title = "Success",
-          sprintf("Generated %d lineups successfully!", nrow(rv$dk_random_lineups)),
+          title = "Error",
+          "No lineups available after applying player exclusions. Try reducing exclusions or increasing the pool size.",
           easyClose = TRUE
         ))
       }
     })
   })
   
-  # Reactive observer to update player exposure when filters change
   observe({
-    req(rv$dk_optimal_lineups)
+    req(rv$dk_optimal_lineups_ranked)
     
-    # Create filters from current slider values
-    filters <- list(
-      min_top1_count = input$min_top1_count,
-      min_top2_count = input$min_top2_count,
-      min_top3_count = input$min_top3_count,
-      min_top5_count = input$min_top5_count,
-      min_total_ew = input$min_total_ew,
-      min_win6_pct = input$min_win6_pct,
-      min_win5plus_pct = input$min_win5plus_pct,
-      min_median_score = input$min_median_score,
-      min_score80th = input$min_score80th,
-      excluded_players = input$excluded_players
-    )
+    # This will trigger whenever top_lineups_pool or excluded_players change
+    input$top_lineups_pool
+    input$excluded_players
     
-    # Apply filters to get the filtered pool
-    filtered_optimal_lineups <- apply_lineup_filters(rv$dk_optimal_lineups, filters)
+    # Calculate exposure from the current top X pool (before player exclusions)
+    pool_lineups <- head(rv$dk_optimal_lineups_ranked, input$top_lineups_pool)
     
-    # Update player exposure using filtered pool for Pool_Exposure
-    # Keep existing random lineups if they exist
+    # Apply player exclusion filter to the pool if needed
+    if (!is.null(input$excluded_players) && length(input$excluded_players) > 0) {
+      # Determine player column pattern
+      player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
+        grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
+      } else {
+        grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
+      }
+      
+      if(length(player_cols) > 0) {
+        for(excluded_player in input$excluded_players) {
+          exclude_condition <- rep(TRUE, nrow(pool_lineups))
+          for(col in player_cols) {
+            exclude_condition <- exclude_condition & (pool_lineups[[col]] != excluded_player)
+          }
+          pool_lineups <- pool_lineups[exclude_condition, ]
+        }
+      }
+    }
+    
+    # Update player exposure using the current pool
     rv$dk_player_exposure <- calculate_player_exposure(
-      filtered_optimal_lineups,  # Use FILTERED lineups for Pool_Exposure
+      pool_lineups,             # Use current top X pool (with exclusions) for Pool_Exposure
       rv$player_projections,
       rv$dk_random_lineups      # Keep existing generated lineups (may be NULL)
     )
@@ -3704,25 +3787,30 @@ server <- function(input, output, session) {
     }
   )
   
-  # Replace your existing output$download_optimal_lineups with this updated version:
-  
   output$download_optimal_lineups <- downloadHandler(
     filename = function() {
-      paste("tennis_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+      paste("tennis_optimal_lineups_with_ranks_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
     },
     content = function(file) {
-      if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
-        # Create an empty dataframe with appropriate columns
-        empty_data <- data.frame(matrix(ncol = DK_ROSTER_SIZE + 10, nrow = 0))
-        colnames(empty_data) <- c(paste0("Player", 1:DK_ROSTER_SIZE), "TotalEW", "AvgScore", "MedianScore", "Score20th", "Score80th", "Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalSalary")
+      # Use ranked data if available
+      lineup_data <- if (!is.null(rv$dk_optimal_lineups_ranked)) {
+        rv$dk_optimal_lineups_ranked
+      } else {
+        rv$dk_optimal_lineups
+      }
+      
+      if(is.null(lineup_data) || nrow(lineup_data) == 0) {
+        empty_data <- data.frame(matrix(ncol = DK_ROSTER_SIZE + 15, nrow = 0))
+        colnames(empty_data) <- c(paste0("Player", 1:DK_ROSTER_SIZE), "WeightedRank", "TotalEW", "TotalEW_Rank", 
+                                  "MedianScore", "MedianScore_Rank", "Score80th", "Score80th_Rank", 
+                                  "Win6Pct", "Win6Pct_Rank", "Top1Count", "Top1Count_Rank", "TotalSalary")
         write.csv(empty_data, file, row.names = FALSE)
         return()
       }
       
-      # Get optimal lineup data
-      lineups_df <- as.data.frame(rv$dk_optimal_lineups)
+      lineups_df <- as.data.frame(lineup_data)
       
-      # Determine the naming pattern used in the data
+      # Determine player column pattern
       player_pattern <- if(any(grepl("^Name[1-6]$", names(lineups_df)))) {
         "^Name[1-6]$"
       } else if(any(grepl("^Player[1-6]$", names(lineups_df)))) {
@@ -3731,25 +3819,17 @@ server <- function(input, output, session) {
         stop("Could not find player columns in lineup data")
       }
       
-      # Find player columns
       player_cols <- grep(player_pattern, names(lineups_df), value = TRUE)
       
-      # Create a copy for exporting
-      lineups_for_export <- lineups_df %>% 
-        filter(Top1Count > 0)
+      # Include all metric and rank columns for download
+      metric_cols <- c("TotalEW", "MedianScore", "Score80th", "Win6Pct", "Win5PlusPct",
+                       "Top1Count", "Top2Count", "Top3Count", "Top5Count")
+      rank_cols <- paste0(metric_cols, "_Rank")
       
-      # Select columns for download - INCLUDE ALL NEW FIELDS
-      display_cols <- c(
-        player_cols,
-        "TotalEW", "AvgScore", "MedianScore", "Score20th", "Score80th",  # NEW: Include all score fields
-        "Win6Pct", "Win5PlusPct", "Win4PlusPct",  # NEW: Include win percentages
-        "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-        "TotalSalary"
-      )
+      download_cols <- c(player_cols, "WeightedRank", metric_cols, rank_cols, "TotalSalary")
+      download_cols <- intersect(download_cols, names(lineups_df))
       
-      # Intersect with available columns
-      display_cols <- intersect(display_cols, names(lineups_df))
-      lineups_for_export <- lineups_df[, display_cols, drop = FALSE]
+      lineups_for_export <- lineups_df[, download_cols, drop = FALSE]
       
       # Rename Name columns to Player columns for DraftKings format
       if(any(grepl("^Name[1-6]$", names(lineups_for_export)))) {
@@ -3762,33 +3842,30 @@ server <- function(input, output, session) {
         }
       }
       
-      # ID formatting function - retrieve player ID from dk_data based on name
+      # Add player IDs (existing logic)
       get_player_id <- function(name) {
         player_info <- rv$dk_data[rv$dk_data$Name == name, ]
         if (nrow(player_info) > 0 && "ID" %in% names(player_info)) {
           return(paste0(name, " (", player_info$ID[1], ")"))
         } else {
-          return(name)  # Return just the name if ID not found
+          return(name)
         }
       }
       
-      # Append IDs to player names
       player_cols <- grep("^Player[1-6]$", names(lineups_for_export), value = TRUE)
       for (col in player_cols) {
         if (col %in% names(lineups_for_export)) {
-          # Create a new column with the name + ID format
           lineups_for_export[[col]] <- sapply(lineups_for_export[[col]], get_player_id)
         }
       }
       
-      # Sort by TotalEW if available, otherwise by Top1Count
-      if("TotalEW" %in% names(lineups_for_export)) {
-        lineups_for_export <- lineups_for_export[order(-lineups_for_export$TotalEW, -lineups_for_export$Top1Count), ]
-      } else if("Top1Count" %in% names(lineups_for_export)) {
-        lineups_for_export <- lineups_for_export[order(-lineups_for_export$Top1Count), ]
+      # Sort by WeightedRank if available
+      if("WeightedRank" %in% names(lineups_for_export)) {
+        lineups_for_export <- lineups_for_export[order(lineups_for_export$WeightedRank), ]
+      } else if("TotalEW" %in% names(lineups_for_export)) {
+        lineups_for_export <- lineups_for_export[order(-lineups_for_export$TotalEW), ]
       }
       
-      # Write to CSV file
       write.csv(lineups_for_export, file, row.names = FALSE)
     },
     contentType = "text/csv"
