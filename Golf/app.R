@@ -562,7 +562,7 @@ generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = N
                        "Player5",
                        "Player6")
       
-      early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
+      early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
         player_waves <- wave_lookup[lineup]
         sum(player_waves == "EarlyLate", na.rm = TRUE)
       })
@@ -1591,49 +1591,49 @@ server <- function(input, output, session) {
   
   
   observeEvent(input$run_fd_mme_optimization, {
-    req(rv$mme_data)
+  req(rv$mme_data)
+  
+  withProgress(message = 'Generating FanDuel MME lineups...', value = 0, {
+    # Start timing for FD
+    fd_start_time <- Sys.time()
+    cat("\n=== MME FANDUEL LINEUP GENERATION STARTED ===\n")
+    cat("Start time:",
+        format(fd_start_time, "%Y-%m-%d %H:%M:%S"),
+        "\n")
+    cat("Target lineups: 15,000\n")
+    cat("Players available:", nrow(rv$mme_data), "\n\n")
     
-    withProgress(message = 'Generating FanDuel MME lineups...', value = 0, {
-      # Start timing for FD
-      fd_start_time <- Sys.time()
-      cat("\n=== MME FANDUEL LINEUP GENERATION STARTED ===\n")
-      cat("Start time:",
-          format(fd_start_time, "%Y-%m-%d %H:%M:%S"),
-          "\n")
-      cat("Target lineups: 15,000\n")
-      cat("Players available:", nrow(rv$mme_data), "\n\n")
-      
-      rv$fd_mme_lineups <- generate_mme_lineups(rv$mme_data, FD_SALARY_CAP, 15000, "fd")
-      
-      fd_end_time <- Sys.time()
-      fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
-      cat("=== FANDUEL COMPLETED ===\n")
-      cat("Total time:", sprintf("%.2f minutes", as.numeric(fd_elapsed)), "\n")
-      cat("Generated:", ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)), "lineups\n\n")
-      
-      rv$fd_mme_complete <- TRUE
-      
-      # Update excluded golfers dropdown
-      if (!is.null(rv$mme_data)) {
-        all_golfers <- unique(rv$mme_data$Golfer)
-        updateSelectizeInput(session,
-                             "fd_excluded_golfers",
-                             choices = all_golfers,
-                             selected = NULL)
-      }
-      
-      # Show success message
-      showModal(modalDialog(
-        title = "Success",
-        sprintf(
-          "Generated %d FanDuel MME lineups for filtering!\n\nTotal time: %.2f minutes",
-          ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)),
-          as.numeric(fd_elapsed)
-        ),
-        easyClose = TRUE
-      ))
-    })
+    rv$fd_mme_lineups <- generate_mme_lineups(rv$mme_data, FD_SALARY_CAP, 15000, "fd")
+    
+    fd_end_time <- Sys.time()
+    fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
+    cat("=== FANDUEL COMPLETED ===\n")
+    cat("Total time:", sprintf("%.2f minutes", as.numeric(fd_elapsed)), "\n")
+    cat("Generated:", ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)), "lineups\n\n")
+    
+    rv$fd_mme_complete <- TRUE
+    
+    # Update excluded golfers dropdown
+    if (!is.null(rv$mme_data)) {
+      all_golfers <- unique(rv$mme_data$Golfer)
+      updateSelectizeInput(session,
+                           "fd_excluded_golfers",
+                           choices = all_golfers,
+                           selected = NULL)
+    }
+    
+    # Show success message
+    showModal(modalDialog(
+      title = "Success",
+      sprintf(
+        "Generated %d FanDuel MME lineups for filtering!\n\nTotal time: %.2f minutes",
+        ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)),
+        as.numeric(fd_elapsed)
+      ),
+      easyClose = TRUE
+    ))
   })
+})
   
   # Update DK slider ranges when MME lineups are generated
   observeEvent(rv$dk_mme_lineups, {
@@ -2013,7 +2013,7 @@ server <- function(input, output, session) {
           setDT(filtered_lineups)
         }
         
-        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
+        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
@@ -2161,7 +2161,7 @@ server <- function(input, output, session) {
           setDT(filtered_lineups)
         }
         
-        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
+        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
