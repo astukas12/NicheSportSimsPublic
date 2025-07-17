@@ -155,35 +155,29 @@ calculate_cut_distribution <- function(cut_probs) {
 
 # Update the generate_cash_lineups function to include ownership metrics
 
-generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
+generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50, platform = "dk") {
   # Prepare data
   players <- player_data$Golfer
   cut_probs <- player_data$CutPct
-  salaries <- if ("DKSal" %in% names(player_data))
-    player_data$DKSal
-  else
-    player_data$FDSal
-  std_proj <- if ("DKProj" %in% names(player_data))
-    player_data$DKProj
-  else
-    player_data$FDProj
-  ceil_proj <- if ("DKCeil" %in% names(player_data))
-    player_data$DKCeil
-  else
-    player_data$FDCeil
   
-  # Get ownership projections (convert from decimal to percentage if needed)
-  ownership <- if ("DKSal" %in% names(player_data)) {
-    if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
-      player_data$DKOP * 100  # Convert from decimal to percentage
+  # Select salaries and projections based on platform
+  if (platform == "dk") {
+    salaries <- player_data$DKSal
+    std_proj <- player_data$DKProj
+    ceil_proj <- player_data$DKCeil
+    ownership <- if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
+      player_data$DKOP * 100
     } else {
-      player_data$DKOP  # Already in percentage
+      player_data$DKOP
     }
-  } else {
-    if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
-      player_data$FDOP * 100  # Convert from decimal to percentage
+  } else {  # FanDuel
+    salaries <- player_data$FDSal
+    std_proj <- player_data$FDProj
+    ceil_proj <- player_data$FDCeil
+    ownership <- if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
+      player_data$FDOP * 100
     } else {
-      player_data$FDOP  # Already in percentage
+      player_data$FDOP
     }
   }
   
@@ -194,10 +188,7 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
   excluded_lineups <- matrix(0, nrow = 0, ncol = n_players)
   
   # Console progress setup
-  platform_name <- if ("DKSal" %in% names(player_data))
-    "DraftKings"
-  else
-    "FanDuel"
+  platform_name <- if (platform == "dk") "DraftKings" else "FanDuel"
   cat("\n=== GENERATING", platform_name, "CASH LINEUPS (ECM) ===\n")
   cat("Players available:", n_players, "\n")
   cat("Target lineups:", n_lineups, "\n")
@@ -326,37 +317,29 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50) {
   }
 }
 
-# Update the generate_mme_lineups function to include ownership metrics
-
-generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
+generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000, platform = "dk") {
   # Prepare data
   players <- player_data$Golfer
   cut_probs <- player_data$CutPct
-  salaries <- if ("DKSal" %in% names(player_data))
-    player_data$DKSal
-  else
-    player_data$FDSal
-  std_proj <- if ("DKProj" %in% names(player_data))
-    player_data$DKProj
-  else
-    player_data$FDProj
-  ceil_proj <- if ("DKCeil" %in% names(player_data))
-    player_data$DKCeil
-  else
-    player_data$FDCeil
   
-  # Get ownership projections (convert from decimal to percentage if needed)
-  ownership <- if ("DKSal" %in% names(player_data)) {
-    if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
-      player_data$DKOP * 100  # Convert from decimal to percentage
+  # Select salaries and projections based on platform
+  if (platform == "dk") {
+    salaries <- player_data$DKSal
+    std_proj <- player_data$DKProj
+    ceil_proj <- player_data$DKCeil
+    ownership <- if (max(player_data$DKOP, na.rm = TRUE) <= 1) {
+      player_data$DKOP * 100
     } else {
-      player_data$DKOP  # Already in percentage
+      player_data$DKOP
     }
-  } else {
-    if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
-      player_data$FDOP * 100  # Convert from decimal to percentage
+  } else {  # FanDuel
+    salaries <- player_data$FDSal
+    std_proj <- player_data$FDProj
+    ceil_proj <- player_data$FDCeil
+    ownership <- if (max(player_data$FDOP, na.rm = TRUE) <= 1) {
+      player_data$FDOP * 100
     } else {
-      player_data$FDOP  # Already in percentage
+      player_data$FDOP
     }
   }
   
@@ -364,10 +347,7 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
   lineups <- list()
   
   # Console progress setup
-  platform_name <- if ("DKSal" %in% names(player_data))
-    "DraftKings"
-  else
-    "FanDuel"
+  platform_name <- if (platform == "dk") "DraftKings" else "FanDuel"
   cat("\n=== GENERATING",
       platform_name,
       "MME LINEUPS (FAST 6-CUT FOCUSED) ===\n")
@@ -489,8 +469,6 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000) {
   }
 }
 
-# Update the generate_filtered_mme_lineups function to include ownership filters
-
 generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = NULL) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
@@ -584,7 +562,7 @@ generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = N
                        "Player5",
                        "Player6")
       
-      early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
+      early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
         player_waves <- wave_lookup[lineup]
         sum(player_waves == "EarlyLate", na.rm = TRUE)
       })
@@ -1533,13 +1511,13 @@ server <- function(input, output, session) {
     req(rv$dk_cash_data, rv$fd_cash_data)
     
     withProgress(message = 'Generating cash lineups...', value = 0, {
-      # Generate DraftKings lineups using DK-specific pool
+      # Generate DraftKings lineups using DK-specific pool and platform
       incProgress(0.3, detail = "Generating DraftKings lineups...")
-      rv$dk_cash_lineups <- generate_cash_lineups(rv$dk_cash_data, DK_SALARY_CAP, 50)
+      rv$dk_cash_lineups <- generate_cash_lineups(rv$dk_cash_data, DK_SALARY_CAP, 50, "dk")
       
-      # Generate FanDuel lineups using FD-specific pool
+      # Generate FanDuel lineups using FD-specific pool and platform
       incProgress(0.6, detail = "Generating FanDuel lineups...")
-      rv$fd_cash_lineups <- generate_cash_lineups(rv$fd_cash_data, FD_SALARY_CAP, 50)
+      rv$fd_cash_lineups <- generate_cash_lineups(rv$fd_cash_data, FD_SALARY_CAP, 50, "fd")
       
       rv$cash_complete <- TRUE
       
@@ -1566,7 +1544,6 @@ server <- function(input, output, session) {
     })
   })
   
-  # DraftKings MME Lineup Generation
   observeEvent(input$run_dk_mme_optimization, {
     req(rv$mme_data)
     
@@ -1580,7 +1557,7 @@ server <- function(input, output, session) {
       cat("Target lineups: 15,000\n")
       cat("Players available:", nrow(rv$mme_data), "\n\n")
       
-      rv$dk_mme_lineups <- generate_mme_lineups(rv$mme_data, DK_SALARY_CAP, 15000)
+      rv$dk_mme_lineups <- generate_mme_lineups(rv$mme_data, DK_SALARY_CAP, 15000, "dk")
       
       dk_end_time <- Sys.time()
       dk_elapsed <- difftime(dk_end_time, dk_start_time, units = "mins")
@@ -1612,7 +1589,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # FanDuel MME Lineup Generation
+  
   observeEvent(input$run_fd_mme_optimization, {
     req(rv$mme_data)
     
@@ -1626,7 +1603,7 @@ server <- function(input, output, session) {
       cat("Target lineups: 15,000\n")
       cat("Players available:", nrow(rv$mme_data), "\n\n")
       
-      rv$fd_mme_lineups <- generate_mme_lineups(rv$mme_data, FD_SALARY_CAP, 15000)
+      rv$fd_mme_lineups <- generate_mme_lineups(rv$mme_data, FD_SALARY_CAP, 15000, "fd")
       
       fd_end_time <- Sys.time()
       fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
@@ -1877,7 +1854,7 @@ server <- function(input, output, session) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
         player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
-        early_late_counts <- apply(filtered_count[, player_cols], 1, function(lineup) {
+        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
@@ -1955,7 +1932,7 @@ server <- function(input, output, session) {
         wave_lookup <- setNames(rv$mme_data$Wave, rv$mme_data$Golfer)
         player_cols <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")
         
-        early_late_counts <- apply(filtered_count[, player_cols], 1, function(lineup) {
+        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
@@ -2036,7 +2013,7 @@ server <- function(input, output, session) {
           setDT(filtered_lineups)
         }
         
-        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
+        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
@@ -2184,7 +2161,7 @@ server <- function(input, output, session) {
           setDT(filtered_lineups)
         }
         
-        early_late_counts <- apply(filtered_lineups[, ..player_cols], 1, function(lineup) {
+        early_late_counts <- apply(filtered_count[, player_cols, drop = FALSE], 1, function(lineup) {
           player_waves <- wave_lookup[lineup]
           sum(player_waves == "EarlyLate", na.rm = TRUE)
         })
