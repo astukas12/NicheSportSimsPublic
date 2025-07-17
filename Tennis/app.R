@@ -3529,6 +3529,12 @@ server <- function(input, output, session) {
   
   output$weighted_pool_stats <- renderText({
     req(rv$dk_optimal_lineups_ranked)
+    req(input$top_lineups_pool)
+    
+    # Validate input before calling function
+    if (is.null(input$top_lineups_pool) || is.na(input$top_lineups_pool) || input$top_lineups_pool <= 0) {
+      return("Invalid pool size")
+    }
     
     stats <- calculate_weighted_pool_stats(
       rv$dk_optimal_lineups_ranked, 
@@ -3656,12 +3662,18 @@ server <- function(input, output, session) {
     })
   })
   
-  observe({
+observe({
     req(rv$dk_optimal_lineups_ranked)
     
     # This will trigger whenever top_lineups_pool or excluded_players change
     input$top_lineups_pool
-    input$excluded_players
+    input$excluded_players 
+    
+    
+    # Validate top_lineups_pool value
+    if (is.null(input$top_lineups_pool) || is.na(input$top_lineups_pool) || input$top_lineups_pool <= 0) {
+      return()
+    }
     
     # Calculate exposure from the current top X pool (before player exclusions)
     pool_lineups <- head(rv$dk_optimal_lineups_ranked, input$top_lineups_pool)
