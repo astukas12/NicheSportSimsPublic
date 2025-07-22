@@ -243,6 +243,161 @@ calculate_weighted_rank <- function(lineups_df, weights) {
   return(lineups_df)
 }
 
+# Convert ranks to 0-100 scores based on percentile with gap awareness
+calculate_lineup_scores <- function(lineups_df) {
+  # Create a copy to avoid modifying original data
+  scored_lineups <- as.data.frame(lineups_df)
+  
+  # Define columns that should be scored (higher values = better scores)
+  score_columns <- c("TotalEW", "MedianScore", "Score80th", "Win6Pct", "Win5PlusPct", "Top1Count")
+  
+  # Only score columns that exist in the data
+  available_score_cols <- intersect(score_columns, names(scored_lineups))
+  
+  # Calculate scores for each column (0-100 scale, higher = better)
+  for (col in available_score_cols) {
+    score_col_name <- paste0(col, "_Score")
+    if (!all(is.na(scored_lineups[[col]]))) {
+      # Use percentile ranking with slight curve to emphasize top performers
+      percentile_ranks <- rank(scored_lineups[[col]], ties.method = "min") / length(scored_lineups[[col]])
+      # Apply curve: (percentile ^ 1.2) * 100
+      scored_lineups[[score_col_name]] <- (percentile_ranks ^ 1.2) * 100
+    } else {
+      scored_lineups[[score_col_name]] <- NA
+    }
+  }
+  
+  return(scored_lineups)
+}
+
+# Calculate ownership metrics for lineups
+calculate_ownership_metrics <- function(lineups_df, dk_data) {
+  # Check if we have ownership data
+  if (is.null(dk_data) || !"DKOwn" %in% names(dk_data)) {
+    cat("No ownership data available - skipping ownership calculations\n")
+    return(lineups_df)
+  }
+  
+  cat("Calculating ownership metrics...\n")
+  
+  # Create ownership lookup
+  ownership_lookup <- setNames(dk_data$DKOwn, dk_data$Name)
+  
+  # Determine player column pattern
+  player_cols <- if(any(grepl("^Name[1-6]$", names(lineups_df)))) {
+    grep("^Name[1-6]$", names(lineups_df), value = TRUE)
+  } else {
+    # Parse from LineupID if needed
+    NULL
+  }
+  
+  # Add ownership columns
+  lineups_df$LineupOwnership <- numeric(nrow(lineups_df))
+  lineups_df$ContrarianScore <- numeric(nrow(lineups_df))
+  
+  for (i in 1:nrow(lineups_df)) {
+    # Get player names for this lineup
+    if (!is.null(player_cols)) {
+      lineup_players <- unlist(lineups_df[i, player_cols])
+    } else {
+      # Parse from LineupID
+      lineup_players <- unlist(strsplit(lineups_df$LineupID[i], "\\|"))
+    }
+    
+    # Get ownership for each player
+    player_ownership <- ownership_lookup[lineup_players]
+    player_ownership[is.na(player_ownership)] <- 0.05  # Default 5% for missing data
+    
+    # NEW GRANULAR OWNERSHIP CALCULATION
+    # This creates a more sensitive rating that spreads lineups across a wider range
+    
+    # Method 1: Multiplicative with scaling factor
+    # This heavily penalizes high-ownership stacks
+    geometric_mean <- prod(player_ownership)^(1/length(player_ownership))
+    
+    # Method 2: Weighted by ownership variance 
+    # Higher variance = more contrarian build
+    ownership_variance <- var(player_ownership)
+    variance_bonus <- min(0.3, ownership_variance * 2)  # Cap the bonus
+    
+    # Method 3: Penalize high-ownership players more
+    # Create exponential penalty for popular players
+    high_own_penalty <- sum((player_ownership^1.5)) / length(player_ownership)
+    
+    # Combined ownership rating (0 to ~1 scale, but more granular)
+    lineup_ownership <- (geometric_mean * 0.4) +           # Base ownership
+      (high_own_penalty * 0.5) +          # Penalty for popular players  
+      (mean(player_ownership) * 0.1) -    # Small average component
+      (variance_bonus)                     # Bonus for contrarian builds
+    
+    # Ensure it stays in reasonable range
+    lineup_ownership <- max(0.001, min(1.0, lineup_ownership))
+    
+    lineups_df$LineupOwnership[i] <- lineup_ownership
+    
+    # Calculate ContrarianScore: WeightedScore / LineupOwnership  
+    # Higher WeightedScore + Lower Ownership = Higher Contrarian Score
+    if ("WeightedScore" %in% names(lineups_df) && lineup_ownership > 0) {
+      lineups_df$ContrarianScore[i] <- lineups_df$WeightedScore[i] / lineup_ownership
+    }
+  }
+  
+  cat(sprintf("Ownership metrics calculated for %d lineups\n", nrow(lineups_df)))
+  
+  # Report ownership distribution for debugging
+  ownership_summary <- summary(lineups_df$LineupOwnership)
+  cat("Ownership distribution:", paste(names(ownership_summary), "=", round(ownership_summary, 4), collapse = ", "), "\n")
+  
+  return(lineups_df)
+}
+
+# Updated weighted scoring function using scores instead of ranks
+calculate_weighted_score <- function(lineups_df, weights) {
+  # Available score columns based on what exists in the data
+  available_score_cols <- names(lineups_df)[grepl("_Score$", names(lineups_df))]
+  
+  # Initialize weighted score as 0
+  lineups_df$WeightedScore <- 0
+  
+  # Calculate weighted score (higher is better since scores are 0-100)
+  total_weight <- 0
+  
+  for (score_col in available_score_cols) {
+    # Extract the base metric name (remove "_Score" suffix)
+    base_metric <- gsub("_Score$", "", score_col)
+    
+    # Check if we have a weight for this metric
+    weight_key <- switch(base_metric,
+                         "TotalEW" = "weight_totalew",
+                         "MedianScore" = "weight_medianscore", 
+                         "Score80th" = "weight_score80th",
+                         "Win6Pct" = "weight_win6pct",
+                         "Win5PlusPct" = "weight_win5pluspct",
+                         "Top1Count" = "weight_top1count",
+                         NULL)
+    
+    if (!is.null(weight_key) && !is.null(weights[[weight_key]]) && weights[[weight_key]] > 0) {
+      weight_value <- weights[[weight_key]]
+      
+      # Add weighted score to the total (multiply score by weight)
+      lineups_df$WeightedScore <- lineups_df$WeightedScore + 
+        (lineups_df[[score_col]] * weight_value)
+      
+      total_weight <- total_weight + weight_value
+    }
+  }
+  
+  # Normalize by total weight if any weights were applied
+  if (total_weight > 0) {
+    lineups_df$WeightedScore <- lineups_df$WeightedScore / total_weight
+  }
+  
+  # Calculate final weighted rank (1 = best weighted score)
+  lineups_df$WeightedRank <- rank(-lineups_df$WeightedScore, ties.method = "min")
+  
+  return(lineups_df)
+}
+
 
 # Updated calculate_ew_metrics function that accounts for same-match constraints
 calculate_ew_metrics <- function(simulation_results, n_simulations, dk_data = NULL) {
@@ -396,7 +551,6 @@ calculate_lineup_total_ew <- function(lineup_players, individual_ew_metrics, pla
   return(total_ew)
 }
 
-
 run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
   # Start timing
   overall_start_time <- Sys.time()
@@ -421,28 +575,26 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
   }
   cat("\n")
   
-  # Create storage for match outcomes
-  match_results <- list()
+  # === PRE-COMPUTATION PHASE ===
+  cat("=== PRE-COMPUTING MATCH PROBABILITIES AND SCORES ===\n")
+  precomp_start_time <- Sys.time()
   
-  # Process each match with detailed timing
+  match_prob_cache <- list()
+  
   for (match_idx in seq_along(matches)) {
-    match_start_time <- Sys.time()
     match_name <- matches[match_idx]
     
-    cat(sprintf("[%s] Processing match %d/%d: %s", 
-                format(match_start_time, "%H:%M:%S"), 
+    cat(sprintf("[%s] Pre-computing match %d/%d: %s", 
+                format(Sys.time(), "%H:%M:%S"), 
                 match_idx, total_matches, match_name))
     
-    # Get players in this match
     match_players <- dk_dt[`Game Info` == match_name]
     
     if (nrow(match_players) != 2) {
       cat(" - SKIPPED (invalid player count)\n")
-      warning("Skipping match with invalid number of players:", match_name)
       next
     }
     
-    # Extract player info
     p1 <- match_players[1]
     p2 <- match_players[2]
     
@@ -451,71 +603,43 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
     # Check for walkover scenario
     p1_tour <- p1$Tour
     p2_tour <- p2$Tour
-    
-    # Check if this is a walkover match
     is_walkover <- any(c(p1_tour, p2_tour) %in% c("WD", "WO"))
     
     if (is_walkover) {
-      cat(" - WALKOVER DETECTED")
+      cat(" - WALKOVER")
       
-      # Determine who withdraws and who gets the walkover win
+      # Determine walkover winner/loser
       if (p1_tour == "WD" && p2_tour == "WO") {
-        winner_name <- p2$Name
-        loser_name <- p1$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p2$Name; loser_name <- p1$Name
       } else if (p1_tour == "WO" && p2_tour == "WD") {
-        winner_name <- p1$Name
-        loser_name <- p2$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p1$Name; loser_name <- p2$Name
       } else if (p1_tour == "WD") {
-        winner_name <- p2$Name
-        loser_name <- p1$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p2$Name; loser_name <- p1$Name
       } else if (p2_tour == "WD") {
-        winner_name <- p1$Name
-        loser_name <- p2$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p1$Name; loser_name <- p2$Name
       } else if (p1_tour == "WO") {
-        winner_name <- p1$Name
-        loser_name <- p2$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p1$Name; loser_name <- p2$Name
       } else if (p2_tour == "WO") {
-        winner_name <- p2$Name
-        loser_name <- p1$Name
-        winner_score <- 30
-        loser_score <- 0
+        winner_name <- p2$Name; loser_name <- p1$Name
       } else {
         cat(" - ERROR: Invalid walkover configuration")
         next
       }
       
-      # Create walkover results for all iterations
-      match_output <- data.table(
-        iteration = 1:n_simulations,
-        winner = rep(winner_name, n_simulations),
-        loser = rep(loser_name, n_simulations),
-        outcome = rep("WO", n_simulations),
-        winner_prob = rep(1.0, n_simulations),
-        loser_prob = rep(0.0, n_simulations),
-        winner_score = rep(winner_score, n_simulations),
-        loser_score = rep(loser_score, n_simulations)
+      match_prob_cache[[match_name]] <- list(
+        type = "walkover",
+        winner = winner_name,
+        loser = loser_name,
+        winner_score = 30,
+        loser_score = 0
       )
       
-      cat(sprintf(" (%s withdraws, %s gets walkover)", loser_name, winner_name))
-      
     } else {
-      # NORMAL MATCH SIMULATION
+      # NORMAL MATCH - Pre-compute all probabilities and score samples
       
       # Calculate ML probabilities
       p1_ml <- odds_to_probability(as.numeric(p1$ML))
       p2_ml <- odds_to_probability(as.numeric(p2$ML))
-      
-      # Normalize to sum to 1
       total_ml_prob <- p1_ml + p2_ml
       p1_ml_prob <- p1_ml / total_ml_prob
       p2_ml_prob <- p2_ml / total_ml_prob
@@ -523,206 +647,228 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
       # Calculate SS probabilities
       p1_ss <- odds_to_probability(as.numeric(p1$SS))
       p2_ss <- odds_to_probability(as.numeric(p2$SS))
-      
       p1_nss <- p1_ml - p1_ss
       p2_nss <- p2_ml - p2_ss
       
-      # Normalize to 1
+      # Normalize probabilities
       p1_ss_prob <- p1_ss / total_ml_prob
       p2_ss_prob <- p2_ss / total_ml_prob
       p1_nss_prob <- p1_nss / total_ml_prob
       p2_nss_prob <- p2_nss / total_ml_prob
       
-      # Create probability bins for sampling
+      # Create cumulative probability intervals for fast sampling
       cum_probs <- c(0, p1_ss_prob, p1_ss_prob + p1_nss_prob, 
                      p1_ss_prob + p1_nss_prob + p2_ss_prob, 1)
       
-      # Generate ALL simulation outcomes at once for this match
-      random_values <- runif(n_simulations)
-      
-      # Pre-allocate results for this match
-      match_output <- data.table(
-        iteration = 1:n_simulations,
-        winner = character(n_simulations),
-        loser = character(n_simulations),
-        outcome = character(n_simulations),
-        winner_prob = numeric(n_simulations),
-        loser_prob = numeric(n_simulations),
-        winner_score = numeric(n_simulations),
-        loser_score = numeric(n_simulations)
+      # Pre-compute score samples for each possible outcome
+      outcomes <- list(
+        list(winner = p1$Name, loser = p2$Name, outcome = "SS", prob = p1_ss_prob),
+        list(winner = p1$Name, loser = p2$Name, outcome = "NSS", prob = p1_nss_prob),
+        list(winner = p2$Name, loser = p1$Name, outcome = "SS", prob = p2_ss_prob),
+        list(winner = p2$Name, loser = p1$Name, outcome = "NSS", prob = p2_nss_prob)
       )
       
-      # Figure out which bin each random value falls into
-      outcome_bins <- findInterval(random_values, cum_probs)
-      
-      # Assign winners, losers and outcome types based on bins
-      match_output[outcome_bins == 1, `:=`(
-        winner = p1$Name, loser = p2$Name, outcome = "SS",
-        winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
-      )]
-      
-      match_output[outcome_bins == 2, `:=`(
-        winner = p1$Name, loser = p2$Name, outcome = "NSS",
-        winner_prob = p1_ml_prob, loser_prob = p2_ml_prob
-      )]
-      
-      match_output[outcome_bins == 3, `:=`(
-        winner = p2$Name, loser = p1$Name, outcome = "SS",
-        winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
-      )]
-      
-      match_output[outcome_bins == 4, `:=`(
-        winner = p2$Name, loser = p1$Name, outcome = "NSS",
-        winner_prob = p2_ml_prob, loser_prob = p1_ml_prob
-      )]
-      
-      # Now assign scores based on outcome types
-      outcome_groups <- match_output[, .N, by = .(winner, loser, outcome)]
-      
-      score_assignment_start <- Sys.time()
-      
-      # For each distinct outcome configuration
-      for (j in 1:nrow(outcome_groups)) {
-        winner <- outcome_groups$winner[j]
-        loser <- outcome_groups$loser[j]
-        outcome_type <- outcome_groups$outcome[j]
-        count <- outcome_groups$N[j]
-        
-        # Get rows matching this outcome
-        outcome_indices <- which(
-          match_output$winner == winner & 
-            match_output$loser == loser & 
-            match_output$outcome == outcome_type
-        )
-        
-        # Get one example row to extract probabilities
-        example_row <- match_output[outcome_indices[1]]
-        winner_prob <- example_row$winner_prob
-        loser_prob <- example_row$loser_prob
-        
-        # Create match info for finding similar historical matches
-        tour <- match_players$Tour[1]
-        is_straight_sets <- as.integer(outcome_type == "SS")
-        #best_of_value <- ifelse(tour == "ATP", 5, 3)
-        best_of_value <- 3
-        
-        # Find similar historical matches
-        similar_matches <- hist_dt[
-          Tour == tour & 
-            best_of == best_of_value &
-            straight_sets == is_straight_sets
-        ]
-        
-        # If not enough matches, relax constraints
-        if (nrow(similar_matches) < 10) {
-          similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
-        }
-        if (nrow(similar_matches) < 10) {
-          similar_matches <- hist_dt[Tour == tour]
-        }
-        
-        # Calculate similarity scores and assign scores
-        if (nrow(similar_matches) > 0) {
-          similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
-          setorder(similar_matches, odds_diff)
+      score_samples <- list()
+      for (outcome_info in outcomes) {
+        if (outcome_info$prob > 0) {
+          winner_prob <- ifelse(outcome_info$winner == p1$Name, p1_ml_prob, p2_ml_prob)
+          loser_prob <- ifelse(outcome_info$loser == p1$Name, p1_ml_prob, p2_ml_prob)
           
-          n_similar <- min(40, nrow(similar_matches))
-          top_matches <- similar_matches[1:n_similar]
+          # Find similar historical matches
+          tour <- p1$Tour
+          is_straight_sets <- as.integer(outcome_info$outcome == "SS")
+          best_of_value <- 3
           
-          sample_indices <- sample(1:n_similar, length(outcome_indices), replace = TRUE)
+          similar_matches <- hist_dt[
+            Tour == tour & best_of == best_of_value & straight_sets == is_straight_sets
+          ]
           
-          match_output[outcome_indices, `:=`(
-            winner_score = top_matches$w_dk_score[sample_indices],
-            loser_score = top_matches$l_dk_score[sample_indices]
-          )]
-        } else {
-          match_output[outcome_indices, `:=`(
-            winner_score = runif(length(outcome_indices), 50, 70),
-            loser_score = runif(length(outcome_indices), 20, 40)
-          )]
+          if (nrow(similar_matches) < 10) {
+            similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
+          }
+          if (nrow(similar_matches) < 10) {
+            similar_matches <- hist_dt[Tour == tour]
+          }
+          
+          if (nrow(similar_matches) > 0) {
+            # Calculate similarity and get top matches
+            similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
+            setorder(similar_matches, odds_diff)
+            
+            n_similar <- min(50, nrow(similar_matches))
+            top_matches <- similar_matches[1:n_similar]
+            
+            # Pre-sample scores (generate enough for all simulations)
+            sample_size <- min(20000, n_simulations * 2)  # Extra buffer
+            sample_indices <- sample(1:n_similar, sample_size, replace = TRUE)
+            
+            score_samples[[length(score_samples) + 1]] <- list(
+              outcome_id = paste(outcome_info$winner, outcome_info$outcome, outcome_info$loser, sep = "_"),
+              winner = outcome_info$winner,
+              loser = outcome_info$loser,
+              outcome = outcome_info$outcome,
+              prob = outcome_info$prob,
+              winner_scores = top_matches$w_dk_score[sample_indices],
+              loser_scores = top_matches$l_dk_score[sample_indices],
+              sample_counter = 1  # Track which sample to use next
+            )
+          } else {
+            # Default scores if no historical matches
+            score_samples[[length(score_samples) + 1]] <- list(
+              outcome_id = paste(outcome_info$winner, outcome_info$outcome, outcome_info$loser, sep = "_"),
+              winner = outcome_info$winner,
+              loser = outcome_info$loser,
+              outcome = outcome_info$outcome,
+              prob = outcome_info$prob,
+              winner_scores = rep(60, n_simulations),
+              loser_scores = rep(30, n_simulations),
+              sample_counter = 1
+            )
+          }
         }
       }
       
-      # Randomly shuffle the iterations
-      shuffled_indices <- sample(1:n_simulations)
-      match_output <- match_output[shuffled_indices]
-      match_output[, iteration := 1:n_simulations]
+      match_prob_cache[[match_name]] <- list(
+        type = "normal",
+        p1_name = p1$Name,
+        p2_name = p2$Name,
+        cum_probs = cum_probs,
+        score_samples = score_samples
+      )
     }
     
-    # Store this match's results
-    match_results[[match_name]] <- match_output
-    
-    # Calculate and display timing
-    match_end_time <- Sys.time()
-    match_elapsed <- difftime(match_end_time, match_start_time, units = "secs")
-    
-    cat(sprintf(" - COMPLETED in %.2f seconds\n", as.numeric(match_elapsed)))
-    
-    # Force garbage collection after each match
-    if (match_idx %% 3 == 0) {
-      gc(full = TRUE)
-    }
+    cat(" - COMPLETED\n")
   }
   
-  cat("\n=== MATCH PROCESSING COMPLETED ===\n")
-  cat("Now converting match results to final format...\n")
+  precomp_elapsed <- difftime(Sys.time(), precomp_start_time, units = "secs")
+  cat(sprintf("Pre-computation completed in %.2f seconds\n\n", as.numeric(precomp_elapsed)))
   
-  # Convert match-by-match results to final format with progress tracking
-  conversion_start_time <- Sys.time()
-  n_matches <- length(match_results)
-  total_rows <- n_simulations * n_matches * 2
+  # === VECTORIZED SIMULATION PHASE ===
+  cat("=== RUNNING VECTORIZED SIMULATIONS ===\n")
+  sim_start_time <- Sys.time()
   
-  cat(sprintf("Converting %s simulation results (%s total rows)\n", 
-              format(n_simulations, big.mark = ","),
-              format(total_rows, big.mark = ",")))
-  
+  # Pre-allocate final results table
+  estimated_rows <- n_simulations * length(match_prob_cache) * 2
   final_results <- data.table(
-    Iteration = integer(total_rows),
-    Match = character(total_rows),
-    Player = character(total_rows),
-    Result = character(total_rows),
-    Outcome = character(total_rows),
-    Score = numeric(total_rows)
+    Iteration = integer(estimated_rows),
+    Match = character(estimated_rows),
+    Player = character(estimated_rows),
+    Result = character(estimated_rows),
+    Outcome = character(estimated_rows),
+    Score = numeric(estimated_rows)
   )
   
   row_idx <- 1
+  progress_interval <- max(1000, n_simulations %/% 20)
   
-  # Track progress during conversion
-  progress_interval <- max(1000, n_simulations %/% 20)  # Show progress 20 times
-  
+  # Vectorized simulation loop
   for (iter in 1:n_simulations) {
-    for (match_name in names(match_results)) {
-      match_data <- match_results[[match_name]]
-      iter_data <- match_data[iteration == iter]
+    for (match_name in names(match_prob_cache)) {
+      match_info <- match_prob_cache[[match_name]]
       
-      if (nrow(iter_data) == 0) next
-      
-      # Add winner
-      final_results[row_idx, `:=`(
-        Iteration = iter, Match = match_name, Player = iter_data$winner,
-        Result = "Winner", Outcome = iter_data$outcome, Score = iter_data$winner_score
-      )]
-      row_idx <- row_idx + 1
-      
-      # Add loser
-      final_results[row_idx, `:=`(
-        Iteration = iter, Match = match_name, Player = iter_data$loser,
-        Result = "Loser", Outcome = iter_data$outcome, Score = iter_data$loser_score
-      )]
-      row_idx <- row_idx + 1
+      if (match_info$type == "walkover") {
+        # Walkover - deterministic outcome
+        final_results[row_idx, `:=`(
+          Iteration = iter, Match = match_name, Player = match_info$winner,
+          Result = "Winner", Outcome = "WO", Score = match_info$winner_score
+        )]
+        row_idx <- row_idx + 1
+        
+        final_results[row_idx, `:=`(
+          Iteration = iter, Match = match_name, Player = match_info$loser,
+          Result = "Loser", Outcome = "WO", Score = match_info$loser_score
+        )]
+        row_idx <- row_idx + 1
+        
+      } else {
+        # Normal match - sample outcome using pre-computed probabilities
+        random_val <- runif(1)
+        outcome_bin <- findInterval(random_val, match_info$cum_probs)
+        
+        # Map bin to outcome details
+        if (outcome_bin == 1) {
+          # P1 wins straight sets
+          outcome_type <- "SS"
+          winner <- match_info$p1_name
+          loser <- match_info$p2_name
+        } else if (outcome_bin == 2) {
+          # P1 wins non-straight sets
+          outcome_type <- "NSS"
+          winner <- match_info$p1_name
+          loser <- match_info$p2_name
+        } else if (outcome_bin == 3) {
+          # P2 wins straight sets
+          outcome_type <- "SS"
+          winner <- match_info$p2_name
+          loser <- match_info$p1_name
+        } else {
+          # P2 wins non-straight sets
+          outcome_type <- "NSS"
+          winner <- match_info$p2_name
+          loser <- match_info$p1_name
+        }
+        
+        # Find matching pre-computed score sample
+        target_id <- paste(winner, outcome_type, loser, sep = "_")
+        score_sample <- NULL
+        sample_idx_in_list <- NULL
+        
+        for (i in seq_along(match_info$score_samples)) {
+          if (match_info$score_samples[[i]]$outcome_id == target_id) {
+            score_sample <- match_info$score_samples[[i]]
+            sample_idx_in_list <- i
+            break
+          }
+        }
+        
+        if (!is.null(score_sample)) {
+          # Get next pre-computed score
+          current_counter <- score_sample$sample_counter
+          if (current_counter <= length(score_sample$winner_scores)) {
+            winner_score <- score_sample$winner_scores[current_counter]
+            loser_score <- score_sample$loser_scores[current_counter]
+            
+            # Increment counter for next use (with wrap-around)
+            match_prob_cache[[match_name]]$score_samples[[sample_idx_in_list]]$sample_counter <- 
+              (current_counter %% length(score_sample$winner_scores)) + 1
+          } else {
+            # Fallback if we somehow run out of samples
+            winner_score <- runif(1, 50, 70)
+            loser_score <- runif(1, 20, 40)
+          }
+        } else {
+          # Fallback if no sample found
+          winner_score <- runif(1, 50, 70)
+          loser_score <- runif(1, 20, 40)
+        }
+        
+        # Add winner result
+        final_results[row_idx, `:=`(
+          Iteration = iter, Match = match_name, Player = winner,
+          Result = "Winner", Outcome = outcome_type, Score = winner_score
+        )]
+        row_idx <- row_idx + 1
+        
+        # Add loser result
+        final_results[row_idx, `:=`(
+          Iteration = iter, Match = match_name, Player = loser,
+          Result = "Loser", Outcome = outcome_type, Score = loser_score
+        )]
+        row_idx <- row_idx + 1
+      }
     }
     
-    # Show progress
+    # Progress reporting
     if (iter %% progress_interval == 0) {
-      elapsed_conversion <- difftime(Sys.time(), conversion_start_time, units = "secs")
+      elapsed_time <- difftime(Sys.time(), sim_start_time, units = "secs")
       pct_complete <- (iter / n_simulations) * 100
-      estimated_total <- elapsed_conversion * (n_simulations / iter)
-      estimated_remaining <- estimated_total - elapsed_conversion
+      estimated_total <- elapsed_time * (n_simulations / iter)
+      estimated_remaining <- estimated_total - elapsed_time
       
-      cat(sprintf("[%s] Conversion progress: %d/%s iterations (%.1f%%) - %.1fs elapsed, ~%.1fs remaining\n",
+      cat(sprintf("[%s] Simulation progress: %d/%s iterations (%.1f%%) - %.1fs elapsed, ~%.1fs remaining\n",
                   format(Sys.time(), "%H:%M:%S"),
                   iter, format(n_simulations, big.mark = ","),
-                  pct_complete, as.numeric(elapsed_conversion), as.numeric(estimated_remaining)))
+                  pct_complete, as.numeric(elapsed_time), as.numeric(estimated_remaining)))
     }
   }
   
@@ -732,11 +878,12 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
   # Report final timing
   overall_end_time <- Sys.time()
   total_elapsed <- difftime(overall_end_time, overall_start_time, units = "mins")
-  conversion_elapsed <- difftime(Sys.time(), conversion_start_time, units = "secs")
+  sim_elapsed <- difftime(overall_end_time, sim_start_time, units = "secs")
   
   cat("\n=== BATCH SIMULATION COMPLETED ===\n")
+  cat(sprintf("Pre-computation time: %.2f seconds\n", as.numeric(precomp_elapsed)))
+  cat(sprintf("Simulation time: %.2f seconds\n", as.numeric(sim_elapsed)))
   cat(sprintf("Total time: %.2f minutes\n", as.numeric(total_elapsed)))
-  cat(sprintf("Final conversion time: %.2f seconds\n", as.numeric(conversion_elapsed)))
   cat(sprintf("Generated %s simulation results\n", format(nrow(final_results), big.mark = ",")))
   cat("Timestamp:", format(overall_end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
@@ -923,6 +1070,7 @@ generate_weighted_lineups <- function(optimal_lineups_ranked, top_x, num_lineups
       }
       pool_lineups <- pool_lineups[exclude_condition]
     }
+    cat(sprintf("Applied player exclusions: %d lineups remain\n", nrow(pool_lineups)))
   }
   
   # Check if any lineups remain after filtering
@@ -949,20 +1097,6 @@ generate_weighted_lineups <- function(optimal_lineups_ranked, top_x, num_lineups
   selected_indices <- sample(1:nrow(pool_lineups), sample_size, replace = FALSE, prob = weights)
   selected_lineups <- pool_lineups[selected_indices]
   
-  # Prepare for exposure tracking
-  all_players <- unique(unlist(selected_lineups[, ..player_cols]))
-  player_counts <- setNames(numeric(length(all_players)), all_players)
-  
-  # Calculate player exposure
-  for(i in 1:nrow(selected_lineups)) {
-    lineup_players <- unlist(selected_lineups[i, ..player_cols])
-    player_counts[lineup_players] <- player_counts[lineup_players] + 1
-  }
-  
-  # Calculate exposure percentage
-  final_exposure <- (player_counts / nrow(selected_lineups)) * 100
-  attr(selected_lineups, "exposure") <- final_exposure
-  
   # Keep relevant columns for display
   keep_cols <- c(player_cols, "WeightedRank", "TotalEW", "MedianScore", "Score80th", 
                  "Win6Pct", "Win5PlusPct", "Top1Count", "TotalSalary")
@@ -970,7 +1104,6 @@ generate_weighted_lineups <- function(optimal_lineups_ranked, top_x, num_lineups
   
   return(as.data.frame(selected_lineups[, ..keep_cols]))
 }
-
 
 find_similar_matches <- function(current_match, historical_data, n_matches = 50, cache = NULL) {
   # Create an efficient static cache if none provided
@@ -2113,14 +2246,13 @@ ui <- dashboardPage(
       
       # Optimal Lineups Tab
       tabItem(tabName = "optimal_lineups",
-             
-              # Weighted Ranking Controls - only shown when lineups are available
+              # Main results section - only shown when analysis is complete
               conditionalPanel(
-                condition = "output.simulation_complete === 'true'",
+                condition = "output.optimization_complete === 'true'",
                 fluidRow(
                   box(
                     width = 12,
-                    title = "Strategy Selection & Weighted Ranking",
+                    title = "Strategy Selection & Weighted Scoring",
                     status = "info",
                     solidHeader = TRUE,
                     
@@ -2137,32 +2269,28 @@ ui <- dashboardPage(
                       )
                     ),
                     
-                    h4("Manual Weight Adjustment:"),
+                    h4("Manual Weight Adjustment (0-100 scoring system):"),
                     fluidRow(
-                      column(2, sliderInput("weight_totalew", "TotalEW:", min = 0, max = 10, value = 2, step = 1)),
-                      column(2, sliderInput("weight_medianscore", "Median Score:", min = 0, max = 10, value = 0, step = 1)),
-                      column(2, sliderInput("weight_score80th", "80th %ile Score:", min = 0, max = 10, value = 0, step = 1)),
-                      column(2, sliderInput("weight_win6pct", "6-Win %:", min = 0, max = 10, value = 1, step = 1)),
-                      column(2, sliderInput("weight_win5pluspct", "5+ Win %:", min = 0, max = 10, value = 1, step = 1)),
-                      column(2, sliderInput("weight_top1count", "Top 1 Count:", min = 0, max = 10, value = 1, step = 1))
+                      column(2, sliderInput("weight_totalew", "TotalEW Weight:", min = 0, max = 10, value = 2, step = 1)),
+                      column(2, sliderInput("weight_medianscore", "Median Score Weight:", min = 0, max = 10, value = 0, step = 1)),
+                      column(2, sliderInput("weight_score80th", "80th %ile Score Weight:", min = 0, max = 10, value = 0, step = 1)),
+                      column(2, sliderInput("weight_win6pct", "6-Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
+                      column(2, sliderInput("weight_win5pluspct", "5+ Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
+                      column(2, sliderInput("weight_top1count", "Top 1 Count Weight:", min = 0, max = 10, value = 1, step = 1))
                     ),
                     
                     fluidRow(
-                      column(4, actionButton("apply_weights", "Apply Weights & Re-rank", class = "btn-primary", style = "width: 100%;")),
-                      column(4, actionButton("reset_weights", "Reset to Defaults", class = "btn-warning", style = "width: 100%;")),
-                      column(4, div(style = "margin-top: 25px;", verbatimTextOutput("weight_summary")))
+                      column(4, actionButton("apply_weights", "Apply Weights & Re-score", class = "btn-primary", style = "width: 100%;")),
+                      column(4, actionButton("reset_weights", "Reset to Defaults", class = "btn-warning", style = "width: 100%;"))
                     )
-                  )
-                )
-              ),
-              
-              # Optimal lineups results section - only shown when lineups are available
-              conditionalPanel(
-                condition = "output.optimization_complete === 'true'",
+                    )
+                ),
+                
+                # Optimal lineups results table
                 fluidRow(
                   box(
                     width = 12,
-                    title = "Optimal Lineups",
+                    title = "Optimal Lineups (Scored & Ranked)",
                     div(
                       style = "text-align: right; margin-bottom: 10px;",
                       downloadButton('download_optimal_lineups', 'Download All Lineups',
@@ -2171,9 +2299,23 @@ ui <- dashboardPage(
                     DTOutput("optimal_lineups_table") %>% withSpinner(color = "#FFD700")
                   )
                 )
+              ),
+              
+              # Show this when analysis hasn't been run yet
+              conditionalPanel(
+                condition = "!output.simulation_complete",
+                fluidRow(
+                  box(
+                    width = 12,
+                    status = "warning",
+                    title = "No Analysis Complete",
+                    HTML("Please run the simulation first using the <strong>Run Simulation</strong> button in the sidebar. 
+                   This will automatically generate optimal lineups with the new scoring system.")
+                  )
+                )
               )
       ),
-      
+   
       # Lineup Builder Tab
       tabItem(tabName = "lineup_builder",
               conditionalPanel(
@@ -2183,7 +2325,7 @@ ui <- dashboardPage(
                     width = 12,
                     status = "warning",
                     title = "No Optimal Lineups Available",
-                    "Please calculate optimal lineups in the Optimal Lineups tab first."
+                    "Please run the simulation first using the Run Simulation button in the sidebar. This will automatically generate optimal lineups."
                   )
                 )
               ),
@@ -2223,6 +2365,12 @@ ui <- dashboardPage(
                       
                       fluidRow(
                         column(6,
+                               div(class = "well well-sm", style = "margin-top: 5px;",
+                                   h5("Pool Statistics:"),
+                                   textOutput("filtered_pool_stats")
+                               )
+                        ),
+                        column(6,
                                div(style = "margin-top: 20px;",
                                    actionButton("generate_lineups", "Generate Lineups", 
                                                 class = "btn-primary btn-lg", 
@@ -2232,13 +2380,7 @@ ui <- dashboardPage(
                                                   style = "width: 100%;")
                                )
                         )
-                      ),
-                      
-                      br(),
-                      div(class = "alert alert-info",
-                          HTML("<strong>How it works:</strong> This system uses your weighted ranking from the Optimal Lineups tab. 
-                         Adjust the weights there first, then come here to select lineups from the top-ranked pool. 
-                         The higher the 'Top X Lineups' number, the more variety in your generated lineups."))
+                      )
                   )
                 ),
                 fluidRow(
@@ -2284,6 +2426,37 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "simulation_complete", suspendWhenHidden = FALSE)
   
+  output$filtered_pool_stats <- renderText({
+    req(rv$dk_optimal_lineups_ranked)
+    req(input$top_lineups_pool)
+    
+    # Get initial pool
+    pool_lineups <- head(rv$dk_optimal_lineups_ranked, input$top_lineups_pool)
+    initial_count <- nrow(pool_lineups)
+    
+    # Apply player exclusions only
+    if (!is.null(input$excluded_players) && length(input$excluded_players) > 0) {
+      player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
+        grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
+      } else {
+        grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
+      }
+      
+      if(length(player_cols) > 0) {
+        for(excluded_player in input$excluded_players) {
+          exclude_condition <- rep(TRUE, nrow(pool_lineups))
+          for(col in player_cols) {
+            exclude_condition <- exclude_condition & (pool_lineups[[col]] != excluded_player)
+          }
+          pool_lineups <- pool_lineups[exclude_condition, ]
+        }
+      }
+    }
+    
+    final_count <- nrow(pool_lineups)
+    
+    paste0("Filtered Pool: ", final_count, " / ", initial_count, " lineups")
+  })
   
   output$optimization_complete <- reactive({
     # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
@@ -2565,12 +2738,20 @@ server <- function(input, output, session) {
         NULL
       )
       
-      # Step 5: Calculate rankings
-      incProgress(0.8, detail = "Calculating rankings...")
+      # Step 5: Calculate scores and rankings
+      incProgress(0.8, detail = "Calculating scores and rankings...")
       rv$dk_optimal_lineups <- expanded_lineups
-      rv$dk_optimal_lineups_ranked <- calculate_lineup_ranks(expanded_lineups)
       
-      # Apply initial weighted ranking with default weights
+      # Calculate 0-100 scores instead of simple ranks
+      scored_lineups <- calculate_lineup_scores(expanded_lineups)
+      
+      # Calculate ownership metrics if available
+      scored_lineups <- calculate_ownership_metrics(scored_lineups, rv$dk_data)
+      
+      # Store the scored version
+      rv$dk_optimal_lineups_scored <- scored_lineups
+      
+      # Apply initial weighted scoring with default weights
       default_weights <- list(
         weight_totalew = 2,           
         weight_medianscore = 0,       
@@ -2580,7 +2761,7 @@ server <- function(input, output, session) {
         weight_top1count = 1        
       )
       
-      rv$dk_optimal_lineups_ranked <- calculate_weighted_rank(rv$dk_optimal_lineups_ranked, default_weights)
+      rv$dk_optimal_lineups_ranked <- calculate_weighted_score(scored_lineups, default_weights)
       rv$optimization_complete <- TRUE
       
       # Step 6: Calculate initial player exposure
@@ -3097,6 +3278,8 @@ server <- function(input, output, session) {
   observeEvent(input$apply_weights, {
     req(rv$dk_optimal_lineups_ranked)
     
+    req(rv$dk_optimal_lineups_scored)
+    
     # Create weights list from input values
     weights <- list(
       weight_totalew = input$weight_totalew,
@@ -3107,10 +3290,10 @@ server <- function(input, output, session) {
       weight_top1count = input$weight_top1count
     )
     
-    # Calculate weighted rank
-    rv$dk_optimal_lineups_ranked <- calculate_weighted_rank(rv$dk_optimal_lineups_ranked, weights)
+    # Calculate weighted score
+    rv$dk_optimal_lineups_ranked <- calculate_weighted_score(rv$dk_optimal_lineups_scored, weights)
     
-    showNotification("Weighted ranking applied successfully!", type = "message")
+    showNotification("Weighted scoring applied successfully!", type = "message")
   })
   
 
@@ -3227,7 +3410,6 @@ server <- function(input, output, session) {
     
     # The output$weighted_pool_stats will automatically update due to this dependency
   })
-  
   observeEvent(input$generate_lineups, {
     req(rv$dk_optimal_lineups_ranked)
     
@@ -3242,34 +3424,46 @@ server <- function(input, output, session) {
         input$excluded_players
       )
       
-      # Update player exposure data
+      # Update player exposure data - FIXED VERSION
       if(!is.null(rv$dk_random_lineups)) {
-        # Get the filtered pool for Pool_Exposure calculation
-        pool_stats <- calculate_weighted_pool_stats(
-          rv$dk_optimal_lineups_ranked, 
-          input$top_lineups_pool,
-          input$excluded_players
-        )
-        
-        # Calculate exposure from the actual top X pool (before player exclusions)
+        # Calculate Pool_Exposure from the FILTERED pool (after exclusions)
         pool_lineups <- head(rv$dk_optimal_lineups_ranked, input$top_lineups_pool)
         
+        # Apply the same player exclusions to the pool
+        if (!is.null(input$excluded_players) && length(input$excluded_players) > 0) {
+          player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
+            grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
+          } else {
+            grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
+          }
+          
+          if(length(player_cols) > 0) {
+            for(excluded_player in input$excluded_players) {
+              exclude_condition <- rep(TRUE, nrow(pool_lineups))
+              for(col in player_cols) {
+                exclude_condition <- exclude_condition & (pool_lineups[[col]] != excluded_player)
+              }
+              pool_lineups <- pool_lineups[exclude_condition, ]
+            }
+          }
+        }
+        
         rv$dk_player_exposure <- calculate_player_exposure(
-          pool_lineups,  # Use the full top X pool for Pool_Exposure
+          pool_lineups,         # Use the FILTERED pool for Pool_Exposure
           rv$player_projections,
           rv$dk_random_lineups  # Generated lineups for Randomized_Exposure
         )
         
         showModal(modalDialog(
           title = "Success",
-          sprintf("Generated %d lineups from top %d ranked lineups!", 
-                  nrow(rv$dk_random_lineups), input$top_lineups_pool),
+          sprintf("Generated %d lineups from filtered pool of %d lineups!", 
+                  nrow(rv$dk_random_lineups), nrow(pool_lineups)),
           easyClose = TRUE
         ))
       } else {
         showModal(modalDialog(
           title = "Error",
-          "No lineups available after applying player exclusions. Try reducing exclusions or increasing the pool size.",
+          "No lineups available after applying filters. Try reducing exclusions or increasing the pool size.",
           easyClose = TRUE
         ))
       }
