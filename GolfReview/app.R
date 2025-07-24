@@ -11,8 +11,16 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      fileInput("file", "Upload Contest CSV",
-                accept = c("text/csv", "application/vnd.ms-excel"))
+      fileInput("file", "Upload Contest CSV or MME Lineup File",
+                accept = c("text/csv", "application/vnd.ms-excel")),
+      
+      # Show file type info when file is loaded
+      conditionalPanel(
+        condition = "output.fileInfo",
+        div(class = "alert alert-info", 
+            style = "margin-top: 10px;",
+            strong("File Type: "), textOutput("fileInfo", inline = TRUE))
+      )
     ),
     
     mainPanel(
@@ -115,6 +123,7 @@ server <- function(input, output, session) {
   rv <- reactiveValues(
     data = NULL,
     golfer_data = NULL,
+    file_type = NULL,  # Track whether it's "MME" or "Contest" file
     entry_groups = data.frame(
       group = c("Single Entry", "Small Multi", "Medium Multi", "Large Multi", "Max Entry"),
       min_entries = c(1, 2, 21, 101, 150),
@@ -134,10 +143,18 @@ server <- function(input, output, session) {
   # Clean golfer names function
   clean_golfer_names <- function(lineup) {
     if (!lineup %in% names(rv$lineup_golfers)) {
-      golfers <- unlist(strsplit(lineup, " G | G "))
-      golfers <- golfers[golfers != ""]
-      golfers <- trimws(golfers)
-      golfers <- sub("^G ", "", golfers)
+      if (rv$file_type == "MME") {
+        # For MME files, split by " G " and clean up
+        golfers <- unlist(strsplit(lineup, " G "))
+        golfers <- golfers[golfers != "" & golfers != "G"]
+        golfers <- trimws(golfers)
+      } else {
+        # Original contest file format
+        golfers <- unlist(strsplit(lineup, " G | G "))
+        golfers <- golfers[golfers != ""]
+        golfers <- trimws(golfers)
+        golfers <- sub("^G ", "", golfers)
+      }
       rv$lineup_golfers[[lineup]] <- golfers
     }
     return(rv$lineup_golfers[[lineup]])
@@ -172,44 +189,120 @@ server <- function(input, output, session) {
                           sep = ",",
                           na.strings = c("", "NA", "NULL"))
         
-        # Clean up column names
-        if (!"EntryName" %in% names(raw_data)) {
-          names(raw_data)[3] <- "EntryName"
+        # Detect file type based on columns
+        if ("Player1" %in% names(raw_data) && "Player2" %in% names(raw_data)) {
+          # This is an MME lineup file
+          rv$file_type <- "MME"
+          
+          # Create lineup strings from Player columns
+          player_cols <- paste0("Player", 1:6)
+          existing_player_cols <- player_cols[player_cols %in% names(raw_data)]
+          
+          rv$data <- raw_data %>%
+            mutate(
+              EntryName = "MME_Generated",  # Single user for MME files
+              Lineup = paste("G", get(existing_player_cols[1]), 
+                             if(length(existing_player_cols) > 1) paste("G", get(existing_player_cols[2])) else "",
+                             if(length(existing_player_cols) > 2) paste("G", get(existing_player_cols[3])) else "",
+                             if(length(existing_player_cols) > 3) paste("G", get(existing_player_cols[4])) else "",
+                             if(length(existing_player_cols) > 4) paste("G", get(existing_player_cols[5])) else "",
+                             if(length(existing_player_cols) > 5) paste("G", get(existing_player_cols[6])) else "",
+                             sep = " "),
+              Lineup = gsub("\\s+", " ", trimws(Lineup)),  # Clean up extra spaces
+              Points = ifelse("StandardProj" %in% names(raw_data), StandardProj, 0)
+            ) %>%
+            select(EntryName, Lineup, Points) %>%
+            as.data.table()
+          
+          # Process golfer data (scores and cuts) - same as contest files since you'll paste this data
+          if ("Golfer" %in% names(raw_data) && "Score" %in% names(raw_data) && "Cut" %in% names(raw_data)) {
+            rv$golfer_data <- as.data.table(raw_data)[, .(
+              Golfer = trimws(Golfer),
+              Score = as.numeric(Score),
+              Cut = trimws(Cut)
+            )][!is.na(Golfer)]
+            
+            # Remove duplicates from golfer data
+            rv$golfer_data <- unique(rv$golfer_data)
+            
+            # Calculate lineup metrics using actual golfer data
+            unique_lineups <- unique(rv$data$Lineup)
+            lineup_metrics_list <- lapply(unique_lineups, function(lineup) {
+              metrics <- calculate_lineup_metrics(lineup)
+              data.table(
+                Lineup = lineup,
+                CutsMade = metrics$cuts_made,
+                TotalScore = metrics$total_score,
+                MadeCutScore = metrics$made_cut_score
+              )
+            })
+            
+            rv$lineup_metrics <- rbindlist(lineup_metrics_list)
+          } else {
+            # No golfer data available, use ExpectedCuts as fallback
+            rv$golfer_data <- NULL
+            rv$lineup_metrics <- raw_data %>%
+              mutate(
+                Lineup = paste("G", get(existing_player_cols[1]), 
+                               if(length(existing_player_cols) > 1) paste("G", get(existing_player_cols[2])) else "",
+                               if(length(existing_player_cols) > 2) paste("G", get(existing_player_cols[3])) else "",
+                               if(length(existing_player_cols) > 3) paste("G", get(existing_player_cols[4])) else "",
+                               if(length(existing_player_cols) > 4) paste("G", get(existing_player_cols[5])) else "",
+                               if(length(existing_player_cols) > 5) paste("G", get(existing_player_cols[6])) else "",
+                               sep = " "),
+                Lineup = gsub("\\s+", " ", trimws(Lineup)),  # Clean up extra spaces
+                CutsMade = ifelse("ExpectedCuts" %in% names(raw_data), round(ExpectedCuts), 0),
+                TotalScore = ifelse("StandardProj" %in% names(raw_data), StandardProj, 0),
+                MadeCutScore = ifelse("StandardProj" %in% names(raw_data), StandardProj, 0)
+              ) %>%
+              select(Lineup, CutsMade, TotalScore, MadeCutScore) %>%
+              as.data.table()
+          }
+          
+        } else {
+          # This is a contest results file (original format)
+          rv$file_type <- "Contest"
+          
+          # Clean up column names
+          if (!"EntryName" %in% names(raw_data)) {
+            names(raw_data)[3] <- "EntryName"
+          }
+          if (!"Lineup" %in% names(raw_data)) {
+            names(raw_data)[6] <- "Lineup"
+          }
+          
+          # Process main contest data
+          rv$data <- as.data.table(raw_data)[, .(
+            EntryName = trimws(sub(" \\(.*", "", EntryName)),
+            Lineup = trimws(Lineup),
+            Points = as.numeric(get(grep("Points", names(raw_data), value = TRUE)[1]))
+          )][!is.na(EntryName) & !is.na(Lineup)]
+          
+          # Process golfer data (scores and cuts)
+          rv$golfer_data <- as.data.table(raw_data)[, .(
+            Golfer = trimws(Golfer),
+            Score = as.numeric(Score),
+            Cut = trimws(Cut)
+          )][!is.na(Golfer)]
+          
+          # Remove duplicates from golfer data
+          rv$golfer_data <- unique(rv$golfer_data)
+          
+          # Calculate lineup metrics for each unique lineup
+          unique_lineups <- unique(rv$data$Lineup)
+          lineup_metrics_list <- lapply(unique_lineups, function(lineup) {
+            metrics <- calculate_lineup_metrics(lineup)
+            data.table(
+              Lineup = lineup,
+              CutsMade = metrics$cuts_made,
+              TotalScore = metrics$total_score,
+              MadeCutScore = metrics$made_cut_score
+            )
+          })
+          
+          rv$lineup_metrics <- rbindlist(lineup_metrics_list)
         }
-        if (!"Lineup" %in% names(raw_data)) {
-          names(raw_data)[6] <- "Lineup"
-        }
         
-        # Process main contest data
-        rv$data <- as.data.table(raw_data)[, .(
-          EntryName = trimws(sub(" \\(.*", "", EntryName)),
-          Lineup = trimws(Lineup),
-          Points = as.numeric(get(grep("Points", names(raw_data), value = TRUE)[1]))
-        )][!is.na(EntryName) & !is.na(Lineup)]
-        
-        # Process golfer data (scores and cuts)
-        rv$golfer_data <- as.data.table(raw_data)[, .(
-          Golfer = trimws(Golfer),
-          Score = as.numeric(Score),
-          Cut = trimws(Cut)
-        )][!is.na(Golfer)]
-        
-        # Remove duplicates from golfer data
-        rv$golfer_data <- unique(rv$golfer_data)
-        
-        # Calculate lineup metrics for each unique lineup
-        unique_lineups <- unique(rv$data$Lineup)
-        lineup_metrics_list <- lapply(unique_lineups, function(lineup) {
-          metrics <- calculate_lineup_metrics(lineup)
-          data.table(
-            Lineup = lineup,
-            CutsMade = metrics$cuts_made,
-            TotalScore = metrics$total_score,
-            MadeCutScore = metrics$made_cut_score
-          )
-        })
-        
-        rv$lineup_metrics <- rbindlist(lineup_metrics_list)
         setkey(rv$lineup_metrics, Lineup)
         
         # Pre-calculate common values
@@ -306,7 +399,7 @@ server <- function(input, output, session) {
       group_by(CutsMade) %>%
       summarise(
         Lineups = n(),
-        `% of Unique Lineups` = round(n() / nrow(rv$lineup_metrics) * 100, 1),
+        `% of Lineups` = round(n() / nrow(rv$lineup_metrics) * 100, 1),
         `Avg Total Score` = round(mean(TotalScore), 1),
         `Avg Made Cut Score` = round(mean(MadeCutScore), 1)
       ) %>%
@@ -755,6 +848,19 @@ server <- function(input, output, session) {
     
     p
   })
+  
+  # File type info output
+  output$fileInfo <- renderText({
+    req(rv$file_type)
+    if (rv$file_type == "MME") {
+      "MME Generated Lineups"
+    } else {
+      "Contest Results"
+    }
+  })
+  
+  # Check if file info should be shown
+  outputOptions(output, "fileInfo", suspendWhenHidden = FALSE)
 }
 
 # Run the app
