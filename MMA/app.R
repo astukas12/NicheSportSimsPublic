@@ -54,7 +54,7 @@ custom_css <- "
   /* Customize box headers */
   .box.box-primary .box-header {
     background-color: #333333;
-    color: #ff0000;
+    color: #ff0000;rv
   }
   
   /* Style buttons */
@@ -741,6 +741,194 @@ analyze_performance_by_outcome <- function(sim_results) {
   }
 }
 
+
+# Function to calculate filtered pool rates for fighter exposure
+calculate_filtered_pool_rates <- function(optimal_lineups, filters, platform = "dk") {
+  if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
+    return(data.frame())
+  }
+  
+  # Apply filters to get filtered lineups
+  filtered_lineups <- as.data.table(optimal_lineups)
+  
+  # Apply Top Count filters
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+  }
+  
+  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  }
+  
+  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+  }
+  
+  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  
+  if(platform == "dk") {
+    if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && 
+        "CumulativeOwnership" %in% names(filtered_lineups)) {
+      cum_vals <- filtered_lineups$CumulativeOwnership[!is.na(filtered_lineups$CumulativeOwnership)]
+      if(length(cum_vals) > 0) {
+        data_min <- min(cum_vals)
+        data_max <- max(cum_vals)
+        filter_min <- filters$cumulative_ownership_range[1]
+        filter_max <- filters$cumulative_ownership_range[2]
+        
+        if(filter_max >= data_min && filter_min <= data_max) {
+          filtered_lineups <- filtered_lineups[CumulativeOwnership >= filter_min & CumulativeOwnership <= filter_max]
+        }
+      }
+    }
+    
+    if (!is.null(filters$geometric_mean_range) && length(filters$geometric_mean_range) == 2 && 
+        "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+      geom_vals <- filtered_lineups$GeometricMeanOwnership[!is.na(filtered_lineups$GeometricMeanOwnership)]
+      if(length(geom_vals) > 0) {
+        data_min <- min(geom_vals)
+        data_max <- max(geom_vals)
+        filter_min <- filters$geometric_mean_range[1]
+        filter_max <- filters$geometric_mean_range[2]
+        
+        if(filter_max >= data_min && filter_min <= data_max) {
+          filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filter_min & GeometricMeanOwnership <= filter_max]
+        }
+      }
+    }
+  }
+  
+  # Apply fighter exclusion filter
+  if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
+    if(platform == "dk") {
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+    } else {
+      fighter_cols <- paste0("Fighter", 1:FD_ROSTER_SIZE)
+    }
+    
+    if(length(fighter_cols) > 0) {
+      to_exclude <- rep(FALSE, nrow(filtered_lineups))
+      
+      for(col in fighter_cols) {
+        if(col %in% names(filtered_lineups)) {
+          to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_fighters
+        }
+      }
+      
+      # For FD, also check MVP column
+      if(platform == "fd" && "MVP" %in% names(filtered_lineups)) {
+        to_exclude <- to_exclude | filtered_lineups$MVP %in% filters$excluded_fighters
+      }
+      
+      filtered_lineups <- filtered_lineups[!to_exclude]
+    }
+  }
+  
+  # Calculate filtered pool rates
+  if(nrow(filtered_lineups) == 0) {
+    return(data.frame())
+  }
+  
+  # Get all fighters from filtered lineups
+  if(platform == "dk") {
+    fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+    all_fighters <- unique(unlist(filtered_lineups[, ..fighter_cols]))
+  } else {
+    fighter_cols <- paste0("Fighter", 1:FD_ROSTER_SIZE)
+    all_fighters <- unique(unlist(filtered_lineups[, ..fighter_cols]))
+    # For FD, also include MVP fighters
+    if("MVP" %in% names(filtered_lineups)) {
+      mvp_fighters <- unique(filtered_lineups$MVP)
+      all_fighters <- unique(c(all_fighters, mvp_fighters))
+    }
+  }
+  
+  # Calculate filtered pool rates
+  filtered_rates <- data.table(
+    Name = all_fighters,
+    FilteredPoolRate = 0
+  )
+  
+  for(fighter in all_fighters) {
+    # Count appearances in filtered lineups
+    fighter_appears <- logical(nrow(filtered_lineups))
+    for(col in fighter_cols) {
+      if(col %in% names(filtered_lineups)) {
+        fighter_appears <- fighter_appears | (filtered_lineups[[col]] == fighter)
+      }
+    }
+    
+    # For FD, also check MVP column
+    if(platform == "fd" && "MVP" %in% names(filtered_lineups)) {
+      fighter_appears <- fighter_appears | (filtered_lineups$MVP == fighter)
+    }
+    
+    filtered_rates[Name == fighter, FilteredPoolRate := (sum(fighter_appears) / nrow(filtered_lineups)) * 100]
+  }
+  
+  return(as.data.frame(filtered_rates))
+}
+
+# Function to calculate cumulative ownership and geometric mean for lineups
+calculate_lineup_ownership_stats <- function(lineup_data, fighter_ownership_map, platform = "dk") {
+  if(is.null(lineup_data) || nrow(lineup_data) == 0) return(lineup_data)
+  
+  # Determine roster size and fighter columns based on platform
+  if(platform == "dk") {
+    roster_size <- DK_ROSTER_SIZE
+    fighter_cols <- paste0("Fighter", 1:roster_size)
+    ownership_col <- "DKOwn"
+  } else {
+    roster_size <- FD_ROSTER_SIZE
+    fighter_cols <- paste0("Fighter", 1:roster_size)
+    ownership_col <- "FDOwn"
+    # For FD, also include MVP in ownership calculation
+    if("MVP" %in% names(lineup_data)) {
+      fighter_cols <- c("MVP", fighter_cols)
+    }
+  }
+  
+  # Initialize new columns
+  lineup_data$CumulativeOwnership <- 0
+  lineup_data$GeometricMeanOwnership <- 0
+  
+  # Calculate for each lineup
+  for(i in 1:nrow(lineup_data)) {
+    ownership_values <- c()
+    
+    # Get ownership for each fighter in the lineup
+    for(col in fighter_cols) {
+      if(col %in% names(lineup_data)) {
+        fighter_name <- lineup_data[[col]][i]
+        if(!is.na(fighter_name) && fighter_name %in% names(fighter_ownership_map)) {
+          ownership <- fighter_ownership_map[fighter_name]
+          if(!is.na(ownership)) {
+            # Convert to percentage if it's in decimal format (0.17 -> 17%)
+            if(ownership < 1) {
+              ownership <- ownership * 100
+            }
+            ownership_values <- c(ownership_values, ownership)
+          }
+        }
+      }
+    }
+    
+    # Calculate cumulative ownership (sum)
+    if(length(ownership_values) > 0) {
+      lineup_data$CumulativeOwnership[i] <- sum(ownership_values)
+      
+      # Calculate geometric mean (ownership is already in percentage format)
+      ownership_decimals <- ownership_values / 100
+      geometric_mean <- exp(mean(log(ownership_decimals[ownership_decimals > 0])))
+      lineup_data$GeometricMeanOwnership[i] <- geometric_mean * 100
+    }
+  }
+  
+  return(lineup_data)
+}
+
 # Optimized DraftKings lineup finder
 find_dk_optimal_lineups <- function(sim_data, k = 5) {
   # Ensure data.table
@@ -842,12 +1030,115 @@ find_dk_optimal_lineups <- function(sim_data, k = 5) {
 }
 
 
-# Optimized function without excluded fighters functionality
+find_fd_optimal_lineups <- function(sim_data, k = 5) {
+  # Ensure data.table
+  setDT(sim_data)
+  
+  # Filter out fighters with zero salary and ensure non-NA values
+  sim_data <- sim_data[FDSalary > 0 & !is.na(FDScore)]
+  
+  # Pre-filter top candidates using a single vectorized operation
+  sim_data[, PPD := FDScore / FDSalary]
+  
+  # Get top candidates by both absolute points and value (points per dollar)
+  top_points_idx <- order(-sim_data$FDScore)[1:min(10, nrow(sim_data))]
+  top_ppd_idx <- order(-sim_data$PPD)[1:min(12, nrow(sim_data))]
+  
+  # Combine candidates more efficiently
+  candidate_idx <- unique(c(top_points_idx, top_ppd_idx))
+  candidates <- sim_data[candidate_idx, .(Name, FDSalary, FDScore)]
+  
+  n <- nrow(candidates)
+  if(n < FD_ROSTER_SIZE) return(NULL)
+  
+  # Pre-allocate constraint matrix for reuse - more efficient
+  base_const_mat <- matrix(0, nrow = 2, ncol = n)
+  base_const_mat[1, ] <- candidates$FDSalary  # Salary cap
+  base_const_mat[2, ] <- 1                    # Roster size
+  
+  base_const_dir <- c("<=", "==")
+  base_const_rhs <- c(FD_SALARY_CAP, FD_ROSTER_SIZE)
+  
+  # Pre-allocate results with exact size
+  lineup_results <- data.frame(
+    Lineup = character(k),
+    Rank = integer(k),
+    stringsAsFactors = FALSE
+  )
+  
+  # Track excluded pairs for diversity
+  excluded_pairs <- list()
+  
+  # Find k lineups with more efficient LP setup
+  lineup_count <- 0
+  for(i in 1:k) {
+    # Create constraint matrix - only regenerate what's needed
+    if(length(excluded_pairs) > 0) {
+      const_rows <- 2 + length(excluded_pairs)
+      const.mat <- matrix(0, nrow = const_rows, ncol = n)
+      const.mat[1:2, ] <- base_const_mat
+      
+      const.dir <- c(base_const_dir, rep("<=", length(excluded_pairs)))
+      const.rhs <- c(base_const_rhs, rep(FD_ROSTER_SIZE-1, length(excluded_pairs)))
+      
+      for(j in 1:length(excluded_pairs)) {
+        const.mat[2+j, excluded_pairs[[j]]] <- 1
+      }
+    } else {
+      const.mat <- base_const_mat
+      const.dir <- base_const_dir
+      const.rhs <- base_const_rhs
+    }
+    
+    # Solve with minimal options for speed
+    result <- tryCatch({
+      suppressWarnings(
+        lp("max", candidates$FDScore, const.mat, const.dir, const.rhs, 
+           all.bin = TRUE, presolve = 0, compute.sens = 0)
+      )
+    }, error = function(e) {
+      NULL
+    })
+    
+    if(is.null(result) || result$status != 0) break
+    
+    # Get selected fighters
+    selected_indices <- which(result$solution > 0.9)
+    
+    if(length(selected_indices) != FD_ROSTER_SIZE) break
+    
+    # Create lineup string - use sorted names for consistent identification
+    selected_fighters <- sort(candidates$Name[selected_indices])
+    lineup_str <- paste(selected_fighters, collapse = "|")
+    
+    # Add to results
+    lineup_count <- lineup_count + 1
+    lineup_results$Lineup[lineup_count] <- lineup_str
+    lineup_results$Rank[lineup_count] <- i
+    
+    # Track for diversity
+    excluded_pairs[[length(excluded_pairs) + 1]] <- selected_indices
+    
+    # Free memory immediately
+    rm(result)
+  }
+  
+  # Return only valid results
+  if(lineup_count == 0) return(NULL)
+  if(lineup_count < k) {
+    lineup_results <- lineup_results[1:lineup_count, , drop = FALSE]
+  }
+  
+  return(lineup_results)
+}
+
+
+# Complete DraftKings optimal lineup function
 count_dk_optimal_lineups <- function(sim_results) {
   # Always use top_k=5
   top_k <- 5
   
-  # Get roster size and salary cap from the global environment or hardcode
+  # Get roster size and salary cap
   dk_roster_size <- 6
   dk_salary_cap <- 50000
   
@@ -1036,17 +1327,30 @@ count_dk_optimal_lineups <- function(sim_results) {
   lineup_data$Top3Count <- lineup_data$Rank1Count + lineup_data$Rank2Count + lineup_data$Rank3Count
   lineup_data$Top5Count <- rowSums(lineup_data[, paste0("Rank", 1:5, "Count")])
   
-  # Create salary lookup table
+  # Create salary and ownership lookup tables
   first_sim <- sim_results_dt[SimID == all_sim_ids[1]]
-  salary_lookup <- unique(first_sim[, .(Name, DKSalary)])
-  setkey(salary_lookup, Name)
+  
+  # Get salary data
+  salary_lookup <- unique(sim_results[!duplicated(sim_results$Name), c("Name", "DKSalary")])
   
   # Calculate total salary efficiently
   lineup_data$TotalSalary <- sapply(lineup_data$Lineup, function(lineup_str) {
     fighters <- strsplit(lineup_str, "\\|")[[1]]
-    salaries <- salary_lookup[fighters, on = "Name", nomatch = 0]$DKSalary
+    salaries <- sapply(fighters, function(f) {
+      match_row <- which(salary_lookup$Name == f)
+      if(length(match_row) > 0) salary_lookup$DKSalary[match_row[1]] else 0
+    })
     sum(salaries, na.rm = TRUE)
   })
+  
+  # Get ownership data if available
+  ownership_map <- NULL
+  if("DKOwn" %in% names(sim_results)) {
+    ownership_data <- unique(sim_results[!is.na(sim_results$DKOwn), c("Name", "DKOwn")])
+    if(nrow(ownership_data) > 0) {
+      ownership_map <- setNames(ownership_data$DKOwn, ownership_data$Name)
+    }
+  }
   
   # Sort by Top1Count
   lineup_data <- lineup_data[order(-lineup_data$Top1Count), ]
@@ -1068,6 +1372,15 @@ count_dk_optimal_lineups <- function(sim_results) {
     lineup_data[, grep("Count$|Salary$", names(lineup_data), value = TRUE), drop = FALSE]
   )
   
+  # Calculate ownership statistics if ownership data is available
+  if(!is.null(ownership_map) && length(ownership_map) > 0) {
+    result <- calculate_lineup_ownership_stats(result, ownership_map, "dk")
+  } else {
+    # Add default ownership columns if no ownership data
+    result$CumulativeOwnership <- 0
+    result$GeometricMeanOwnership <- 0
+  }
+  
   # Clean up to free memory
   rm(lineup_data, fighter_cols, combined_lineups, lineup_table, salary_lookup)
   gc(verbose = FALSE, full = TRUE)
@@ -1075,114 +1388,12 @@ count_dk_optimal_lineups <- function(sim_results) {
   return(result)
 }
 
-
-find_fd_optimal_lineups <- function(sim_data, k = 5) {
-  # Ensure data.table
-  setDT(sim_data)
-  
-  # Filter out fighters with zero salary and ensure non-NA values
-  sim_data <- sim_data[FDSalary > 0 & !is.na(FDScore)]
-  
-  # Pre-filter top candidates using a single vectorized operation
-  sim_data[, PPD := FDScore / FDSalary]
-  
-  # Get top candidates by both absolute points and value (points per dollar)
-  top_points_idx <- order(-sim_data$FDScore)[1:min(10, nrow(sim_data))]
-  top_ppd_idx <- order(-sim_data$PPD)[1:min(12, nrow(sim_data))]
-  
-  # Combine candidates more efficiently
-  candidate_idx <- unique(c(top_points_idx, top_ppd_idx))
-  candidates <- sim_data[candidate_idx, .(Name, FDSalary, FDScore)]
-  
-  n <- nrow(candidates)
-  if(n < FD_ROSTER_SIZE) return(NULL)
-  
-  # Pre-allocate constraint matrix for reuse - more efficient
-  base_const_mat <- matrix(0, nrow = 2, ncol = n)
-  base_const_mat[1, ] <- candidates$FDSalary  # Salary cap
-  base_const_mat[2, ] <- 1                    # Roster size
-  
-  base_const_dir <- c("<=", "==")
-  base_const_rhs <- c(FD_SALARY_CAP, FD_ROSTER_SIZE)
-  
-  # Pre-allocate results with exact size
-  lineup_results <- data.frame(
-    Lineup = character(k),
-    Rank = integer(k),
-    stringsAsFactors = FALSE
-  )
-  
-  # Track excluded pairs for diversity
-  excluded_pairs <- list()
-  
-  # Find k lineups with more efficient LP setup
-  lineup_count <- 0
-  for(i in 1:k) {
-    # Create constraint matrix - only regenerate what's needed
-    if(length(excluded_pairs) > 0) {
-      const_rows <- 2 + length(excluded_pairs)
-      const.mat <- matrix(0, nrow = const_rows, ncol = n)
-      const.mat[1:2, ] <- base_const_mat
-      
-      const.dir <- c(base_const_dir, rep("<=", length(excluded_pairs)))
-      const.rhs <- c(base_const_rhs, rep(FD_ROSTER_SIZE-1, length(excluded_pairs)))
-      
-      for(j in 1:length(excluded_pairs)) {
-        const.mat[2+j, excluded_pairs[[j]]] <- 1
-      }
-    } else {
-      const.mat <- base_const_mat
-      const.dir <- base_const_dir
-      const.rhs <- base_const_rhs
-    }
-    
-    # Solve with minimal options for speed
-    result <- tryCatch({
-      suppressWarnings(
-        lp("max", candidates$FDScore, const.mat, const.dir, const.rhs, 
-           all.bin = TRUE, presolve = 0, compute.sens = 0)
-      )
-    }, error = function(e) {
-      NULL
-    })
-    
-    if(is.null(result) || result$status != 0) break
-    
-    # Get selected fighters
-    selected_indices <- which(result$solution > 0.9)
-    
-    if(length(selected_indices) != FD_ROSTER_SIZE) break
-    
-    # Create lineup string - use sorted names for consistent identification
-    selected_fighters <- sort(candidates$Name[selected_indices])
-    lineup_str <- paste(selected_fighters, collapse = "|")
-    
-    # Add to results
-    lineup_count <- lineup_count + 1
-    lineup_results$Lineup[lineup_count] <- lineup_str
-    lineup_results$Rank[lineup_count] <- i
-    
-    # Track for diversity
-    excluded_pairs[[length(excluded_pairs) + 1]] <- selected_indices
-    
-    # Free memory immediately
-    rm(result)
-  }
-  
-  # Return only valid results
-  if(lineup_count == 0) return(NULL)
-  if(lineup_count < k) {
-    lineup_results <- lineup_results[1:lineup_count, , drop = FALSE]
-  }
-  
-  return(lineup_results)
-}
-
+# Complete FanDuel optimal lineup function
 count_fd_optimal_lineups <- function(sim_results) {
   # Always use top_k=5
   top_k <- 5
   
-  # Get roster size and salary cap from the global environment
+  # Get roster size and salary cap
   fd_roster_size <- 6  # Including 1 MVP
   fd_salary_cap <- 100
   
@@ -1400,17 +1611,27 @@ count_fd_optimal_lineups <- function(sim_results) {
   lineup_data$Top3Count <- lineup_data$Rank1Count + lineup_data$Rank2Count + lineup_data$Rank3Count
   lineup_data$Top5Count <- rowSums(lineup_data[, paste0("Rank", 1:5, "Count")])
   
-  # Create salary lookup table
-  first_sim <- sim_results_dt[SimID == all_sim_ids[1]]
-  salary_lookup <- unique(first_sim[, .(Name, FDSalary)])
-  setkey(salary_lookup, Name)
+  # Get salary data
+  salary_lookup <- unique(sim_results[!duplicated(sim_results$Name), c("Name", "FDSalary")])
   
   # Calculate total salary efficiently
   lineup_data$TotalSalary <- sapply(lineup_data$Lineup, function(lineup_str) {
     fighters <- strsplit(lineup_str, "\\|")[[1]]
-    salaries <- salary_lookup[fighters, on = "Name", nomatch = 0]$FDSalary
+    salaries <- sapply(fighters, function(f) {
+      match_row <- which(salary_lookup$Name == f)
+      if(length(match_row) > 0) salary_lookup$FDSalary[match_row[1]] else 0
+    })
     sum(salaries, na.rm = TRUE)
   })
+  
+  # Get ownership data if available
+  ownership_map <- NULL
+  if("FDOwn" %in% names(sim_results)) {
+    ownership_data <- unique(sim_results[!is.na(sim_results$FDOwn), c("Name", "FDOwn")])
+    if(nrow(ownership_data) > 0) {
+      ownership_map <- setNames(ownership_data$FDOwn, ownership_data$Name)
+    }
+  }
   
   # Find most common MVP for each lineup
   lineup_data$MVP <- character(nrow(lineup_data))
@@ -1444,12 +1665,22 @@ count_fd_optimal_lineups <- function(sim_results) {
     lineup_data[, c("MVP", grep("Count$|Salary$", names(lineup_data), value = TRUE)), drop = FALSE]
   )
   
+  # Calculate ownership statistics if ownership data is available
+  if(!is.null(ownership_map) && length(ownership_map) > 0) {
+    result <- calculate_lineup_ownership_stats(result, ownership_map, "fd")
+  } else {
+    # Add default ownership columns if no ownership data
+    result$CumulativeOwnership <- 0
+    result$GeometricMeanOwnership <- 0
+  }
+  
   # Clean up to free memory
   rm(lineup_data, fighter_cols, combined_lineups, lineup_table, salary_lookup)
   gc(verbose = FALSE, full = TRUE)
   
   return(result)
 }
+
 
 calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Validate inputs before proceeding
@@ -1545,7 +1776,6 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
 
 
 
-# Calculate filtered pool stats for DraftKings
 calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   # Validate inputs before proceeding
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -1556,7 +1786,6 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   filtered_lineups <- tryCatch({
     as.data.table(optimal_lineups)
   }, error = function(e) {
-    # If conversion fails, return empty result
     return(NULL)
   })
   
@@ -1564,74 +1793,81 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     return(list(count = 0, thresholds = NULL))
   }
   
-  # Apply Top1Count filter safely
+  # Apply Top Count filters safely
   if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
   }
   
-  # Apply Top2Count filter safely
   if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
   }
   
-  # Apply Top3Count filter safely
   if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
   }
   
-  # Apply Top5Count filter safely
   if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
   }
   
-  # Apply driver exclusion filter safely
+  # Apply ownership range filters ONLY if the columns exist and ranges are valid
+  if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && 
+      "CumulativeOwnership" %in% names(filtered_lineups)) {
+    # Only apply filter if the range makes sense
+    cum_vals <- filtered_lineups$CumulativeOwnership[!is.na(filtered_lineups$CumulativeOwnership)]
+    if(length(cum_vals) > 0) {
+      data_min <- min(cum_vals)
+      data_max <- max(cum_vals)
+      filter_min <- filters$cumulative_ownership_range[1]
+      filter_max <- filters$cumulative_ownership_range[2]
+      
+      # Only apply if filter range overlaps with data range
+      if(filter_max >= data_min && filter_min <= data_max) {
+        filtered_lineups <- filtered_lineups[CumulativeOwnership >= filter_min & CumulativeOwnership <= filter_max]
+      }
+    }
+  }
+  
+  if (!is.null(filters$geometric_mean_range) && length(filters$geometric_mean_range) == 2 && 
+      "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+    # Only apply filter if the range makes sense
+    geom_vals <- filtered_lineups$GeometricMeanOwnership[!is.na(filtered_lineups$GeometricMeanOwnership)]
+    if(length(geom_vals) > 0) {
+      data_min <- min(geom_vals)
+      data_max <- max(geom_vals)
+      filter_min <- filters$geometric_mean_range[1]
+      filter_max <- filters$geometric_mean_range[2]
+      
+      # Only apply if filter range overlaps with data range
+      if(filter_max >= data_min && filter_min <= data_max) {
+        filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filter_min & GeometricMeanOwnership <= filter_max]
+      }
+    }
+  }
+  
+  # Apply fighter exclusion filter
   if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
-    # Get fighter columns
     fighter_cols <- grep("^Fighter", names(filtered_lineups), value = TRUE)
     
     if(length(fighter_cols) > 0) {
-      # Initialize vector for tracking which rows to exclude
       to_exclude <- rep(FALSE, nrow(filtered_lineups))
       
-      # Check each fighter column
       for(col in fighter_cols) {
-        # Update the exclusion vector if any excluded fighter is found
         to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_fighters
       }
       
-      # Keep only the rows that don't contain excluded fighters
       filtered_lineups <- filtered_lineups[!to_exclude]
     }
   }
   
-  # Return early with count 0 if no lineups match the filters
-  if(nrow(filtered_lineups) == 0) {
-    return(list(count = 0, thresholds = NULL))
-  }
-  
-  # Calculate thresholds for display
-  thresholds <- list()
-  threshold_columns <- c("Top1Count", "Top2Count", "Top3Count", "Top5Count")
-  
-  for (col in threshold_columns) {
-    if (col %in% names(filtered_lineups) && !all(is.na(filtered_lineups[[col]]))) {
-      min_val <- min(filtered_lineups[[col]], na.rm = TRUE)
-      max_val <- max(filtered_lineups[[col]], na.rm = TRUE)
-      
-      # Use proper naming convention
-      min_name <- paste0("min_", sub("Count", "", tolower(col)))
-      max_name <- paste0("max_", sub("Count", "", tolower(col)))
-      
-      thresholds[[min_name]] <- min_val
-      thresholds[[max_name]] <- max_val
-    }
-  }
-  
+  # Return count and thresholds
   return(list(
     count = nrow(filtered_lineups),
-    thresholds = thresholds
+    thresholds = NULL
   ))
 }
+
+
 
 # Simplified DraftKings random lineup generation
 generate_random_dk_lineups <- function(optimal_lineups, filters) {
@@ -1654,6 +1890,18 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
   
   if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  
+  
+  # Apply ownership range filters
+  if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && "CumulativeOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$cumulative_ownership_range[1] & 
+                                           CumulativeOwnership <= filters$cumulative_ownership_range[2]]
+  }
+  
+  if (!is.null(filters$geometric_mean_range) && length(filters$geometric_mean_range) == 2 && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filters$geometric_mean_range[1] & 
+                                           GeometricMeanOwnership <= filters$geometric_mean_range[2]]
   }
   
   # Check if any lineups match filters
@@ -1710,6 +1958,20 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
   # Keep only needed columns
   keep_cols <- c(fighter_cols, "Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalSalary")
   keep_cols <- intersect(keep_cols, names(selected_lineups))
+  
+  if(!is.null(selected_lineups) && nrow(selected_lineups) > 0) {
+    # Create ownership mapping from fighter_counts attribute or calculate from filtered_lineups
+    ownership_map <- NULL
+    if(!is.null(filtered_lineups) && "DKOwn" %in% names(filtered_lineups)) {
+      # Get ownership data from the first occurrence of each fighter
+      ownership_data <- filtered_lineups[, .(DKOwn = first(DKOwn)), by = Name]
+      ownership_map <- setNames(ownership_data$DKOwn, ownership_data$Name)
+    }
+    
+    if(!is.null(ownership_map)) {
+      selected_lineups <- calculate_lineup_ownership_stats(selected_lineups, ownership_map, "dk")
+    }
+  }
   
   return(as.data.frame(selected_lineups[, ..keep_cols]))
 }
@@ -1856,11 +2118,24 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
     attr(selected_lineups, "mvp_exposure") <- mvp_exposure
   }
   
+  if(!is.null(selected_lineups) && nrow(selected_lineups) > 0) {
+    # Create ownership mapping from fighter_counts attribute or calculate from filtered_lineups
+    ownership_map <- NULL
+    if(!is.null(filtered_lineups) && "FDOwn" %in% names(filtered_lineups)) {
+      # Get ownership data from the first occurrence of each fighter
+      ownership_data <- filtered_lineups[, .(FDOwn = first(FDOwn)), by = Name]
+      ownership_map <- setNames(ownership_data$FDOwn, ownership_data$Name)
+    }
+    
+    if(!is.null(ownership_map)) {
+      selected_lineups <- calculate_lineup_ownership_stats(selected_lineups, ownership_map, "fd")
+    }
+  }
+  
   # Return the data frame with exposure attribute
   return(as.data.frame(selected_lineups))
 }
 
-# Calculate fighter exposure for DraftKings lineups
 calculate_dk_fighter_exposure <- function(optimal_lineups, fantasy_analysis, random_lineups = NULL) {
   # Quick validation
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -1876,116 +2151,49 @@ calculate_dk_fighter_exposure <- function(optimal_lineups, fantasy_analysis, ran
   fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
   all_fighters <- unique(unlist(optimal_lineups[, ..fighter_cols]))
   
-  # Initialize metrics data frame
+  # Initialize metrics data frame with all needed columns (including Exposure)
   metrics_data <- data.table(
     Name = all_fighters,
     DKSalary = NA_real_,
     DKOwn = NA_real_,
     OptimalRate = 0,
-    EliteRate = 0,
-    FloorRate = 0,
-    AppearanceRate = 0,
-    Exposure = 0,
-    Leverage = 0
+    FilteredPoolRate = 0,
+    Exposure = 0,  # Always initialize this column
+    Leverage = 0   # Always initialize this column
   )
   
-  # Match with fantasy analysis data using direct matching
+  # Match with fantasy analysis data
   if(!is.null(fantasy_analysis) && nrow(fantasy_analysis) > 0) {
+    lookup_data <- fantasy_analysis[, .(Name, DKSalary, DKOwn)]
+    setkey(lookup_data, Name)
     
-      # Prepare lookup table
-      lookup_data <- fantasy_analysis[, .(Name, DKSalary, DKOwn)]
-      setkey(lookup_data, Name)
+    for(i in 1:nrow(metrics_data)) {
+      fighter_name <- metrics_data$Name[i]
+      matches <- lookup_data[Name == fighter_name]
       
-      # Update all metrics data at once for efficiency
-      for(i in 1:nrow(metrics_data)) {
-        fighter_name <- metrics_data$Name[i]
-        
-        # Find matching fighter data
-        matches <- lookup_data[Name == fighter_name]
-        
-        if(nrow(matches) > 0) {
-          # Update values directly
-          metrics_data[i, DKSalary := matches$DKSalary[1]]
-          metrics_data[i, DKOwn := matches$DKOwn[1]]
-        }
+      if(nrow(matches) > 0) {
+        metrics_data[i, DKSalary := matches$DKSalary[1]]
+        metrics_data[i, DKOwn := matches$DKOwn[1]]
       }
+    }
   }
   
-  # Calculate OptimalRate (percentage of Top1Count lineups with this fighter)
+  # Calculate OptimalRate
   total_top1 <- sum(optimal_lineups$Top1Count, na.rm = TRUE)
   if(total_top1 > 0) {
     for(fighter in all_fighters) {
-      # Find lineups with this fighter
       fighter_appears <- logical(nrow(optimal_lineups))
       for(col in fighter_cols) {
         fighter_appears <- fighter_appears | (optimal_lineups[[col]] == fighter)
       }
-      driver_matches <- which(fighter_appears)
+      fighter_matches <- which(fighter_appears)
       
-      # Calculate optimal rate percentage
-      fighter_total <- sum(optimal_lineups$Top1Count[driver_matches], na.rm = TRUE)
+      fighter_total <- sum(optimal_lineups$Top1Count[fighter_matches], na.rm = TRUE)
       metrics_data[Name == fighter, OptimalRate := (fighter_total / total_top1) * 100]
     }
   }
   
-  # Calculate EliteRate (top 10% of lineups by Top1Count)
-  if(nrow(optimal_lineups) >= 10) {
-    elite_lineups <- copy(optimal_lineups)
-    elite_lineups <- elite_lineups[order(-Top1Count, -Top5Count)]
-    
-    n_elite <- max(1, round(nrow(elite_lineups) * 0.1))
-    elite_lineups <- elite_lineups[1:n_elite]
-    
-    for(fighter in all_fighters) {
-      # Count appearances in elite lineups
-      fighter_appears <- logical(nrow(elite_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (elite_lineups[[col]] == fighter)
-      }
-      fighter_elite_count <- sum(fighter_appears)
-      
-      # Calculate elite rate
-      metrics_data[Name == fighter, EliteRate := (fighter_elite_count / n_elite) * 100]
-    }
-  }
-  
-  # Calculate FloorRate (top 20% of lineups by Top5Count)
-  if(nrow(optimal_lineups) >= 5) {
-    floor_lineups <- copy(optimal_lineups)
-    floor_lineups <- floor_lineups[order(-Top5Count, -Top1Count)]
-    
-    n_floor <- max(1, round(nrow(floor_lineups) * 0.2))
-    floor_lineups <- floor_lineups[1:n_floor]
-    
-    for(fighter in all_fighters) {
-      # Count appearances in floor lineups
-      fighter_appears <- logical(nrow(floor_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (floor_lineups[[col]] == fighter)
-      }
-      fighter_floor_count <- sum(fighter_appears)
-      
-      # Calculate floor rate
-      metrics_data[Name == fighter, FloorRate := (fighter_floor_count / n_floor) * 100]
-    }
-  }
-  
-  # Calculate AppearanceRate (percentage of all lineups with this fighter)
-  if(nrow(optimal_lineups) > 0) {
-    for(fighter in all_fighters) {
-      # Count appearances in all lineups
-      fighter_appears <- logical(nrow(optimal_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (optimal_lineups[[col]] == fighter)
-      }
-      fighter_appearance_count <- sum(fighter_appears)
-      
-      # Calculate appearance rate
-      metrics_data[Name == fighter, AppearanceRate := (fighter_appearance_count / nrow(optimal_lineups)) * 100]
-    }
-  }
-  
-  # Calculate Exposure from random lineups
+  # Calculate Exposure from random lineups (only if provided)
   if(!is.null(random_lineups) && nrow(random_lineups) > 0) {
     random_fighter_cols <- grep("^Fighter", names(random_lineups), value = TRUE)
     if(length(random_fighter_cols) > 0) {
@@ -1998,10 +2206,10 @@ calculate_dk_fighter_exposure <- function(optimal_lineups, fantasy_analysis, ran
       }
     }
   }
+  # If no random lineups, Exposure remains 0 (initialized above)
   
-  
-  # Calculate leverage
-  metrics_data[!is.na(DKOwn) & !is.na(Exposure), Leverage := Exposure - (DKOwn*100)]
+  # Calculate leverage (only if we have ownership data and exposure)
+  metrics_data[!is.na(DKOwn), Leverage := Exposure - (DKOwn*100)]
   
   # Sort by OptimalRate
   setorder(metrics_data, -OptimalRate)
@@ -2026,138 +2234,60 @@ calculate_fd_fighter_exposure <- function(optimal_lineups, fantasy_analysis, ran
     return(data.frame(Message = "No fighter columns found in lineups."))
   }
   
-  # Get all unique fighters (these are Names now instead of FDIDs)
+  # Get all unique fighters
   all_fighters <- unique(unlist(optimal_lineups[, ..fighter_cols]))
   
-  # Initialize metrics data frame - use Name as primary identifier
+  # Initialize metrics data frame with only needed columns
   metrics_data <- data.table(
     Name = all_fighters,
     FDSalary = NA_real_,
     FDOwn = NA_real_,
     OptimalRate = 0,
-    MVPRate = 0,  # Added for MVP tracking
-    EliteRate = 0,
-    FloorRate = 0,
-    AppearanceRate = 0,
+    FilteredPoolRate = 0,
+    MVPRate = 0,
     Exposure = 0,
-    MVPExposure = 0,  # Added for MVP exposure
+    MVPExposure = 0,
     Leverage = 0,
     FDID = NA_character_
   )
   
-  # Match with fantasy analysis data using direct matching
+  # Match with fantasy analysis data
   if(!is.null(fantasy_analysis) && nrow(fantasy_analysis) > 0) {
-    
-    # Prepare lookup table
     lookup_data <- fantasy_analysis[, .(Name, FDSalary, FDOwn)]
     setkey(lookup_data, Name)
     
-    # Update all metrics data at once for efficiency
     for(i in 1:nrow(metrics_data)) {
       fighter_name <- metrics_data$Name[i]
-      
-      # Find matching fighter data
       matches <- lookup_data[Name == fighter_name]
       
       if(nrow(matches) > 0) {
-        # Update values directly
         metrics_data[i, FDSalary := matches$FDSalary[1]]
         metrics_data[i, FDOwn := matches$FDOwn[1]]
       }
     }
   }
   
-  # Calculate OptimalRate (percentage of Top1Count lineups with this fighter)
+  # Calculate OptimalRate
   total_top1 <- sum(optimal_lineups$Top1Count, na.rm = TRUE)
   if(total_top1 > 0) {
     for(fighter in all_fighters) {
-      # Find lineups with this fighter
       fighter_appears <- logical(nrow(optimal_lineups))
       for(col in fighter_cols) {
         fighter_appears <- fighter_appears | (optimal_lineups[[col]] == fighter)
       }
       fighter_matches <- which(fighter_appears)
       
-      # Calculate optimal rate percentage
       fighter_total <- sum(optimal_lineups$Top1Count[fighter_matches], na.rm = TRUE)
       metrics_data[Name == fighter, OptimalRate := (fighter_total / total_top1) * 100]
     }
   }
   
-  # Calculate MVPRate (percentage of Top1Count lineups with this fighter as MVP)
+  # Calculate MVPRate
   if("MVP" %in% names(optimal_lineups) && total_top1 > 0) {
     for(fighter in all_fighters) {
-      # Find optimal lineups with this fighter as MVP
       mvp_matches <- which(optimal_lineups$MVP == fighter)
-      
-      # Calculate MVP rate percentage
       mvp_total <- sum(optimal_lineups$Top1Count[mvp_matches], na.rm = TRUE)
       metrics_data[Name == fighter, MVPRate := (mvp_total / total_top1) * 100]
-    }
-  }
-  
-  # Calculate EliteRate (top 10% of lineups by Top1Count)
-  if(nrow(optimal_lineups) >= 10) {
-    elite_lineups <- copy(optimal_lineups)
-    elite_lineups <- elite_lineups[order(-Top1Count, -Top5Count)]
-    
-    n_elite <- max(1, round(nrow(elite_lineups) * 0.1))
-    elite_lineups <- elite_lineups[1:n_elite]
-    
-    for(fighter in all_fighters) {
-      # Count appearances in elite lineups
-      fighter_appears <- logical(nrow(elite_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (elite_lineups[[col]] == fighter)
-      }
-      fighter_elite_count <- sum(fighter_appears)
-      
-      # Calculate elite rate
-      metrics_data[Name == fighter, EliteRate := (fighter_elite_count / n_elite) * 100]
-      
-      # Count MVP appearances in elite lineups if applicable
-      if("MVP" %in% names(elite_lineups)) {
-        mvp_elite_count <- sum(elite_lineups$MVP == fighter)
-        metrics_data[Name == fighter, EliteMVPRate := (mvp_elite_count / n_elite) * 100]
-      }
-    }
-  }
-  
-  # Calculate FloorRate (top 20% of lineups by Top5Count)
-  if(nrow(optimal_lineups) >= 5) {
-    floor_lineups <- copy(optimal_lineups)
-    floor_lineups <- floor_lineups[order(-Top5Count, -Top1Count)]
-    
-    n_floor <- max(1, round(nrow(floor_lineups) * 0.2))
-    floor_lineups <- floor_lineups[1:n_floor]
-    
-    for(fighter in all_fighters) {
-      # Count appearances in floor lineups
-      fighter_appears <- logical(nrow(floor_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (floor_lineups[[col]] == fighter)
-      }
-      fighter_floor_count <- sum(fighter_appears)
-      
-      # Calculate floor rate
-      metrics_data[Name == fighter, FloorRate := (fighter_floor_count / n_floor) * 100]
-      
-    }
-  }
-  
-  # Calculate AppearanceRate (percentage of all lineups with this fighter)
-  if(nrow(optimal_lineups) > 0) {
-    for(fighter in all_fighters) {
-      # Count appearances in all lineups
-      fighter_appears <- logical(nrow(optimal_lineups))
-      for(col in fighter_cols) {
-        fighter_appears <- fighter_appears | (optimal_lineups[[col]] == fighter)
-      }
-      fighter_appearance_count <- sum(fighter_appears)
-      
-      # Calculate appearance rate
-      metrics_data[Name == fighter, AppearanceRate := (fighter_appearance_count / nrow(optimal_lineups)) * 100]
-      
     }
   }
   
@@ -2189,38 +2319,8 @@ calculate_fd_fighter_exposure <- function(optimal_lineups, fantasy_analysis, ran
     }
   }
   
-  # Add fighter information from fantasy analysis - match directly on Name
-  if(!is.null(fantasy_analysis) && nrow(fantasy_analysis) > 0) {
-    for(i in 1:nrow(metrics_data)) {
-      fighter_name <- metrics_data$Name[i]
-      match_idx <- which(fantasy_analysis$Name == fighter_name)
-      
-      if(length(match_idx) > 0) {
-        idx <- match_idx[1]
-        
-        # Copy over all relevant fields
-        metrics_data$FDSalary[i] <- fantasy_analysis$FDSalary[idx]
-        
-        # Handle different column naming conventions for ownership
-        if("FDOwn" %in% names(fantasy_analysis)) {
-          metrics_data$FDOwn[i] <- fantasy_analysis$FDOwn[idx]
-        } else if("FDOP" %in% names(fantasy_analysis)) {
-          metrics_data$FDOwn[i] <- fantasy_analysis$FDOP[idx]
-        }
-        
-        # Also copy FDID if needed for reference
-        if("FDID" %in% names(fantasy_analysis)) {
-          metrics_data$FDID[i] <- fantasy_analysis$FDID[idx]
-        }
-        
-      }
-    }
-  }
-  
- 
-  # Calculate leverage (accounting for both standard and MVP exposure)
+  # Calculate leverage
   metrics_data[!is.na(FDOwn) & !is.na(Exposure), Leverage := Exposure - (FDOwn*100)]
-  
   
   # Sort by OptimalRate
   setorder(metrics_data, -OptimalRate)
@@ -2559,6 +2659,7 @@ server <- function(input, output, session) {
       })
     })
   })
+  
   
   # Run simulation button handler
   observeEvent(input$run_sim, {
@@ -2911,9 +3012,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # Lineup Builder UI
-  # Modified Lineup Builder UI
-  # This function will be used inside the server code to generate the UI
   
   output$lineup_builder_ui <- renderUI({
     # Check if any optimal lineups exist
@@ -2932,26 +3030,29 @@ server <- function(input, output, session) {
       )
     }
     
-    # Determine which platform to use automatically
-    platform_to_use <- NULL
-    if(has_dk_lineups) {
-      platform_to_use <- "dk"
-    } else if(has_fd_lineups) {
-      platform_to_use <- "fd"
+    # Calculate actual ranges for DK sliders if we have data
+    dk_cum_range <- c(100, 300)  # Default range for cumulative ownership
+    dk_geom_range <- c(15, 35)   # Default range for geometric mean
+    
+    if(has_dk_lineups && "CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+      cum_vals <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+      if(length(cum_vals) > 0) {
+        # CumulativeOwnership should already be in percentage format (sum of percentages)
+        dk_cum_range <- c(floor(min(cum_vals)), ceiling(max(cum_vals)))
+      }
     }
     
-    # Update the radio button value automatically based on which platform has lineups
-    if(!is.null(platform_to_use)) {
-      updateRadioButtons(
-        session,
-        "lineup_builder_platform",
-        selected = platform_to_use
-      )
+    if(has_dk_lineups && "GeometricMeanOwnership" %in% names(rv$dk_optimal_lineups)) {
+      geom_vals <- rv$dk_optimal_lineups$GeometricMeanOwnership[!is.na(rv$dk_optimal_lineups$GeometricMeanOwnership)]
+      if(length(geom_vals) > 0) {
+        # GeometricMeanOwnership should already be in percentage format
+        dk_geom_range <- c(floor(min(geom_vals)), ceiling(max(geom_vals)))
+      }
     }
     
-    # Generate UI for the selected platform
+    # Generate UI for both platforms
     tagList(
-      # Hidden platform selection - only shown if both platforms have lineups
+      # Platform selection
       fluidRow(
         box(
           width = 12,
@@ -2967,212 +3068,118 @@ server <- function(input, output, session) {
                 "DraftKings" = "dk",
                 "FanDuel" = "fd"
               ),
-              selected = platform_to_use,
+              selected = if(has_dk_lineups) "dk" else "fd",
               inline = TRUE
             )
           ),
           conditionalPanel(
             condition = "output.has_dk_lineups == 'true' && output.has_fd_lineups != 'true'",
+            radioButtons(
+              "lineup_builder_platform", 
+              "Platform:",
+              choices = list("DraftKings" = "dk"),
+              selected = "dk",
+              inline = TRUE
+            ),
             h4("Using DraftKings lineups")
           ),
           conditionalPanel(
             condition = "output.has_dk_lineups != 'true' && output.has_fd_lineups == 'true'",
+            radioButtons(
+              "lineup_builder_platform", 
+              "Platform:",
+              choices = list("FanDuel" = "fd"),
+              selected = "fd",
+              inline = TRUE
+            ),
             h4("Using FanDuel lineups")
           )
         )
       ),
       
-      # DraftKings lineup builder UI 
+      # DraftKings UI
       conditionalPanel(
-        condition = "input.lineup_builder_platform == 'dk' && output.has_dk_lineups == 'true'",
-        fluidRow(
-          box(width = 12,
-              title = "DraftKings Lineup Count Thresholds",
-              DTOutput("dk_lineup_count_thresholds") %>% withSpinner(color = "#ff0000")
-          )
-        ),
+        condition = "(input.lineup_builder_platform == 'dk' || (input.lineup_builder_platform == null && output.has_dk_lineups == 'true')) && output.has_dk_lineups == 'true'",
         fluidRow(
           box(width = 12,
               title = "DraftKings Lineup Filters",
               fluidRow(
-                column(3,
-                       numericInput("dk_min_top1_count", "Min Top 1 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("dk_min_top2_count", "Min Top 2 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("dk_min_top3_count", "Min Top 3 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("dk_min_top5_count", "Min Top 5 Count:", 
-                                    value = 0, min = 0)
-                )
+                column(3, numericInput("dk_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
+                column(3, numericInput("dk_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
+                column(3, numericInput("dk_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
+                column(3, numericInput("dk_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
               ),
               fluidRow(
-                column(6,
-                       selectizeInput("dk_excluded_fighters", "Exclude Fighters:",
-                                      choices = NULL,
-                                      multiple = TRUE,
-                                      options = list(
-                                        plugins = list('remove_button'),
-                                        placeholder = 'Click to select fighters to exclude'
-                                      ))
-                ),
-                column(6,
-                       numericInput("dk_num_random_lineups", "Number of Lineups to Generate:", 
-                                    value = 20, min = 1, max = 150)
-                )
+                column(6, sliderInput("dk_cumulative_ownership_range", "Cumulative Ownership Range:",
+                                      min = dk_cum_range[1], max = dk_cum_range[2], 
+                                      value = dk_cum_range, step = 1, post = "%")),
+                column(6, sliderInput("dk_geometric_mean_range", "Geometric Mean Ownership Range:",
+                                      min = dk_geom_range[1], max = dk_geom_range[2], 
+                                      value = dk_geom_range, step = 1, post = "%"))
               ),
               fluidRow(
-                column(6,
-                       div(class = "well well-sm",
-                           h4("Filtered Pool Statistics:"),
-                           textOutput("dk_filtered_pool_size")
-                       )
-                ),
-                column(6,
-                       div(style = "margin-top: 20px;",
-                           actionButton("generate_dk_lineups", "Randomize DraftKings Lineups", 
-                                        class = "btn-primary btn-lg", 
-                                        style = "width: 100%;"),
-                           br(), br(),
-                           downloadButton("download_dk_random_lineups", "Download Selected Lineups", 
-                                          style = "width: 100%;")
-                       )
-                )
+                column(6, selectizeInput("dk_excluded_fighters", "Exclude Fighters:", choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select fighters to exclude'))),
+                column(6, numericInput("dk_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
+              ),
+              fluidRow(
+                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("dk_filtered_pool_size"))),
+                column(6, div(style = "margin-top: 20px;",
+                              actionButton("generate_dk_lineups", "Randomize DraftKings Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_dk_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
               )
           )
         ),
-        box(
-          width = 12,
-          title = "Understanding Fighter Rates",
-          status = "info",
-          solidHeader = TRUE,
-          p("These rate statistics help you understand each fighter's presence in lineups:"),
-          tags$ul(
-            tags$li(tags$strong("OptimalRate:"), "How often fighters appear in lineups that finished 1st (optimal) in at least one simulation"),
-            tags$li(tags$strong("EliteRate:"), "How often fighters appear in the top 10% of lineups when ranked by Top1Count"),
-            tags$li(tags$strong("FloorRate:"), "How often fighters appear in the top 20% of lineups when ranked by Top5Count"),
-            tags$li(tags$strong("AppearanceRate:"), "How often fighters appear across all lineups in the full pool"),
-            tags$li(tags$strong("Exposure:"), "How often fighters appear in your selected randomized lineups"),
-            tags$li(tags$strong("Leverage:"), "The difference between a fighter's exposure in your lineups and their projected ownership")
-          )
+        fluidRow(
+          box(width = 12, title = "DraftKings Fighter Exposure Analysis",
+              DTOutput("dk_fighter_exposure_table") %>% withSpinner(color = "#ff0000"))
         ),
         fluidRow(
-          box(width = 12,
-              title = "DraftKings Fighter Exposure Analysis",
-              DTOutput("dk_fighter_exposure_table") %>% withSpinner(color = "#ff0000")
-          )
-        ),
-        fluidRow(
-          box(width = 12,
-              title = "Generated DraftKings Lineups",
-              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#ff0000")
-          )
+          box(width = 12, title = "Generated DraftKings Lineups",
+              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#ff0000"))
         )
       ),
       
-      # FanDuel lineup builder UI
+      # FanDuel UI (unchanged)
       conditionalPanel(
         condition = "input.lineup_builder_platform == 'fd' && output.has_fd_lineups == 'true'",
         fluidRow(
           box(width = 12,
-              title = "FanDuel Lineup Count Thresholds",
-              DTOutput("fd_lineup_count_thresholds") %>% withSpinner(color = "#ff0000")
-          )
-        ),
-        fluidRow(
-          box(width = 12,
               title = "FanDuel Lineup Filters",
               fluidRow(
-                column(3,
-                       numericInput("fd_min_top1_count", "Min Top 1 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("fd_min_top2_count", "Min Top 2 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("fd_min_top3_count", "Min Top 3 Count:", 
-                                    value = 0, min = 0)
-                ),
-                column(3,
-                       numericInput("fd_min_top5_count", "Min Top 5 Count:", 
-                                    value = 0, min = 0)
-                )
+                column(3, numericInput("fd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
+                column(3, numericInput("fd_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
+                column(3, numericInput("fd_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
+                column(3, numericInput("fd_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
               ),
               fluidRow(
-                column(6,
-                       selectizeInput("fd_excluded_fighters", "Exclude Fighters:",
-                                      choices = NULL,
-                                      multiple = TRUE,
-                                      options = list(
-                                        plugins = list('remove_button'),
-                                        placeholder = 'Click to select fighters to exclude'
-                                      ))
-                ),
-                column(6,
-                       numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", 
-                                    value = 20, min = 1, max = 150)
-                )
+                column(6, selectizeInput("fd_excluded_fighters", "Exclude Fighters:", choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select fighters to exclude'))),
+                column(6, numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
               ),
               fluidRow(
-                column(6,
-                       div(class = "well well-sm",
-                           h4("Filtered Pool Statistics:"),
-                           textOutput("fd_filtered_pool_size")
-                       )
-                ),
-                column(6,
-                       div(style = "margin-top: 20px;",
-                           actionButton("generate_fd_lineups", "Randomize FanDuel Lineups", 
-                                        class = "btn-primary btn-lg", 
-                                        style = "width: 100%;"),
-                           br(), br(),
-                           downloadButton("download_fd_random_lineups", "Download Selected Lineups", 
-                                          style = "width: 100%;")
-                       )
-                )
+                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("fd_filtered_pool_size"))),
+                column(6, div(style = "margin-top: 20px;",
+                              actionButton("generate_fd_lineups", "Randomize FanDuel Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_fd_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
               )
           )
         ),
-        box(
-          width = 12,
-          title = "Understanding Fighter Rates",
-          status = "info",
-          solidHeader = TRUE,
-          p("These rate statistics help you understand each fighter's presence in lineups:"),
-          tags$ul(
-            tags$li(tags$strong("OptimalRate:"), "How often fighters appear in lineups that finished 1st (optimal) in at least one simulation"),
-            tags$li(tags$strong("MVPRate:"), "How often fighters appear as MVP in optimal lineups"),
-            tags$li(tags$strong("EliteRate:"), "How often fighters appear in the top 10% of lineups when ranked by Top1Count"),
-            tags$li(tags$strong("FloorRate:"), "How often fighters appear in the top 20% of lineups when ranked by Top5Count"),
-            tags$li(tags$strong("AppearanceRate:"), "How often fighters appear across all lineups in the full pool"),
-            tags$li(tags$strong("Exposure:"), "How often fighters appear in your selected randomized lineups"),
-            tags$li(tags$strong("MVPExposure:"), "How often fighters appear as MVP in your randomized lineups"),
-            tags$li(tags$strong("Leverage:"), "The difference between a fighter's exposure in your lineups and their projected ownership")
-          )
+        fluidRow(
+          box(width = 12, title = "FanDuel Fighter Exposure Analysis",
+              DTOutput("fd_fighter_exposure_table") %>% withSpinner(color = "#ff0000"))
         ),
         fluidRow(
-          box(width = 12,
-              title = "FanDuel Fighter Exposure Analysis",
-              DTOutput("fd_fighter_exposure_table") %>% withSpinner(color = "#ff0000")
-          )
-        ),
-        fluidRow(
-          box(width = 12,
-              title = "Generated FanDuel Lineups",
-              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#ff0000")
-          )
+          box(width = 12, title = "Generated FanDuel Lineups",
+              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#ff0000"))
         )
       )
     )
   })
+
+
   
   # DraftKings fantasy projections
   output$dk_fantasy_projections <- renderDT({
@@ -3310,7 +3317,6 @@ server <- function(input, output, session) {
       )
   })
   
-  # Calculate DraftKings optimal lineup
   observeEvent(input$run_dk_optimization, {
     req(rv$simulation_results, rv$has_draftkings)
     
@@ -3384,7 +3390,33 @@ server <- function(input, output, session) {
             fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
             fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
             fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
+          }
+        }
+        
+        # UPDATE SLIDERS IMMEDIATELY WITH ACTUAL DATA
+        if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+          cum_values <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+          if(length(cum_values) > 0) {
+            cum_min <- floor(min(cum_values))
+            cum_max <- ceiling(max(cum_values))
             
+            updateSliderInput(session, "dk_cumulative_ownership_range",
+                              min = cum_min,
+                              max = cum_max,
+                              value = c(cum_min, cum_max))
+          }
+        }
+        
+        if("GeometricMeanOwnership" %in% names(rv$dk_optimal_lineups)) {
+          geom_values <- rv$dk_optimal_lineups$GeometricMeanOwnership[!is.na(rv$dk_optimal_lineups$GeometricMeanOwnership)]
+          if(length(geom_values) > 0) {
+            geom_min <- floor(min(geom_values))
+            geom_max <- ceiling(max(geom_values))
+            
+            updateSliderInput(session, "dk_geometric_mean_range",
+                              min = geom_min,
+                              max = geom_max,
+                              value = c(geom_min, geom_max))
           }
         }
       }
@@ -3403,12 +3435,114 @@ server <- function(input, output, session) {
             rv$dk_fantasy_analysis
           )
         }
+        
+        # CRITICAL: Initialize filtered pool rates immediately
+        if(!is.null(rv$dk_fighter_exposure)) {
+          # Set initial filtered pool rates to optimal rates
+          rv$dk_fighter_exposure$FilteredPoolRate <- rv$dk_fighter_exposure$OptimalRate
+          
+          # Update fighter choices for exclusion dropdown
+          fighter_data <- rv$dk_fighter_exposure
+          fighter_names <- fighter_data$Name
+          fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
+          fighter_choices <- setNames(fighter_names, fighter_labels)
+          
+          updateSelectizeInput(
+            session = session,
+            inputId = "dk_excluded_fighters",
+            choices = fighter_choices
+          )
+          
+          # FORCE TABLE TO APPEAR - Use isolate to prevent infinite loops
+          isolate({
+            # Trigger a reactive dependency by modifying and restoring the data
+            temp_exposure <- rv$dk_fighter_exposure
+            rv$dk_fighter_exposure <- NULL
+            rv$dk_fighter_exposure <- temp_exposure
+          })
+        }
       }
       
       # Remove the processing modal
       removeModal()
+      
+      # Show success message with delay to ensure data is processed
+      Sys.sleep(0.1)
+      showModal(modalDialog(
+        title = "Success",
+        HTML(sprintf(
+          "Successfully generated <b>%d</b> optimal lineups for DraftKings!<br><br>
+        You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.",
+          if(!is.null(rv$dk_optimal_lineups)) nrow(rv$dk_optimal_lineups) else 0
+        )),
+        easyClose = TRUE
+      ))
     })
   })
+  
+  observeEvent(rv$dk_optimal_lineups, {
+    if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+      # Ensure fighter exposure is calculated immediately
+      if(is.null(rv$dk_fighter_exposure)) {
+        # Create fighter mapping from simulation results
+        fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+        lineup_fighters <- c()
+        for(col in fighter_cols) {
+          if(col %in% names(rv$dk_optimal_lineups)) {
+            lineup_fighters <- c(lineup_fighters, rv$dk_optimal_lineups[[col]])
+          }
+        }
+        lineup_fighters <- unique(lineup_fighters)
+        
+        fighter_mapping <- data.frame(
+          Name = lineup_fighters,  
+          DKSalary = NA_real_,
+          DKOwn = NA_real_
+        )
+        
+        # Get mapping from simulation results
+        if(!is.null(rv$simulation_results)) {
+          unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                       c("Name", "DKSalary", "DKOwn")]
+          
+          # Match each fighter
+          for(i in 1:nrow(fighter_mapping)) {
+            name <- fighter_mapping$Name[i]
+            matches <- which(unique_sim_fighters$Name == name)
+            if(length(matches) > 0) {
+              match_idx <- matches[1]
+              fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
+              fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
+            }
+          }
+          
+          # Calculate fighter exposure (without random lineups initially)
+          rv$dk_fighter_exposure <- calculate_dk_fighter_exposure(
+            rv$dk_optimal_lineups, 
+            fighter_mapping,
+            NULL  # No random lineups initially
+          )
+          
+          # Initialize filtered pool rates
+          if(!is.null(rv$dk_fighter_exposure)) {
+            rv$dk_fighter_exposure$FilteredPoolRate <- rv$dk_fighter_exposure$OptimalRate
+            
+            # Update fighter choices for exclusion dropdown
+            fighter_data <- rv$dk_fighter_exposure
+            fighter_names <- fighter_data$Name
+            fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
+            fighter_choices <- setNames(fighter_names, fighter_labels)
+            
+            updateSelectizeInput(
+              session = session,
+              inputId = "dk_excluded_fighters",
+              choices = fighter_choices
+            )
+          }
+        }
+      }
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
   
   observeEvent(input$run_fd_optimization, {
     req(rv$simulation_results, rv$has_fanduel)
@@ -3512,9 +3646,33 @@ server <- function(input, output, session) {
         }
       }
       
+      if(!is.null(rv$fd_fighter_exposure)) {
+        # Initialize filtered pool rates
+        rv$fd_fighter_exposure$FilteredPoolRate <- rv$fd_fighter_exposure$OptimalRate
+        
+        # Get all fighters from the fighter exposure data
+        fighter_data <- rv$fd_fighter_exposure
+        fighter_names <- fighter_data$Name
+        fighter_labels <- paste0(fighter_names, " (Opt: ", round(fighter_data$OptimalRate, 1), 
+                                 "%, MVP: ", round(fighter_data$MVPRate, 1), "%)")
+        fighter_choices <- setNames(fighter_names, fighter_labels)
+        
+        updateSelectizeInput(
+          session = session,
+          inputId = "fd_excluded_fighters",
+          choices = fighter_choices
+        )
+        
+        # FORCE REACTIVE UPDATE
+        session$sendCustomMessage("shiny:updateinput", list(
+          inputId = "fd_fighter_exposure_table"
+        ))
+      }
+      
       # Remove the processing modal
       removeModal()
     })
+    
     
     # Update excluded fighters selection for the lineup builder
     if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_fighter_exposure)) {
@@ -3562,7 +3720,7 @@ server <- function(input, output, session) {
     # Keep only necessary columns
     cols_to_keep <- c(paste0("Fighter", 1:DK_ROSTER_SIZE), 
                       grep("^Top[0-9]+Count$", names(display_data), value = TRUE),
-                      "TotalSalary")
+                      "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
     cols_to_keep <- intersect(cols_to_keep, names(display_data))
     
     # Use the correct data.table syntax
@@ -3604,6 +3762,13 @@ server <- function(input, output, session) {
     # Apply formatting to TotalSalary column
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    if("CumulativeOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatPercentage('CumulativeOwnership', digits = 1)
+    }
+    if("GeometricMeanOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatPercentage('GeometricMeanOwnership', digits = 2)
     }
     
     # Apply formatting to count columns
@@ -3828,112 +3993,37 @@ server <- function(input, output, session) {
   })
   
   
-  # DraftKings Lineup Count Thresholds
-  output$dk_lineup_count_thresholds <- renderDT({
-    req(rv$dk_optimal_lineups)
-    
-    # Create threshold values to check
-    threshold_values <- c(1, 2, 3, 5, 10, 15, 20, 25)
-    
-    # Initialize a data frame to hold the counts
-    count_data <- data.frame(
-      Threshold = threshold_values,
-      Top1Count = numeric(length(threshold_values)),
-      Top2Count = numeric(length(threshold_values)),
-      Top3Count = numeric(length(threshold_values)),
-      Top5Count = numeric(length(threshold_values))
-    )
-    
-    # Calculate counts for each threshold and column
-    for (i in seq_along(threshold_values)) {
-      threshold <- threshold_values[i]
-      
-      # Count lineups with each column at or above the threshold
-      if ("Top1Count" %in% names(rv$dk_optimal_lineups))
-        count_data$Top1Count[i] <- sum(rv$dk_optimal_lineups$Top1Count >= threshold)
-      
-      if ("Top2Count" %in% names(rv$dk_optimal_lineups))
-        count_data$Top2Count[i] <- sum(rv$dk_optimal_lineups$Top2Count >= threshold)
-      
-      if ("Top3Count" %in% names(rv$dk_optimal_lineups))
-        count_data$Top3Count[i] <- sum(rv$dk_optimal_lineups$Top3Count >= threshold)
-      
-      if ("Top5Count" %in% names(rv$dk_optimal_lineups))
-        count_data$Top5Count[i] <- sum(rv$dk_optimal_lineups$Top5Count >= threshold)
-    }
-    datatable(
-      count_data,
-      options = list(
-        pageLength = 8,       # Show all the rows
-        dom = 't',            # Only show the table, no search or pagination
-        ordering = FALSE,     # No sorting
-        rownames = FALSE      # No row names
-      ),
-      rownames = FALSE,       # Add this explicit parameter at the datatable level
-      caption = "Number of lineups with at least this many appearances"
-    )
-  })
-  
-  # FanDuel Lineup Count Thresholds
-  output$fd_lineup_count_thresholds <- renderDT({
-    req(rv$fd_optimal_lineups)
-    
-    # Create threshold values to check
-    threshold_values <- c(1, 2, 3, 5, 10, 15, 20, 25)
-    
-    # Initialize a data frame to hold the counts
-    count_data <- data.frame(
-      Threshold = threshold_values,
-      Top1Count = numeric(length(threshold_values)),
-      Top2Count = numeric(length(threshold_values)),
-      Top3Count = numeric(length(threshold_values)),
-      Top5Count = numeric(length(threshold_values))
-    )
-    
-    # Calculate counts for each threshold and column
-    for (i in seq_along(threshold_values)) {
-      threshold <- threshold_values[i]
-      
-      # Count lineups with each column at or above the threshold
-      if ("Top1Count" %in% names(rv$fd_optimal_lineups))
-        count_data$Top1Count[i] <- sum(rv$fd_optimal_lineups$Top1Count >= threshold)
-      
-      if ("Top2Count" %in% names(rv$fd_optimal_lineups))
-        count_data$Top2Count[i] <- sum(rv$fd_optimal_lineups$Top2Count >= threshold)
-      
-      if ("Top3Count" %in% names(rv$fd_optimal_lineups))
-        count_data$Top3Count[i] <- sum(rv$fd_optimal_lineups$Top3Count >= threshold)
-      
-      if ("Top5Count" %in% names(rv$fd_optimal_lineups))
-        count_data$Top5Count[i] <- sum(rv$fd_optimal_lineups$Top5Count >= threshold)
-    }
-    
-    datatable(
-      count_data,
-      options = list(
-        pageLength = 8,       # Show all the rows
-        dom = 't',            # Only show the table, no search or pagination
-        ordering = FALSE,     # No sorting
-        rownames = FALSE      # No row names
-      ),
-      rownames = FALSE,       # Add this explicit parameter at the datatable level
-      caption = "Number of lineups with at least this many appearances"
-    )
-  })
-  
-  # DraftKings filtered pool stats
+
   output$dk_filtered_pool_size <- renderText({
     # Safely handle NULL cases
     if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
       return("Number of lineups in filtered pool: 0")
     }
     
-    # Create filters with NULL checks
+    # Create filters with safe defaults
     filters <- list(
       min_top1_count = if(!is.null(input$dk_min_top1_count)) input$dk_min_top1_count else 0,
       min_top2_count = if(!is.null(input$dk_min_top2_count)) input$dk_min_top2_count else 0,
       min_top3_count = if(!is.null(input$dk_min_top3_count)) input$dk_min_top3_count else 0,
       min_top5_count = if(!is.null(input$dk_min_top5_count)) input$dk_min_top5_count else 0,
+      cumulative_ownership_range = if(!is.null(input$dk_cumulative_ownership_range)) {
+        input$dk_cumulative_ownership_range
+      } else {
+        # Use actual data range as default
+        if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+          cum_vals <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+          if(length(cum_vals) > 0) c(min(cum_vals), max(cum_vals)) else c(0, 100)
+        } else c(0, 100)
+      },
+      geometric_mean_range = if(!is.null(input$dk_geometric_mean_range)) {
+        input$dk_geometric_mean_range
+      } else {
+        # Use actual data range as default
+        if("GeometricMeanOwnership" %in% names(rv$dk_optimal_lineups)) {
+          geom_vals <- rv$dk_optimal_lineups$GeometricMeanOwnership[!is.na(rv$dk_optimal_lineups$GeometricMeanOwnership)]
+          if(length(geom_vals) > 0) c(min(geom_vals), max(geom_vals)) else c(0, 100)
+        } else c(0, 100)
+      },
       excluded_fighters = if(!is.null(input$dk_excluded_fighters)) input$dk_excluded_fighters else character(0)
     )
     
@@ -3941,11 +4031,13 @@ server <- function(input, output, session) {
     stats <- tryCatch({
       calculate_dk_filtered_pool_stats(rv$dk_optimal_lineups, filters)
     }, error = function(e) {
-      list(count = 0, thresholds = NULL)
+      message("Error calculating filtered pool stats: ", e$message)
+      list(count = nrow(rv$dk_optimal_lineups), thresholds = NULL)
     })
     
     paste("Number of lineups in filtered pool:", stats$count)
   })
+  
   
   # FanDuel filtered pool stats
   output$fd_filtered_pool_size <- renderText({
@@ -3973,6 +4065,9 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
+
+
+  
   # Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
     req(rv$dk_optimal_lineups)
@@ -3983,6 +4078,8 @@ server <- function(input, output, session) {
       min_top2_count = input$dk_min_top2_count,
       min_top3_count = input$dk_min_top3_count,
       min_top5_count = input$dk_min_top5_count,
+      cumulative_ownership_range = input$dk_cumulative_ownership_range,
+      geometric_mean_range = input$dk_geometric_mean_range,
       num_lineups = input$dk_num_random_lineups
     )
     
@@ -4077,6 +4174,67 @@ server <- function(input, output, session) {
         ))
       }
     })
+  })
+  
+  # Dedicated reactive for DraftKings fighter exposure - ensures it loads immediately
+  observe({
+    if(!is.null(rv$dk_optimal_lineups) && !is.null(rv$simulation_results) && is.null(rv$dk_fighter_exposure)) {
+      
+      # Create fighter mapping
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      lineup_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(rv$dk_optimal_lineups)) {
+          lineup_fighters <- c(lineup_fighters, rv$dk_optimal_lineups[[col]])
+        }
+      }
+      lineup_fighters <- unique(lineup_fighters)
+      
+      fighter_mapping <- data.frame(
+        Name = lineup_fighters,  
+        DKSalary = NA_real_,
+        DKOwn = NA_real_
+      )
+      
+      # Get mapping from simulation results
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "DKSalary", "DKOwn")]
+      
+      # Match each fighter
+      for(i in 1:nrow(fighter_mapping)) {
+        name <- fighter_mapping$Name[i]
+        matches <- which(unique_sim_fighters$Name == name)
+        if(length(matches) > 0) {
+          match_idx <- matches[1]
+          fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
+          fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
+          fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
+        }
+      }
+      
+      # Calculate fighter exposure
+      rv$dk_fighter_exposure <- calculate_dk_fighter_exposure(
+        rv$dk_optimal_lineups, 
+        fighter_mapping
+      )
+      
+      # Initialize filtered pool rates
+      if(!is.null(rv$dk_fighter_exposure)) {
+        rv$dk_fighter_exposure$FilteredPoolRate <- rv$dk_fighter_exposure$OptimalRate
+        
+        # Update fighter choices for exclusion dropdown
+        fighter_data <- rv$dk_fighter_exposure
+        fighter_names <- fighter_data$Name
+        fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
+        fighter_choices <- setNames(fighter_names, fighter_labels)
+        
+        updateSelectizeInput(
+          session = session,
+          inputId = "dk_excluded_fighters",
+          choices = fighter_choices
+        )
+      }
+    }
   })
   
   observeEvent(input$generate_fd_lineups, {
@@ -4206,85 +4364,94 @@ server <- function(input, output, session) {
     })
   })
   
-  observeEvent(input$lineup_builder_platform, {
-    # When platform selection changes, update the fighter exclusion dropdown
-    if(input$lineup_builder_platform == "dk") {
-      # Only attempt to update if we have valid fighter exposure data
-      if(!is.null(rv$dk_fighter_exposure) && nrow(rv$dk_fighter_exposure) > 0) {
-        # First check if Name and DKName columns exist
-        if("Name" %in% names(rv$dk_fighter_exposure) && "DKName" %in% names(rv$dk_fighter_exposure)) {
-          # Make sure we have valid data in these columns
-          if(any(!is.na(rv$dk_fighter_exposure$Name)) && any(!is.na(rv$dk_fighter_exposure$DKName))) {
-            # Get the data we need
-            driver_data <- rv$dk_fighter_exposure
-            driver_names <- driver_data$Name[!is.na(driver_data$Name)]
-            driver_ids <- driver_data$DKName[!is.na(driver_data$DKName)]
-            
-            # Only proceed if we have matching length vectors
-            if(length(driver_names) == length(driver_ids) && length(driver_names) > 0) {
-              # Check if OptimalRate exists, use it if available
-              if("OptimalRate" %in% names(driver_data)) {
-                driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate[!is.na(driver_data$Name)], 1), "%)")
-              } else {
-                driver_labels <- driver_names
-              }
-              
-              # Create choices with names - safely
-              driver_choices <- setNames(driver_ids, driver_labels)
-              
-              # Only update if we have valid choices
-              if(length(driver_choices) > 0) {
-                updateSelectizeInput(
-                  session = session,
-                  inputId = "dk_excluded_fighters",
-                  choices = driver_choices,
-                  selected = input$dk_excluded_fighters
-                )
-              }
-            }
-          }
-        }
-      }
-    } else if(input$lineup_builder_platform == "fd") {
-      # Only attempt to update if we have valid fighter exposure data
-      if(!is.null(rv$fd_fighter_exposure) && nrow(rv$fd_fighter_exposure) > 0) {
-        # First check if Name and FDName columns exist
-        if("Name" %in% names(rv$fd_fighter_exposure) && "FDName" %in% names(rv$fd_fighter_exposure)) {
-          # Make sure we have valid data in these columns
-          if(any(!is.na(rv$fd_fighter_exposure$Name)) && any(!is.na(rv$fd_fighter_exposure$FDName))) {
-            # Get the data we need
-            driver_data <- rv$fd_fighter_exposure
-            driver_names <- driver_data$Name[!is.na(driver_data$Name)]
-            driver_ids <- driver_data$FDName[!is.na(driver_data$FDName)]
-            
-            # Only proceed if we have matching length vectors
-            if(length(driver_names) == length(driver_ids) && length(driver_names) > 0) {
-              # Check if OptimalRate exists, use it if available
-              if("OptimalRate" %in% names(driver_data)) {
-                driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate[!is.na(driver_data$Name)], 1), "%)")
-              } else {
-                driver_labels <- driver_names
-              }
-              
-              # Create choices with names - safely
-              driver_choices <- setNames(driver_ids, driver_labels)
-              
-              # Only update if we have valid choices
-              if(length(driver_choices) > 0) {
-                updateSelectizeInput(
-                  session = session,
-                  inputId = "fd_excluded_fighters",
-                  choices = driver_choices,
-                  selected = input$fd_excluded_fighters
-                )
-              }
-            }
-          }
-        }
-      }
-    }
-  })
+  # DK filter change observer for real-time updates
+  observeEvent(c(input$dk_min_top1_count, input$dk_min_top2_count, input$dk_min_top3_count, 
+                 input$dk_min_top5_count, input$dk_cumulative_ownership_range, 
+                 input$dk_geometric_mean_range, input$dk_excluded_fighters), {
+                   if(!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_fighter_exposure)) {
+                     
+                     filters <- list(
+                       min_top1_count = if(!is.null(input$dk_min_top1_count)) input$dk_min_top1_count else 0,
+                       min_top2_count = if(!is.null(input$dk_min_top2_count)) input$dk_min_top2_count else 0,
+                       min_top3_count = if(!is.null(input$dk_min_top3_count)) input$dk_min_top3_count else 0,
+                       min_top5_count = if(!is.null(input$dk_min_top5_count)) input$dk_min_top5_count else 0,
+                       cumulative_ownership_range = if(!is.null(input$dk_cumulative_ownership_range)) {
+                         input$dk_cumulative_ownership_range
+                       } else {
+                         # Default to actual data range
+                         if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+                           cum_vals <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+                           if(length(cum_vals) > 0) c(min(cum_vals), max(cum_vals)) else c(0, 100)
+                         } else c(0, 100)
+                       },
+                       geometric_mean_range = if(!is.null(input$dk_geometric_mean_range)) {
+                         input$dk_geometric_mean_range
+                       } else {
+                         # Default to actual data range
+                         if("GeometricMeanOwnership" %in% names(rv$dk_optimal_lineups)) {
+                           geom_vals <- rv$dk_optimal_lineups$GeometricMeanOwnership[!is.na(rv$dk_optimal_lineups$GeometricMeanOwnership)]
+                           if(length(geom_vals) > 0) c(min(geom_vals), max(geom_vals)) else c(0, 100)
+                         } else c(0, 100)
+                       },
+                       excluded_fighters = if(!is.null(input$dk_excluded_fighters)) input$dk_excluded_fighters else character(0)
+                     )
+                     
+                     # Calculate filtered pool rates using the new function
+                     filtered_rates <- calculate_filtered_pool_rates(rv$dk_optimal_lineups, filters, "dk")
+                     
+                     # Update the FilteredPoolRate column in fighter exposure
+                     if(!is.null(filtered_rates) && nrow(filtered_rates) > 0) {
+                       # Create a copy of the fighter exposure data to modify
+                       updated_exposure <- rv$dk_fighter_exposure
+                       
+                       # Update FilteredPoolRate for each fighter
+                       for(i in 1:nrow(updated_exposure)) {
+                         fighter_name <- updated_exposure$Name[i]
+                         rate_match <- filtered_rates[filtered_rates$Name == fighter_name, ]
+                         if(nrow(rate_match) > 0) {
+                           updated_exposure$FilteredPoolRate[i] <- rate_match$FilteredPoolRate[1]
+                         } else {
+                           updated_exposure$FilteredPoolRate[i] <- 0
+                         }
+                       }
+                       
+                       # Update the reactive value
+                       rv$dk_fighter_exposure <- updated_exposure
+                     }
+                   }
+                 }, ignoreNULL = FALSE, ignoreInit = FALSE)
   
+  # FD filter change observer for real-time updates
+  observeEvent(c(input$fd_min_top1_count, input$fd_min_top2_count, input$fd_min_top3_count, 
+                 input$fd_min_top5_count, input$fd_excluded_fighters), {
+                   if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_fighter_exposure)) {
+                     filters <- list(
+                       min_top1_count = if(!is.null(input$fd_min_top1_count)) input$fd_min_top1_count else 0,
+                       min_top2_count = if(!is.null(input$fd_min_top2_count)) input$fd_min_top2_count else 0,
+                       min_top3_count = if(!is.null(input$fd_min_top3_count)) input$fd_min_top3_count else 0,
+                       min_top5_count = if(!is.null(input$fd_min_top5_count)) input$fd_min_top5_count else 0,
+                       excluded_fighters = if(!is.null(input$fd_excluded_fighters)) input$fd_excluded_fighters else character(0)
+                     )
+                     
+                     # Calculate filtered pool rates
+                     filtered_rates <- calculate_filtered_pool_rates(rv$fd_optimal_lineups, filters, "fd")
+                     
+                     # Update the FilteredPoolRate column in fighter exposure
+                     if(nrow(filtered_rates) > 0) {
+                       for(i in 1:nrow(rv$fd_fighter_exposure)) {
+                         fighter_name <- rv$fd_fighter_exposure$Name[i]
+                         rate_match <- filtered_rates[filtered_rates$Name == fighter_name, ]
+                         if(nrow(rate_match) > 0) {
+                           rv$fd_fighter_exposure$FilteredPoolRate[i] <- rate_match$FilteredPoolRate[1]
+                         } else {
+                           rv$fd_fighter_exposure$FilteredPoolRate[i] <- 0
+                         }
+                       }
+                     }
+                   }
+                 })
+  
+
   
   output$fd_random_lineups_table <- renderDT({
     req(rv$fd_random_lineups)
@@ -4445,26 +4612,25 @@ server <- function(input, output, session) {
     # Clone the data for display
     display_data <- rv$dk_fighter_exposure
     
-    # If random lineups don't exist, remove the Exposure and Leverage columns
-    if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
-      # Make sure these columns don't appear if they somehow exist
-      display_data$Exposure <- NULL
-      display_data$Leverage <- NULL
-    }
+    # Always show the table, but conditionally format columns based on whether random lineups exist
+    has_random_lineups <- !is.null(rv$dk_random_lineups) && nrow(rv$dk_random_lineups) > 0
     
-    # Hide DKID column
-    display_data$DKID <- NULL
+    # Hide DKID column if it exists
+    if("DKID" %in% names(display_data)) {
+      display_data$DKID <- NULL
+    }
     
     # Reorder columns to put metrics in a logical order
-    col_order <- c("Name", "DKSalary", "DKOwn", "OptimalRate", "EliteRate", 
-                   "FloorRate", "AppearanceRate")
+    base_cols <- c("Name", "DKSalary", "DKOwn", "OptimalRate", "FilteredPoolRate")
     
-    # Add Exposure and Leverage if they exist
-    if("Exposure" %in% names(display_data)) {
-      col_order <- c(col_order, "Exposure")
-    }
-    if("Leverage" %in% names(display_data)) {
-      col_order <- c(col_order, "Leverage")
+    # Only include Exposure and Leverage columns if we have random lineups
+    if(has_random_lineups) {
+      col_order <- c(base_cols, "Exposure", "Leverage")
+    } else {
+      col_order <- base_cols
+      # Remove these columns from display if no random lineups
+      display_data$Exposure <- NULL
+      display_data$Leverage <- NULL
     }
     
     # Add remaining columns
@@ -4472,7 +4638,7 @@ server <- function(input, output, session) {
     col_order <- c(col_order, remaining_cols)
     
     # Reorder columns (only if they exist)
-    display_data <- display_data[, intersect(col_order, names(display_data))]
+    display_data <- display_data[, intersect(col_order, names(display_data)), drop = FALSE]
     
     # Create the datatable
     dt <- datatable(
@@ -4481,8 +4647,8 @@ server <- function(input, output, session) {
         pageLength = -1,
         dom = "t",
         scrollX = TRUE,
-        order = list(list(6, 'desc')),  # Sort by OptimalRate by default (adjusted for new column order)
-        rownames = FALSE  # Remove row numbers
+        order = list(list(3, 'desc')),  # Sort by OptimalRate (4th column, 0-indexed = 3)
+        rownames = FALSE
       ),
       rownames = FALSE
     )
@@ -4499,7 +4665,7 @@ server <- function(input, output, session) {
     
     # Format numeric columns with 1 decimal place
     numeric_cols <- intersect(
-      c('OptimalRate', 'EliteRate', 'FloorRate', 'AppearanceRate', 'Exposure', 'Leverage'),
+      c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'),
       names(display_data)
     )
     
@@ -4509,6 +4675,7 @@ server <- function(input, output, session) {
     
     return(dt)
   })
+  
   
   output$fd_fighter_exposure_table <- renderDT({
     req(rv$fd_fighter_exposure)
@@ -4527,12 +4694,14 @@ server <- function(input, output, session) {
     display_data$FDID <- NULL
     
     # Reorder columns to put metrics in a logical order
-    col_order <- c("Name", "FDSalary", "FDOwn", "OptimalRate", "MVPRate", "EliteRate", "EliteMVPRate",
-                   "FloorRate", "AppearanceRate")
+    col_order <- c("Name", "FDSalary", "FDOwn", "OptimalRate", "FilteredPoolRate", "MVPRate")
     
     # Add Exposure and Leverage if they exist
     if("Exposure" %in% names(display_data)) {
       col_order <- c(col_order, "Exposure")
+    }
+    if("MVPExposure" %in% names(display_data)) {
+      col_order <- c(col_order, "MVPExposure")
     }
     if("Leverage" %in% names(display_data)) {
       col_order <- c(col_order, "Leverage")
@@ -4570,7 +4739,7 @@ server <- function(input, output, session) {
     
     # Format numeric columns with 1 decimal place
     numeric_cols <- intersect(
-      c('OptimalRate', 'MVPRate', 'EliteRate', 'EliteMVPRate', 'FloorRate', 'AppearanceRate', 'Exposure', 'Leverage'),
+      c('OptimalRate', 'FilteredPoolRate', 'MVPRate', 'Exposure', 'MVPExposure', 'Leverage'),
       names(display_data)
     )
     
