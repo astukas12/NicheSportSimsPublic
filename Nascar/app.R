@@ -3504,11 +3504,6 @@ ui <- dashboardPage(
                         ),
                         br(),
                         br(),
-                        downloadButton(
-                          "download_fd_random_lineups",
-                          "Download Selected Lineups",
-                          style = "width: 100%;"
-                        )
                       )
                     )
                   ),
@@ -3670,6 +3665,15 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "has_fanduel", suspendWhenHidden = FALSE)
   
+  output$has_fd_lineups <- reactive({
+    # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
+    result <- tolower(as.character(
+      !is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0
+    ))
+    return(result)
+  })
+  outputOptions(output, "has_fd_lineups", suspendWhenHidden = FALSE)
+  
   output$has_dk_lineups <- reactive({
     # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
     result <- tolower(as.character(
@@ -3679,14 +3683,13 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "has_dk_lineups", suspendWhenHidden = FALSE)
   
-  output$has_fd_lineups <- reactive({
-    # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
+  output$has_fd_random_lineups <- reactive({
     result <- tolower(as.character(
-      !is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0
+      !is.null(rv$fd_random_lineups) && nrow(rv$fd_random_lineups) > 0
     ))
     return(result)
   })
-  outputOptions(output, "has_fd_lineups", suspendWhenHidden = FALSE)
+  outputOptions(output, "has_fd_random_lineups", suspendWhenHidden = FALSE)
   
   output$has_dk_cash_results <- reactive({
     result <- tolower(as.character(!is.null(rv$dk_cash_results)))
@@ -6656,25 +6659,26 @@ server <- function(input, output, session) {
     contentType = "text/csv"  # Explicitly set MIME type for CSV
   )
   
-  
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
+    # Use safer null coalescing
     filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      min_cumulative_ownership = input$fd_ownership_range[1],
-      max_cumulative_ownership = input$fd_ownership_range[2],
-      min_geometric_mean = input$fd_geometric_range[1],
-      max_geometric_mean = input$fd_geometric_range[2],
-      excluded_drivers = input$fd_excluded_drivers
+      min_top1_count = if(is.null(input$fd_min_top1_count)) 0 else input$fd_min_top1_count,
+      min_top2_count = if(is.null(input$fd_min_top2_count)) 0 else input$fd_min_top2_count,
+      min_top3_count = if(is.null(input$fd_min_top3_count)) 0 else input$fd_min_top3_count,
+      min_top5_count = if(is.null(input$fd_min_top5_count)) 0 else input$fd_min_top5_count,
+      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) 0 else input$fd_ownership_range[1],
+      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 500 else input$fd_ownership_range[2],
+      min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
+      max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
+      excluded_drivers = if(is.null(input$fd_excluded_drivers)) character(0) else input$fd_excluded_drivers
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
     paste("Number of lineups in filtered pool:", stats$count)
   })
+
   
   # Clean up on session end
   session$onSessionEnded(function() {
@@ -6895,25 +6899,9 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  output$fd_filtered_pool_size <- renderText({
-    req(rv$fd_optimal_lineups)
-    
-    filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      min_cumulative_ownership = input$fd_ownership_range[1],
-      max_cumulative_ownership = input$fd_ownership_range[2],
-      min_geometric_mean = input$fd_geometric_range[1],
-      max_geometric_mean = input$fd_geometric_range[2],
-      excluded_drivers = input$fd_excluded_drivers
-    )
-    
-    stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-    paste("Number of lineups in filtered pool:", stats$count)
-  })
+
   
+
   # DraftKings cash simulation
   observeEvent(input$run_dk_cash_sim, {
     req(rv$simulation_results,
