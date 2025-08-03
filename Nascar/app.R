@@ -4473,12 +4473,6 @@ server <- function(input, output, session) {
         condition = "output.has_fd_lineups == 'true'",
         fluidRow(
           box(width = 12,
-              title = "FanDuel Lineup Count Thresholds",
-              DTOutput("fd_lineup_count_thresholds") %>% withSpinner(color = "#ff6600")
-          )
-        ),
-        fluidRow(
-          box(width = 12,
               title = "FanDuel Lineup Filters",
               fluidRow(
                 column(3,
@@ -5471,7 +5465,7 @@ server <- function(input, output, session) {
     dt
   })
   
-
+  
   
   output$fd_optimal_lineups_table <- renderDT({
     req(rv$fd_optimal_lineups)
@@ -5582,7 +5576,7 @@ server <- function(input, output, session) {
     dt
   })
   
-
+  
   # DraftKings filtered pool stats
   output$dk_filtered_pool_size <- renderText({
     req(rv$dk_optimal_lineups)
@@ -5917,11 +5911,11 @@ server <- function(input, output, session) {
   })
   
   
-  # Update sliders when visiting lineup builder tab
   observe({
     if(input$sidebar_menu == "lineup_builder") {
-      # Update DraftKings sliders if lineups exist
+      # Update DraftKings sliders and driver choices if lineups exist
       if(!is.null(rv$dk_optimal_lineups)) {
+        # Update sliders (existing code)
         if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
           ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
           ownership_values <- ownership_values[!is.na(ownership_values)]
@@ -5951,10 +5945,30 @@ server <- function(input, output, session) {
                               value = c(min_geo, max_geo))
           }
         }
+        
+        # Update DraftKings excluded drivers dropdown
+        if(!is.null(rv$dk_driver_exposure)) {
+          driver_data <- rv$dk_driver_exposure
+          driver_names <- driver_data$Name
+          driver_ids <- driver_data$DKName
+          driver_labels <- paste0(driver_names,
+                                  " (",
+                                  round(driver_data$OptimalRate, 1),
+                                  "%)")
+          driver_choices <- setNames(driver_ids, driver_labels)
+          
+          updateSelectizeInput(
+            session = session,
+            inputId = "dk_excluded_drivers",
+            choices = driver_choices,
+            selected = input$dk_excluded_drivers  # Preserve current selection
+          )
+        }
       }
       
-      # Update FanDuel sliders if lineups exist
+      # Update FanDuel sliders and driver choices if lineups exist
       if(!is.null(rv$fd_optimal_lineups)) {
+        # Update sliders (existing code)
         if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
           ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
           ownership_values <- ownership_values[!is.na(ownership_values)]
@@ -5983,6 +5997,25 @@ server <- function(input, output, session) {
                               max = max_geo,
                               value = c(min_geo, max_geo))
           }
+        }
+        
+        # Update FanDuel excluded drivers dropdown
+        if(!is.null(rv$fd_driver_exposure)) {
+          driver_data <- rv$fd_driver_exposure
+          driver_names <- driver_data$Name
+          driver_ids <- driver_data$FDName
+          driver_labels <- paste0(driver_names,
+                                  " (",
+                                  round(driver_data$OptimalRate, 1),
+                                  "%)")
+          driver_choices <- setNames(driver_ids, driver_labels)
+          
+          updateSelectizeInput(
+            session = session,
+            inputId = "fd_excluded_drivers",
+            choices = driver_choices,
+            selected = input$fd_excluded_drivers  # Preserve current selection
+          )
         }
       }
     }
@@ -6862,15 +6895,19 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  output$fd_cash_filtered_count <- renderText({
+  output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
     filters <- list(
-      min_top1_count = input$fd_cash_min_top1,
-      min_top2_count = input$fd_cash_min_top2,
-      min_top3_count = input$fd_cash_min_top3,
-      min_top5_count = input$fd_cash_min_top5,
-      excluded_drivers = input$fd_cash_excluded_drivers
+      min_top1_count = input$fd_min_top1_count,
+      min_top2_count = input$fd_min_top2_count,
+      min_top3_count = input$fd_min_top3_count,
+      min_top5_count = input$fd_min_top5_count,
+      min_cumulative_ownership = input$fd_ownership_range[1],
+      max_cumulative_ownership = input$fd_ownership_range[2],
+      min_geometric_mean = input$fd_geometric_range[1],
+      max_geometric_mean = input$fd_geometric_range[2],
+      excluded_drivers = input$fd_excluded_drivers
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
