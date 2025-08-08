@@ -1857,6 +1857,7 @@ find_fd_optimal_lineups <- function(sim_data, k = 5) {
   return(lineup_results)
 }
 
+# Updated count_dk_optimal_lineups function with ownership-based geometric mean
 count_dk_optimal_lineups <- function(sim_results) {
   # Always use top_k=5
   top_k <- 5
@@ -1974,11 +1975,11 @@ count_dk_optimal_lineups <- function(sim_results) {
   lineup_data$Top3Count <- lineup_data$Rank1Count + lineup_data$Rank2Count + lineup_data$Rank3Count
   lineup_data$Top5Count <- rowSums(lineup_data[, paste0("Rank", 1:5, "Count")])
   
-  # FIXED: Pre-compute a salary lookup for efficiency with proper fantasy points
+  # Pre-compute a salary lookup for efficiency with proper fantasy points
   salary_lookup <- sim_results_dt[, .(
     DKSalary = first(DKSalary),
     DKOP = first(DKOP),
-    MedianFantasyPoints = median(DKFantasyPoints, na.rm = TRUE)  # Use median as projection
+    MedianFantasyPoints = median(DKFantasyPoints, na.rm = TRUE)
   ), by = DKName]
   setkey(salary_lookup, DKName)
   
@@ -2000,23 +2001,28 @@ count_dk_optimal_lineups <- function(sim_results) {
     sum(ownerships, na.rm = TRUE)
   })
   
-  # FIXED: GeometricMean calculation with proper error handling
+  # UPDATED: GeometricMean calculation using ownership instead of fantasy points
   lineup_data$GeometricMean <- sapply(lineup_data$Lineup, function(lineup_str) {
     drivers <- strsplit(lineup_str, "\\|")[[1]]
-    projections <- salary_lookup[drivers, on = "DKName", nomatch = 0]$MedianFantasyPoints
+    ownerships <- salary_lookup[drivers, on = "DKName", nomatch = 0]$DKOP
     
-    # Check if we have valid projections for all drivers
-    if (length(projections) == DK_ROSTER_SIZE &&
-        all(!is.na(projections)) && all(projections > 0)) {
+    # Convert to percentage if values are between 0-1
+    if (length(ownerships) > 0 && max(ownerships, na.rm = TRUE) <= 1) {
+      ownerships <- ownerships * 100
+    }
+    
+    # Check if we have valid ownership data for all drivers
+    if (length(ownerships) == DK_ROSTER_SIZE &&
+        all(!is.na(ownerships)) && all(ownerships > 0)) {
       # Calculate geometric mean: exp(mean(log(values)))
       tryCatch({
-        exp(mean(log(projections)))
+        exp(mean(log(ownerships)))
       }, error = function(e) {
         # If geometric mean fails, return arithmetic mean as fallback
-        mean(projections)
+        mean(ownerships)
       })
     } else {
-      # If we don't have complete data, return NA
+      # If we don't have complete ownership data, return NA
       NA_real_
     }
   })
@@ -2056,6 +2062,7 @@ count_dk_optimal_lineups <- function(sim_results) {
   return(result)
 }
 
+# Updated count_fd_optimal_lineups function with ownership-based geometric mean
 count_fd_optimal_lineups <- function(sim_results) {
   # Always use top_k=5
   top_k <- 5
@@ -2177,7 +2184,7 @@ count_fd_optimal_lineups <- function(sim_results) {
   salary_lookup <- sim_results_dt[, .(
     FDSalary = first(FDSalary),
     FDOP = first(FDOP),
-    MedianFantasyPoints = median(FDFantasyPoints, na.rm = TRUE)  # Use median as projection
+    MedianFantasyPoints = median(FDFantasyPoints, na.rm = TRUE)
   ), by = FDName]
   setkey(salary_lookup, FDName)
   
@@ -2200,23 +2207,28 @@ count_fd_optimal_lineups <- function(sim_results) {
     sum(ownerships, na.rm = TRUE)
   })
   
-  # Calculate geometric mean
+  # UPDATED: Calculate geometric mean using ownership instead of fantasy points
   lineup_data$GeometricMean <- sapply(lineup_data$Lineup, function(lineup_str) {
     drivers <- strsplit(lineup_str, "\\|")[[1]]
-    projections <- salary_lookup[drivers, on = "FDName", nomatch = 0]$MedianFantasyPoints
+    ownerships <- salary_lookup[drivers, on = "FDName", nomatch = 0]$FDOP
     
-    # Check if we have valid projections for all drivers
-    if (length(projections) == FD_ROSTER_SIZE &&
-        all(!is.na(projections)) && all(projections > 0)) {
+    # Convert to percentage if values are between 0-1
+    if (length(ownerships) > 0 && max(ownerships, na.rm = TRUE) <= 1) {
+      ownerships <- ownerships * 100
+    }
+    
+    # Check if we have valid ownership data for all drivers
+    if (length(ownerships) == FD_ROSTER_SIZE &&
+        all(!is.na(ownerships)) && all(ownerships > 0)) {
       # Calculate geometric mean: exp(mean(log(values)))
       tryCatch({
-        exp(mean(log(projections)))
+        exp(mean(log(ownerships)))
       }, error = function(e) {
         # If geometric mean fails, return arithmetic mean as fallback
-        mean(projections)
+        mean(ownerships)
       })
     } else {
-      # If we don't have complete data, return NA
+      # If we don't have complete ownership data, return NA
       NA_real_
     }
   })
