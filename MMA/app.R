@@ -751,21 +751,21 @@ calculate_filtered_pool_rates <- function(optimal_lineups, filters, platform = "
   # Apply filters to get filtered lineups
   filtered_lineups <- as.data.table(optimal_lineups)
   
-  # Apply Top Count filters
+  # Apply Top Count filters with NA safety
   if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+    filtered_lineups <- filtered_lineups[!is.na(Top1Count) & Top1Count >= filters$min_top1_count]
   }
   
   if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+    filtered_lineups <- filtered_lineups[!is.na(Top2Count) & Top2Count >= filters$min_top2_count]
   }
   
   if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+    filtered_lineups <- filtered_lineups[!is.na(Top3Count) & Top3Count >= filters$min_top3_count]
   }
   
   if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+    filtered_lineups <- filtered_lineups[!is.na(Top5Count) & Top5Count >= filters$min_top5_count]
   }
   
   if(platform == "dk") {
@@ -779,7 +779,9 @@ calculate_filtered_pool_rates <- function(optimal_lineups, filters, platform = "
         filter_max <- filters$cumulative_ownership_range[2]
         
         if(filter_max >= data_min && filter_min <= data_max) {
-          filtered_lineups <- filtered_lineups[CumulativeOwnership >= filter_min & CumulativeOwnership <= filter_max]
+          filtered_lineups <- filtered_lineups[!is.na(CumulativeOwnership) & 
+                                                 CumulativeOwnership >= filter_min & 
+                                                 CumulativeOwnership <= filter_max]
         }
       }
     }
@@ -794,13 +796,15 @@ calculate_filtered_pool_rates <- function(optimal_lineups, filters, platform = "
         filter_max <- filters$geometric_mean_range[2]
         
         if(filter_max >= data_min && filter_min <= data_max) {
-          filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filter_min & GeometricMeanOwnership <= filter_max]
+          filtered_lineups <- filtered_lineups[!is.na(GeometricMeanOwnership) & 
+                                                 GeometricMeanOwnership >= filter_min & 
+                                                 GeometricMeanOwnership <= filter_max]
         }
       }
     }
   }
   
-  # Apply fighter exclusion filter
+  # Apply fighter exclusion filter with NA safety
   if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
     if(platform == "dk") {
       fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
@@ -813,13 +817,16 @@ calculate_filtered_pool_rates <- function(optimal_lineups, filters, platform = "
       
       for(col in fighter_cols) {
         if(col %in% names(filtered_lineups)) {
-          to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_fighters
+          # Add NA safety here too
+          col_values <- filtered_lineups[[col]]
+          to_exclude <- to_exclude | (!is.na(col_values) & col_values %in% filters$excluded_fighters)
         }
       }
       
       # For FD, also check MVP column
       if(platform == "fd" && "MVP" %in% names(filtered_lineups)) {
-        to_exclude <- to_exclude | filtered_lineups$MVP %in% filters$excluded_fighters
+        mvp_values <- filtered_lineups$MVP
+        to_exclude <- to_exclude | (!is.na(mvp_values) & mvp_values %in% filters$excluded_fighters)
       }
       
       filtered_lineups <- filtered_lineups[!to_exclude]
