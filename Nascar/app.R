@@ -5869,173 +5869,9 @@ server <- function(input, output, session) {
     })
   })
   
-  observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups)) {
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          # Update the slider with actual data range
-          updateSliderInput(
-            session,
-            "dk_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
-          
-          cat(sprintf(
-            "Updated DK ownership slider: min=%d, max=%d\n",
-            min_own,
-            max_own
-          ))
-        }
-      }
-      
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          # Update the slider with actual data range
-          updateSliderInput(
-            session,
-            "dk_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
-          
-          cat(sprintf(
-            "Updated DK geometric slider: min=%d, max=%d\n",
-            min_geo,
-            max_geo
-          ))
-        }
-      }
-    }
-  })
+
   
-  
-  observe({
-    if(input$sidebar_menu == "lineup_builder") {
-      # Update DraftKings sliders and driver choices if lineups exist
-      if(!is.null(rv$dk_optimal_lineups)) {
-        # Update sliders (existing code)
-        if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if(length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(session, "dk_ownership_range",
-                              min = min_own,
-                              max = max_own,
-                              value = c(min_own, max_own))
-          }
-        }
-        
-        if("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if(length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(session, "dk_geometric_range",
-                              min = min_geo,
-                              max = max_geo,
-                              value = c(min_geo, max_geo))
-          }
-        }
-        
-        # Update DraftKings excluded drivers dropdown
-        if(!is.null(rv$dk_driver_exposure)) {
-          driver_data <- rv$dk_driver_exposure
-          driver_names <- driver_data$Name
-          driver_ids <- driver_data$DKName
-          driver_labels <- paste0(driver_names,
-                                  " (",
-                                  round(driver_data$OptimalRate, 1),
-                                  "%)")
-          driver_choices <- setNames(driver_ids, driver_labels)
-          
-          updateSelectizeInput(
-            session = session,
-            inputId = "dk_excluded_drivers",
-            choices = driver_choices,
-            selected = input$dk_excluded_drivers  # Preserve current selection
-          )
-        }
-      }
-      
-      # Update FanDuel sliders and driver choices if lineups exist
-      if(!is.null(rv$fd_optimal_lineups)) {
-        # Update sliders (existing code)
-        if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if(length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(session, "fd_ownership_range",
-                              min = min_own,
-                              max = max_own,
-                              value = c(min_own, max_own))
-          }
-        }
-        
-        if("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          geometric_values <- rv$fd_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if(length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(session, "fd_geometric_range",
-                              min = min_geo,
-                              max = max_geo,
-                              value = c(min_geo, max_geo))
-          }
-        }
-        
-        # Update FanDuel excluded drivers dropdown
-        if(!is.null(rv$fd_driver_exposure)) {
-          driver_data <- rv$fd_driver_exposure
-          driver_names <- driver_data$Name
-          driver_ids <- driver_data$FDName
-          driver_labels <- paste0(driver_names,
-                                  " (",
-                                  round(driver_data$OptimalRate, 1),
-                                  "%)")
-          driver_choices <- setNames(driver_ids, driver_labels)
-          
-          updateSelectizeInput(
-            session = session,
-            inputId = "fd_excluded_drivers",
-            choices = driver_choices,
-            selected = input$fd_excluded_drivers  # Preserve current selection
-          )
-        }
-      }
-    }
-  })
-  
+
   # DraftKings ownership range
   dk_ownership_range <- reactive({
     if (is.null(rv$dk_optimal_lineups) ||
@@ -6058,41 +5894,165 @@ server <- function(input, output, session) {
     list(min = floor(min(ownership_values, na.rm = TRUE)), max = ceiling(max(ownership_values, na.rm = TRUE)))
   })
   
-  observeEvent(dk_current_filters(),
-               {
-                 if (!is.null(rv$dk_optimal_lineups) &&
-                     !is.null(rv$dk_driver_exposure)) {
-                   # Get existing driver mapping from the current exposure data
-                   existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
-                   
-                   # Calculate updated driver exposure with new filters
-                   rv$dk_driver_exposure <- calculate_dk_driver_exposure(
-                     rv$dk_optimal_lineups,
-                     existing_mapping,
-                     rv$dk_random_lineups,
-                     dk_current_filters()
-                   )
-                 }
-               },
-               ignoreNULL = FALSE,
-               ignoreInit = TRUE)
+  # Fixed slider initialization - DraftKings
+  observeEvent(rv$dk_optimal_lineups, {
+    if (!is.null(rv$dk_optimal_lineups)) {
+      # Update ownership slider based on actual data
+      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
+        ownership_values <- ownership_values[!is.na(ownership_values)]
+        
+        if (length(ownership_values) > 0) {
+          min_own <- floor(min(ownership_values))
+          max_own <- ceiling(max(ownership_values))
+          
+          updateSliderInput(
+            session,
+            "dk_ownership_range",
+            min = min_own,
+            max = max_own,
+            value = c(min_own, max_own)
+          )
+        }
+      }
+      
+      # Update geometric mean slider based on actual data
+      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+        geometric_values <- rv$dk_optimal_lineups$GeometricMean
+        geometric_values <- geometric_values[!is.na(geometric_values)]
+        
+        if (length(geometric_values) > 0) {
+          min_geo <- floor(min(geometric_values))
+          max_geo <- ceiling(max(geometric_values))
+          
+          updateSliderInput(
+            session,
+            "dk_geometric_range",
+            min = min_geo,
+            max = max_geo,
+            value = c(min_geo, max_geo)
+          )
+        }
+      }
+    }
+  }, once = TRUE)
   
-  # 4. ADD: Observer to update FanDuel driver exposure when filters change
-  observeEvent(fd_current_filters(),
-               {
-                 if (!is.null(rv$fd_optimal_lineups) &&
-                     !is.null(rv$fd_driver_exposure)) {
-                   # Get existing driver mapping from the current exposure data
-                   existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
-                   
-                   # Calculate updated driver exposure with new filters
-                   rv$fd_driver_exposure <- calculate_fd_driver_exposure(rv$fd_optimal_lineups,
-                                                                         existing_mapping,
-                                                                         rv$fd_random_lineups)
-                 }
-               },
-               ignoreNULL = FALSE,
-               ignoreInit = TRUE)
+  # Fixed slider initialization - FanDuel
+  observeEvent(rv$fd_optimal_lineups, {
+    if (!is.null(rv$fd_optimal_lineups)) {
+      # Update ownership slider based on actual data
+      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+        ownership_values <- ownership_values[!is.na(ownership_values)]
+        
+        if (length(ownership_values) > 0) {
+          min_own <- floor(min(ownership_values))
+          max_own <- ceiling(max(ownership_values))
+          
+          updateSliderInput(
+            session,
+            "fd_ownership_range",
+            min = min_own,
+            max = max_own,
+            value = c(min_own, max_own)
+          )
+        }
+      }
+      
+      # Update geometric mean slider based on actual data
+      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+        geometric_values <- rv$fd_optimal_lineups$GeometricMean
+        geometric_values <- geometric_values[!is.na(geometric_values)]
+        
+        if (length(geometric_values) > 0) {
+          min_geo <- floor(min(geometric_values))
+          max_geo <- ceiling(max(geometric_values))
+          
+          updateSliderInput(
+            session,
+            "fd_geometric_range",
+            min = min_geo,
+            max = max_geo,
+            value = c(min_geo, max_geo)
+          )
+        }
+      }
+    }
+  }, once = TRUE)
+  
+  # Update driver dropdowns when visiting lineup builder tab (but NOT sliders)
+  observe({
+    if(input$sidebar_menu == "lineup_builder") {
+      # Update DraftKings excluded drivers dropdown only
+      if(!is.null(rv$dk_driver_exposure)) {
+        driver_data <- rv$dk_driver_exposure
+        driver_names <- driver_data$Name
+        driver_ids <- driver_data$DKName
+        driver_labels <- paste0(driver_names,
+                                " (",
+                                round(driver_data$OptimalRate, 1),
+                                "%)")
+        driver_choices <- setNames(driver_ids, driver_labels)
+        
+        updateSelectizeInput(
+          session = session,
+          inputId = "dk_excluded_drivers",
+          choices = driver_choices,
+          selected = input$dk_excluded_drivers
+        )
+      }
+      
+      # Update FanDuel excluded drivers dropdown only
+      if(!is.null(rv$fd_driver_exposure)) {
+        driver_data <- rv$fd_driver_exposure
+        driver_names <- driver_data$Name
+        driver_ids <- driver_data$FDName
+        driver_labels <- paste0(driver_names,
+                                " (",
+                                round(driver_data$OptimalRate, 1),
+                                "%)")
+        driver_choices <- setNames(driver_ids, driver_labels)
+        
+        updateSelectizeInput(
+          session = session,
+          inputId = "fd_excluded_drivers",
+          choices = driver_choices,
+          selected = input$fd_excluded_drivers
+        )
+      }
+    }
+  })
+  
+  # Fixed filter change observers with debouncing
+  observeEvent(dk_current_filters(), {
+    if (!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
+      # Get existing driver mapping from the current exposure data
+      existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
+      
+      # Calculate updated driver exposure with new filters
+      rv$dk_driver_exposure <- calculate_dk_driver_exposure(
+        rv$dk_optimal_lineups,
+        existing_mapping,
+        rv$dk_random_lineups,
+        dk_current_filters()
+      )
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+  
+  observeEvent(fd_current_filters(), {
+    if (!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
+      # Get existing driver mapping from the current exposure data
+      existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
+      
+      # Calculate updated driver exposure with new filters
+      rv$fd_driver_exposure <- calculate_fd_driver_exposure(
+        rv$fd_optimal_lineups,
+        existing_mapping,
+        rv$fd_random_lineups
+      )
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+
   
   # Generate random FanDuel lineups
   observeEvent(input$generate_fd_lineups, {
@@ -6697,107 +6657,9 @@ server <- function(input, output, session) {
     gc(verbose = FALSE, full = TRUE)
   })
   
-  observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups)) {
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          # Update the slider with actual data range
-          updateSliderInput(
-            session,
-            "dk_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
-          
-          cat(sprintf(
-            "Updated DK ownership slider: min=%d, max=%d\n",
-            min_own,
-            max_own
-          ))
-        }
-      }
-      
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          # Update the slider with actual data range
-          updateSliderInput(
-            session,
-            "dk_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
-          
-          cat(sprintf(
-            "Updated DK geometric slider: min=%d, max=%d\n",
-            min_geo,
-            max_geo
-          ))
-        }
-      }
-    }
-  })
+
   
-  
-  # Update sliders when visiting lineup builder tab
-  observe({
-    if (input$sidebar_menu == "lineup_builder") {
-      # Update DraftKings sliders if lineups exist
-      if (!is.null(rv$dk_optimal_lineups)) {
-        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(
-              session,
-              "dk_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own)
-            )
-          }
-        }
-        
-        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(
-              session,
-              "dk_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo)
-            )
-          }
-        }
-      }
-    }
-  })
-  
+
   
   # Update FD ownership inputs when FD lineups are calculated
   observeEvent(rv$fd_optimal_lineups, {
