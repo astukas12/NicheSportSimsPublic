@@ -3765,10 +3765,16 @@ server <- function(input, output, session) {
     }
     
     if("CumulativeOwnership" %in% names(display_data)) {
-      dt <- dt %>% formatPercentage('CumulativeOwnership', digits = 1)
+      dt <- dt %>% formatRound('CumulativeOwnership', digits = 1) %>%
+        formatStyle('CumulativeOwnership', 
+                    `text-align` = 'center',
+                    `background-color` = '#f8f9fa')
     }
     if("GeometricMeanOwnership" %in% names(display_data)) {
-      dt <- dt %>% formatPercentage('GeometricMeanOwnership', digits = 2)
+      dt <- dt %>% formatRound('GeometricMeanOwnership', digits = 2) %>%
+        formatStyle('GeometricMeanOwnership', 
+                    `text-align` = 'center',
+                    `background-color` = '#f8f9fa')
     }
     
     # Apply formatting to count columns
