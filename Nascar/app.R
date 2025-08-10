@@ -2401,7 +2401,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
   }
   
-  # NEW: Apply cumulative ownership filters
+  # Apply cumulative ownership filters
   if (!is.null(filters$min_cumulative_ownership) &&
       "CumulativeOwnership" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$min_cumulative_ownership]
@@ -2411,7 +2411,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership <= filters$max_cumulative_ownership]
   }
   
-  # NEW: Apply geometric mean filters
+  # Apply geometric mean filters
   if (!is.null(filters$min_geometric_mean) &&
       "GeometricMean" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMean) &
@@ -2934,11 +2934,10 @@ calculate_dk_driver_exposure <- function(optimal_lineups,
   return(as.data.frame(metrics_data))
 }
 
-
-# Fixed FanDuel driver exposure calculation
 calculate_fd_driver_exposure <- function(optimal_lineups,
                                          fantasy_analysis,
-                                         random_lineups = NULL) {
+                                         random_lineups = NULL,
+                                         current_filters = NULL) {
   # Quick validation
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
     return(data.frame(Message = "No optimal lineups available."))
@@ -2963,15 +2962,11 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
   # Initialize metrics data frame - use FDName as primary identifier
   metrics_data <- data.table(
     FDName = all_drivers,
-    # This is the driver ID from lineups
     Name = NA_character_,
-    # This will be the actual driver name
     FDSalary = NA_real_,
     FDOP = NA_real_,
     OptimalRate = 0,
-    EliteRate = 0,
-    FloorRate = 0,
-    AppearanceRate = 0,
+    FilteredPoolRate = 0,
     Exposure = 0,
     Leverage = 0,
     Starting = NA_real_,
@@ -2982,7 +2977,6 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
   total_top1 <- sum(optimal_lineups$Top1Count, na.rm = TRUE)
   if (total_top1 > 0) {
     for (driver in all_drivers) {
-      # Find lineups with this driver
       driver_appears <- logical(nrow(optimal_lineups))
       for (col in driver_cols) {
         driver_appears <- driver_appears |
@@ -2990,67 +2984,73 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
       }
       driver_matches <- which(driver_appears)
       
-      # Calculate optimal rate percentage
       driver_total <- sum(optimal_lineups$Top1Count[driver_matches], na.rm = TRUE)
       metrics_data[FDName == driver, OptimalRate := (driver_total / total_top1) * 100]
     }
   }
   
-  # Calculate EliteRate (top 10% of lineups by Top1Count)
-  if (nrow(optimal_lineups) >= 10) {
-    elite_lineups <- copy(optimal_lineups)
-    elite_lineups <- elite_lineups[order(-Top1Count, -Top5Count)]
+  # Calculate FilteredPoolRate based on current filters
+  if (!is.null(current_filters)) {
+    # Apply the same filters to get the filtered pool
+    filtered_lineups <- copy(optimal_lineups)
     
-    n_elite <- max(1, round(nrow(elite_lineups) * 0.1))
-    elite_lineups <- elite_lineups[1:n_elite]
-    
-    for (driver in all_drivers) {
-      # Count appearances in elite lineups
-      driver_appears <- logical(nrow(elite_lineups))
-      for (col in driver_cols) {
-        driver_appears <- driver_appears | (elite_lineups[[col]] == driver)
-      }
-      driver_elite_count <- sum(driver_appears)
-      
-      # Calculate elite rate
-      metrics_data[FDName == driver, EliteRate := (driver_elite_count / n_elite) * 100]
+    # Apply filters
+    if (!is.null(current_filters$min_top1_count) &&
+        current_filters$min_top1_count > 0) {
+      filtered_lineups <- filtered_lineups[Top1Count >= current_filters$min_top1_count]
     }
-  }
-  
-  # Calculate FloorRate (top 20% of lineups by Top5Count)
-  if (nrow(optimal_lineups) >= 5) {
-    floor_lineups <- copy(optimal_lineups)
-    floor_lineups <- floor_lineups[order(-Top5Count, -Top1Count)]
-    
-    n_floor <- max(1, round(nrow(floor_lineups) * 0.2))
-    floor_lineups <- floor_lineups[1:n_floor]
-    
-    for (driver in all_drivers) {
-      # Count appearances in floor lineups
-      driver_appears <- logical(nrow(floor_lineups))
-      for (col in driver_cols) {
-        driver_appears <- driver_appears | (floor_lineups[[col]] == driver)
-      }
-      driver_floor_count <- sum(driver_appears)
-      
-      # Calculate floor rate
-      metrics_data[FDName == driver, FloorRate := (driver_floor_count / n_floor) * 100]
+    if (!is.null(current_filters$min_top2_count) &&
+        current_filters$min_top2_count > 0) {
+      filtered_lineups <- filtered_lineups[Top2Count >= current_filters$min_top2_count]
     }
-  }
-  
-  # Calculate AppearanceRate (percentage of all lineups with this driver)
-  if (nrow(optimal_lineups) > 0) {
-    for (driver in all_drivers) {
-      # Count appearances in all lineups
-      driver_appears <- logical(nrow(optimal_lineups))
+    if (!is.null(current_filters$min_top3_count) &&
+        current_filters$min_top3_count > 0) {
+      filtered_lineups <- filtered_lineups[Top3Count >= current_filters$min_top3_count]
+    }
+    if (!is.null(current_filters$min_top5_count) &&
+        current_filters$min_top5_count > 0) {
+      filtered_lineups <- filtered_lineups[Top5Count >= current_filters$min_top5_count]
+    }
+    if (!is.null(current_filters$min_cumulative_ownership) &&
+        current_filters$min_cumulative_ownership > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeOwnership >= current_filters$min_cumulative_ownership]
+    }
+    if (!is.null(current_filters$max_cumulative_ownership) &&
+        current_filters$max_cumulative_ownership > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeOwnership <= current_filters$max_cumulative_ownership]
+    }
+    
+    # Apply geometric mean filters
+    if (!is.null(current_filters$min_geometric_mean) &&
+        current_filters$min_geometric_mean > 0) {
+      filtered_lineups <- filtered_lineups[GeometricMean >= current_filters$min_geometric_mean]
+    }
+    
+    if (!is.null(current_filters$max_geometric_mean) &&
+        current_filters$max_geometric_mean > 0) {
+      filtered_lineups <- filtered_lineups[GeometricMean <= current_filters$max_geometric_mean]
+    }
+    
+    if (!is.null(current_filters$excluded_drivers) &&
+        length(current_filters$excluded_drivers) > 0) {
+      to_exclude <- logical(nrow(filtered_lineups))
       for (col in driver_cols) {
-        driver_appears <- driver_appears |
-          (optimal_lineups[[col]] == driver)
+        to_exclude <- to_exclude |
+          filtered_lineups[[col]] %in% current_filters$excluded_drivers
       }
-      driver_appearance_count <- sum(driver_appears)
-      
-      # Calculate appearance rate
-      metrics_data[FDName == driver, AppearanceRate := (driver_appearance_count / nrow(optimal_lineups)) * 100]
+      filtered_lineups <- filtered_lineups[!to_exclude]
+    }
+    
+    # Calculate FilteredPoolRate
+    if (nrow(filtered_lineups) > 0) {
+      for (driver in all_drivers) {
+        driver_appears <- logical(nrow(filtered_lineups))
+        for (col in driver_cols) {
+          driver_appears <- driver_appears |
+            (filtered_lineups[[col]] == driver)
+        }
+        metrics_data[FDName == driver, FilteredPoolRate := (sum(driver_appears) / nrow(filtered_lineups)) * 100]
+      }
     }
   }
   
@@ -3068,14 +3068,12 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
     }
   }
   
-  # Add driver information from fantasy analysis - now we match based on FDName
+  # Add driver information from fantasy analysis
   if (!is.null(fantasy_analysis) && nrow(fantasy_analysis) > 0) {
-    # Check if this is our custom mapping format
     is_mapping_format <- "FDName" %in% names(fantasy_analysis) &&
       "Name" %in% names(fantasy_analysis)
     
     if (is_mapping_format) {
-      # This is our custom mapping with FDName as key
       for (i in 1:nrow(metrics_data)) {
         fd_name <- metrics_data$FDName[i]
         match_idx <- which(fantasy_analysis$FDName == fd_name)
@@ -3090,7 +3088,6 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
         }
       }
     } else if ("FDName" %in% names(fantasy_analysis)) {
-      # This is regular fantasy analysis data with FDName
       for (i in 1:nrow(metrics_data)) {
         fd_name <- metrics_data$FDName[i]
         match_idx <- which(fantasy_analysis$FDName == fd_name)
@@ -3112,7 +3109,6 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
   if (!is.null(metrics_data$FDOP) &&
       !all(is.na(metrics_data$FDOP))) {
     if (max(metrics_data$FDOP, na.rm = TRUE) <= 1) {
-      # Convert to percentage for consistent leverage calculation
       metrics_data[, FDOP := FDOP * 100]
     }
   }
@@ -3126,6 +3122,7 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
   
   return(as.data.frame(metrics_data))
 }
+
 
 # Define UI
 # UI Definition
@@ -3518,12 +3515,6 @@ ui <- dashboardPage(
                         br(),
                       )
                     )
-                  ),
-                  actionButton(
-                    "run_fd_cash_sim",
-                    "Run FanDuel Cash Simulation",
-                    class = "btn-primary",
-                    style = "width: 100%; margin: 10px 0;"
                   )
                 )
               )
@@ -3559,46 +3550,6 @@ ui <- dashboardPage(
               DTOutput("dk_group_top25") %>% withSpinner(color = "#ff6600")
             )
           )
-        ),
-        
-        # FanDuel Results section
-        conditionalPanel(
-          condition = "output.has_fd_cash_results == 'true'",
-          fluidRow(
-            box(
-              width = 12,
-              title = "FanDuel Top 10 H2H Lineups",
-              div(
-                style = "text-align: right; margin-bottom: 10px;",
-                downloadButton('download_fd_h2h_complete', 'Download Complete H2H Results')
-              ),
-              DTOutput("fd_h2h_top10") %>% withSpinner(color = "#ff6600")
-            )
-          ),
-          fluidRow(
-            box(
-              width = 12,
-              title = "FanDuel Top 25 Single Entry Lineups",
-              div(
-                style = "text-align: right; margin-bottom: 10px;",
-                downloadButton(
-                  'download_fd_group_complete',
-                  'Download Complete Single Entry Results'
-                )
-              ),
-              DTOutput("fd_group_top25") %>% withSpinner(color = "#ff6600")
-            )
-          ),
-          fluidRow(
-            box(
-              width = 12,
-              title = "Additional Downloads",
-              downloadButton(
-                'download_fd_lineups_with_names',
-                'Download Lineups with Player Names'
-              )
-            )
-          )
         )
       )
     )
@@ -3630,8 +3581,7 @@ server <- function(input, output, session) {
     file_uploaded = FALSE,
     simulation_complete = FALSE,
     field_lineups = NULL,
-    dk_cash_results = NULL,
-    fd_cash_results = NULL
+    dk_cash_results = NULL
   )
   
   dk_current_filters <- reactive({
@@ -3709,11 +3659,6 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "has_dk_cash_results", suspendWhenHidden = FALSE)
   
-  output$has_fd_cash_results <- reactive({
-    result <- tolower(as.character(!is.null(rv$fd_cash_results)))
-    return(result)
-  })
-  outputOptions(output, "has_fd_cash_results", suspendWhenHidden = FALSE)
   
   # File upload handler
   observeEvent(input$excel_file, {
@@ -3745,7 +3690,7 @@ server <- function(input, output, session) {
         rv$simulation_complete <- FALSE
         rv$field_lineups <- NULL
         rv$dk_cash_results <- NULL
-        rv$fd_cash_results <- NULL
+
         
         # Store platform availability
         rv$has_draftkings <- rv$input_data$platform_info$has_draftkings
@@ -5612,6 +5557,26 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
+  
+  output$fd_filtered_pool_size <- renderText({
+    req(rv$fd_optimal_lineups)
+    
+    filters <- list(
+      min_top1_count = input$fd_min_top1_count,
+      min_top2_count = input$fd_min_top2_count,
+      min_top3_count = input$fd_min_top3_count,
+      min_top5_count = input$fd_min_top5_count,
+      min_cumulative_ownership = input$fd_ownership_range[1],
+      max_cumulative_ownership = input$fd_ownership_range[2],
+      min_geometric_mean = input$fd_geometric_range[1],
+      max_geometric_mean = input$fd_geometric_range[2],
+      excluded_drivers = input$fd_excluded_drivers
+    )
+    
+    stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
+    paste("Number of lineups in filtered pool:", stats$count)
+  })
+  
   # Download handlers
   output$downloadResults <- downloadHandler(
     filename = function() {
@@ -5869,32 +5834,6 @@ server <- function(input, output, session) {
     })
   })
   
-
-  
-
-  # DraftKings ownership range
-  dk_ownership_range <- reactive({
-    if (is.null(rv$dk_optimal_lineups) ||
-        !"CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-      return(list(min = 0, max = 600))
-    }
-    
-    ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-    list(min = floor(min(ownership_values, na.rm = TRUE)), max = ceiling(max(ownership_values, na.rm = TRUE)))
-  })
-  
-  # FanDuel ownership range
-  fd_ownership_range <- reactive({
-    if (is.null(rv$fd_optimal_lineups) ||
-        !"CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-      return(list(min = 0, max = 500))
-    }
-    
-    ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-    list(min = floor(min(ownership_values, na.rm = TRUE)), max = ceiling(max(ownership_values, na.rm = TRUE)))
-  })
-  
-  # Fixed slider initialization - DraftKings
   observeEvent(rv$dk_optimal_lineups, {
     if (!is.null(rv$dk_optimal_lineups)) {
       # Update ownership slider based on actual data
@@ -5935,50 +5874,50 @@ server <- function(input, output, session) {
         }
       }
     }
-  }, once = TRUE)
+  })
   
-  # Fixed slider initialization - FanDuel
   observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups)) {
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "fd_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
-        }
-      }
+  if (!is.null(rv$fd_optimal_lineups)) {
+    # Update ownership slider based on actual data
+    if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+      ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+      ownership_values <- ownership_values[!is.na(ownership_values)]
       
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-        geometric_values <- rv$fd_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
+      if (length(ownership_values) > 0) {
+        min_own <- floor(min(ownership_values))
+        max_own <- ceiling(max(ownership_values))
         
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "fd_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
-        }
+        updateSliderInput(
+          session,
+          "fd_ownership_range",
+          min = min_own,
+          max = max_own,
+          value = c(min_own, max_own)
+        )
       }
     }
-  }, once = TRUE)
+    
+    # Update geometric mean slider based on actual data
+    if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+      geometric_values <- rv$fd_optimal_lineups$GeometricMean
+      geometric_values <- geometric_values[!is.na(geometric_values)]
+      
+      if (length(geometric_values) > 0) {
+        min_geo <- floor(min(geometric_values))
+        max_geo <- ceiling(max(geometric_values))
+        
+        updateSliderInput(
+          session,
+          "fd_geometric_range",
+          min = min_geo,
+          max = max_geo,
+          value = c(min_geo, max_geo)
+        )
+      }
+    }
+  }
+})
+  
   
   # Update driver dropdowns when visiting lineup builder tab (but NOT sliders)
   observe({
@@ -6023,6 +5962,95 @@ server <- function(input, output, session) {
     }
   })
   
+  observe({
+    if(input$sidebar_menu == "lineup_builder") {
+      # Add a small delay to ensure UI is rendered
+      invalidateLater(500, session)
+      
+      # Update DraftKings sliders if data exists
+      if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+        # Update ownership slider
+        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
+          ownership_values <- ownership_values[!is.na(ownership_values)]
+          
+          if (length(ownership_values) > 0) {
+            min_own <- floor(min(ownership_values))
+            max_own <- ceiling(max(ownership_values))
+            
+            updateSliderInput(
+              session,
+              "dk_ownership_range",
+              min = min_own,
+              max = max_own,
+              value = c(min_own, max_own)
+            )
+          }
+        }
+        
+        # Update geometric mean slider
+        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+          geometric_values <- rv$dk_optimal_lineups$GeometricMean
+          geometric_values <- geometric_values[!is.na(geometric_values)]
+          
+          if (length(geometric_values) > 0) {
+            min_geo <- floor(min(geometric_values))
+            max_geo <- ceiling(max(geometric_values))
+            
+            updateSliderInput(
+              session,
+              "dk_geometric_range",
+              min = min_geo,
+              max = max_geo,
+              value = c(min_geo, max_geo)
+            )
+          }
+        }
+      }
+      
+      # Update FanDuel sliders if data exists
+      if(!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
+        # Update ownership slider
+        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+          ownership_values <- ownership_values[!is.na(ownership_values)]
+          
+          if (length(ownership_values) > 0) {
+            min_own <- floor(min(ownership_values))
+            max_own <- ceiling(max(ownership_values))
+            
+            updateSliderInput(
+              session,
+              "fd_ownership_range",
+              min = min_own,
+              max = max_own,
+              value = c(min_own, max_own)
+            )
+          }
+        }
+        
+        # Update geometric mean slider
+        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+          geometric_values <- rv$fd_optimal_lineups$GeometricMean
+          geometric_values <- geometric_values[!is.na(geometric_values)]
+          
+          if (length(geometric_values) > 0) {
+            min_geo <- floor(min(geometric_values))
+            max_geo <- ceiling(max(geometric_values))
+            
+            updateSliderInput(
+              session,
+              "fd_geometric_range",
+              min = min_geo,
+              max = max_geo,
+              value = c(min_geo, max_geo)
+            )
+          }
+        }
+      }
+    }
+  })
+  
   # Fixed filter change observers with debouncing
   observeEvent(dk_current_filters(), {
     if (!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
@@ -6048,7 +6076,8 @@ server <- function(input, output, session) {
       rv$fd_driver_exposure <- calculate_fd_driver_exposure(
         rv$fd_optimal_lineups,
         existing_mapping,
-        rv$fd_random_lineups
+        rv$fd_random_lineups,
+        fd_current_filters()  # Add this parameter!
       )
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
@@ -6290,8 +6319,6 @@ server <- function(input, output, session) {
     # Hide FDName column as requested
     display_data$FDName <- NULL
     
-    
-    # Reorder columns to put metrics in a logical order
     col_order <- c(
       "Name",
       "Starting",
@@ -6299,9 +6326,7 @@ server <- function(input, output, session) {
       "FDSalary",
       "FDOP",
       "OptimalRate",
-      "EliteRate",
-      "FloorRate",
-      "AppearanceRate"
+      "FilteredPoolRate"
     )
     
     # Add Exposure and Leverage if they exist
@@ -6348,9 +6373,7 @@ server <- function(input, output, session) {
     numeric_cols <- intersect(
       c(
         'OptimalRate',
-        'EliteRate',
-        'FloorRate',
-        'AppearanceRate',
+        'FilteredPoolRate',
         'Exposure',
         'Leverage',
         'Proj',
@@ -6634,17 +6657,16 @@ server <- function(input, output, session) {
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
-    # Use safer null coalescing
     filters <- list(
-      min_top1_count = if(is.null(input$fd_min_top1_count)) 0 else input$fd_min_top1_count,
-      min_top2_count = if(is.null(input$fd_min_top2_count)) 0 else input$fd_min_top2_count,
-      min_top3_count = if(is.null(input$fd_min_top3_count)) 0 else input$fd_min_top3_count,
-      min_top5_count = if(is.null(input$fd_min_top5_count)) 0 else input$fd_min_top5_count,
-      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) 0 else input$fd_ownership_range[1],
-      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 500 else input$fd_ownership_range[2],
-      min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
-      max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
-      excluded_drivers = if(is.null(input$fd_excluded_drivers)) character(0) else input$fd_excluded_drivers
+      min_top1_count = input$fd_min_top1_count,
+      min_top2_count = input$fd_min_top2_count,
+      min_top3_count = input$fd_min_top3_count,
+      min_top5_count = input$fd_min_top5_count,
+      min_cumulative_ownership = input$fd_ownership_range[1],
+      max_cumulative_ownership = input$fd_ownership_range[2],
+      min_geometric_mean = input$fd_geometric_range[1],
+      max_geometric_mean = input$fd_geometric_range[2],
+      excluded_drivers = input$fd_excluded_drivers
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
@@ -6661,30 +6683,7 @@ server <- function(input, output, session) {
   
 
   
-  # Update FD ownership inputs when FD lineups are calculated
-  observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups) &&
-        "CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-      ownership_range <- fd_ownership_range()
-      
-      updateNumericInput(
-        session,
-        "fd_min_cumulative_ownership",
-        value = ownership_range$min,
-        min = ownership_range$min,
-        max = ownership_range$max
-      )
-      
-      updateNumericInput(
-        session,
-        "fd_max_cumulative_ownership",
-        value = ownership_range$max,
-        min = ownership_range$min,
-        max = ownership_range$max
-      )
-    }
-  })
-  
+
   # Field lineup file upload handler
   observeEvent(input$field_file, {
     req(input$field_file)
@@ -6708,19 +6707,7 @@ server <- function(input, output, session) {
           updateSelectizeInput(session, "dk_cash_excluded_drivers", choices = driver_choices)
         }
         
-        if (!is.null(rv$fd_optimal_lineups) &&
-            !is.null(rv$fd_driver_exposure)) {
-          driver_data <- rv$fd_driver_exposure
-          driver_names <- driver_data$Name
-          driver_ids <- driver_data$FDName
-          driver_labels <- paste0(driver_names,
-                                  " (",
-                                  round(driver_data$OptimalRate, 1),
-                                  "%)")
-          driver_choices <- setNames(driver_ids, driver_labels)
-          
-          updateSelectizeInput(session, "fd_cash_excluded_drivers", choices = driver_choices)
-        }
+
         
         showModal(modalDialog(
           title = "Success",
@@ -6836,68 +6823,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # FanDuel cash simulation
-  observeEvent(input$run_fd_cash_sim, {
-    req(rv$simulation_results,
-        rv$field_lineups,
-        rv$fd_optimal_lineups)
-    
-    withProgress(message = 'Running FanDuel cash simulation...', value = 0, {
-      # Filter user lineups
-      filters <- list(
-        min_top1_count = input$fd_cash_min_top1,
-        min_top2_count = input$fd_cash_min_top2,
-        min_top3_count = input$fd_cash_min_top3,
-        min_top5_count = input$fd_cash_min_top5,
-        min_cumulative_ownership = input$dk_min_cumulative_ownership,
-        max_cumulative_ownership = input$dk_max_cumulative_ownership,
-        excluded_drivers = input$fd_cash_excluded_drivers,
-        num_lineups = 999999
-      )
-      
-      filtered_lineups <- generate_random_fd_lineups(rv$fd_optimal_lineups, filters)
-      
-      if (is.null(filtered_lineups) ||
-          nrow(filtered_lineups) == 0) {
-        showModal(
-          modalDialog(
-            title = "Error",
-            "No lineups match your filters. Adjust your criteria.",
-            easyClose = TRUE
-          )
-        )
-        return()
-      }
-      
-      # Convert FDName back to Name for simulation
-      for (i in 1:5) {
-        col_name <- paste0("Driver", i)
-        filtered_lineups[[col_name]] <- sapply(filtered_lineups[[col_name]], function(fd_name) {
-          match_idx <- which(rv$simulation_results$FDName == fd_name)
-          if (length(match_idx) > 0) {
-            rv$simulation_results$Name[match_idx[1]]
-          } else {
-            fd_name
-          }
-        })
-      }
-      
-      # Run simulation
-      rv$fd_cash_results <- simulate_h2h_cash_contest(filtered_lineups,
-                                                      rv$field_lineups,
-                                                      rv$simulation_results,
-                                                      platform = "FD")
-      
-      showModal(modalDialog(
-        title = "Success",
-        sprintf(
-          "Cash simulation completed with %d lineups!",
-          nrow(filtered_lineups)
-        ),
-        easyClose = TRUE
-      ))
-    })
-  })
+
   
   # Result tables - Updated to show top performers with player names
   
@@ -7027,94 +6953,8 @@ server <- function(input, output, session) {
       formatRound(c('Win', 'Top3', 'Top20Pct', 'Top50Pct'), digits = 1)
   })
   
-  # FanDuel Top 10 H2H Results
-  output$fd_h2h_top10 <- renderDT({
-    req(rv$fd_cash_results)
-    
-    # Get top 10 lineups by average win rate
-    top_lineups <- rv$fd_cash_results$h2h_results %>%
-      group_by(UserLineupIndex, UserLineupName) %>%
-      summarise(AvgWinRate = mean(WinRate), .groups = 'drop') %>%
-      arrange(desc(AvgWinRate)) %>%
-      head(10)
-    
-    # Add player names
-    display_data <- data.frame()
-    for (i in 1:nrow(top_lineups)) {
-      lineup_idx <- top_lineups$UserLineupIndex[i]
-      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
-      
-      display_data <- rbind(
-        display_data,
-        data.frame(
-          Rank = i,
-          LineupName = top_lineups$UserLineupName[i],
-          Driver1 = user_lineup$Driver1,
-          Driver2 = user_lineup$Driver2,
-          Driver3 = user_lineup$Driver3,
-          Driver4 = user_lineup$Driver4,
-          Driver5 = user_lineup$Driver5,
-          AvgWinRate = top_lineups$AvgWinRate[i]
-        )
-      )
-    }
-    
-    datatable(
-      display_data,
-      options = list(
-        pageLength = 10,
-        scrollX = TRUE,
-        dom = "t",
-        ordering = FALSE
-      ),
-      rownames = FALSE
-    ) %>%
-      formatRound('AvgWinRate', digits = 1)
-  })
-  
-  # FanDuel Top 25 Group Contest Results
-  output$fd_group_top25 <- renderDT({
-    req(rv$fd_cash_results)
-    
-    # Get top 25 lineups by win rate
-    top_lineups <- rv$fd_cash_results$group_results %>%
-      arrange(desc(WinRate)) %>%
-      head(25)
-    
-    # Add player names
-    display_data <- data.frame()
-    for (i in 1:nrow(top_lineups)) {
-      lineup_idx <- top_lineups$UserLineupIndex[i]
-      user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
-      
-      display_data <- rbind(
-        display_data,
-        data.frame(
-          Rank = i,
-          LineupName = top_lineups$UserLineupName[i],
-          Driver1 = user_lineup$Driver1,
-          Driver2 = user_lineup$Driver2,
-          Driver3 = user_lineup$Driver3,
-          Driver4 = user_lineup$Driver4,
-          Driver5 = user_lineup$Driver5,
-          WinRate = top_lineups$WinRate[i],
-          Top25Pct = top_lineups$Top25Pct[i]
-        )
-      )
-    }
-    
-    datatable(
-      display_data,
-      options = list(
-        pageLength = 25,
-        scrollX = TRUE,
-        dom = "t",
-        ordering = FALSE
-      ),
-      rownames = FALSE
-    ) %>%
-      formatRound(c('WinRate', 'Top25Pct'), digits = 1)
-  })
+
+
   
   # Download handlers - Updated for complete results with player names
   
@@ -7194,81 +7034,6 @@ server <- function(input, output, session) {
   )
   
   
-  output$download_fd_h2h_complete <- downloadHandler(
-    filename = function() {
-      paste("fd_h2h_complete_results_",
-            format(Sys.time(), "%Y%m%d_%H%M%S"),
-            ".csv",
-            sep = "")
-    },
-    content = function(file) {
-      complete_results <- rv$fd_cash_results$h2h_results
-      
-      # Add player names to results
-      enhanced_results <- complete_results
-      enhanced_results$User_Driver1 <- ""
-      enhanced_results$User_Driver2 <- ""
-      enhanced_results$User_Driver3 <- ""
-      enhanced_results$User_Driver4 <- ""
-      enhanced_results$User_Driver5 <- ""
-      
-      for (i in 1:nrow(enhanced_results)) {
-        lineup_idx <- enhanced_results$UserLineupIndex[i]
-        user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
-        enhanced_results$User_Driver1[i] <- user_lineup$Driver1
-        enhanced_results$User_Driver2[i] <- user_lineup$Driver2
-        enhanced_results$User_Driver3[i] <- user_lineup$Driver3
-        enhanced_results$User_Driver4[i] <- user_lineup$Driver4
-        enhanced_results$User_Driver5[i] <- user_lineup$Driver5
-      }
-      
-      write.csv(enhanced_results, file, row.names = FALSE)
-    }
-  )
-  
-  output$download_fd_group_complete <- downloadHandler(
-    filename = function() {
-      paste("fd_group_complete_results_",
-            format(Sys.time(), "%Y%m%d_%H%M%S"),
-            ".csv",
-            sep = "")
-    },
-    content = function(file) {
-      complete_results <- rv$fd_cash_results$group_results
-      
-      # Add player names to results
-      enhanced_results <- complete_results
-      enhanced_results$Driver1 <- ""
-      enhanced_results$Driver2 <- ""
-      enhanced_results$Driver3 <- ""
-      enhanced_results$Driver4 <- ""
-      enhanced_results$Driver5 <- ""
-      
-      for (i in 1:nrow(enhanced_results)) {
-        lineup_idx <- enhanced_results$UserLineupIndex[i]
-        user_lineup <- rv$fd_cash_results$user_lineups[lineup_idx, ]
-        enhanced_results$Driver1[i] <- user_lineup$Driver1
-        enhanced_results$Driver2[i] <- user_lineup$Driver2
-        enhanced_results$Driver3[i] <- user_lineup$Driver3
-        enhanced_results$Driver4[i] <- user_lineup$Driver4
-        enhanced_results$Driver5[i] <- user_lineup$Driver5
-      }
-      
-      write.csv(enhanced_results, file, row.names = FALSE)
-    }
-  )
-  
-  output$download_fd_lineups_with_names <- downloadHandler(
-    filename = function() {
-      paste("fd_lineups_with_names_",
-            format(Sys.time(), "%Y%m%d_%H%M%S"),
-            ".csv",
-            sep = "")
-    },
-    content = function(file) {
-      write.csv(rv$fd_cash_results$user_lineups, file, row.names = FALSE)
-    }
-  )
 }
 
 
