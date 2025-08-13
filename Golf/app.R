@@ -317,12 +317,11 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50, platf
   }
 }
 
-generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000, platform = "dk") {
-  # Prepare data
+generate_top_expected_cuts_lineups <- function(player_data, salary_cap, platform = "dk", target_lineups = 50000, tolerance = 2000) {
+  # Setup
   players <- player_data$Golfer
   cut_probs <- player_data$CutPct
   
-  # Select salaries and projections based on platform
   if (platform == "dk") {
     salaries <- player_data$DKSal
     std_proj <- player_data$DKProj
@@ -332,7 +331,7 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000, pla
     } else {
       player_data$DKOP
     }
-  } else {  # FanDuel
+  } else {
     salaries <- player_data$FDSal
     std_proj <- player_data$FDProj
     ceil_proj <- player_data$FDCeil
@@ -344,90 +343,136 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000, pla
   }
   
   n_players <- length(players)
-  lineups <- list()
+  min_salary <- salary_cap - tolerance
+  max_salary <- salary_cap
   
-  # Console progress setup
-  platform_name <- if (platform == "dk") "DraftKings" else "FanDuel"
-  cat("\n=== GENERATING",
-      platform_name,
-      "MME LINEUPS (FAST 6-CUT FOCUSED) ===\n")
-  cat("Players available:", n_players, "\n")
-  cat("Target lineups:", n_lineups, "\n")
-  cat("Salary cap:", format(salary_cap, big.mark = ","), "\n\n")
+  # Simple list to track top lineups - faster than data.table for this
+  top_lineups <- list()
+  min_expected_cuts_cutoff <- 0
   
-  # Create weighted sampling pools based on cut probability
-  # Higher cut probability = higher chance of selection
-  cut_weights <- cut_probs^2  # Square to emphasize high cut prob players
+  cat("\n=== GENERATING TOP", format(target_lineups, big.mark = ","), "LINEUPS BY EXPECTED CUTS ===\n")
+  cat("Target salary range: $", format(min_salary, big.mark = ","), " - $", format(max_salary, big.mark = ","), "\n\n")
   
-  # Track used lineups to ensure diversity
-  used_lineups <- list()
+  start_time <- Sys.time()
+  total_combos_checked <- 0
+  valid_found <- 0
   
-  attempts <- 0
-  max_attempts <- n_lineups * 3  # Safety valve
+  # Pre-sort players by cut probability for early termination
+  sorted_cuts <- sort(cut_probs, decreasing = TRUE)
   
-  while (length(lineups) < n_lineups && attempts < max_attempts) {
-    attempts <- attempts + 1
-    
-    # Show progress every 500 lineups
-    if (length(lineups) %% 500 == 0 && length(lineups) > 0) {
-      cat(
-        sprintf(
-          "[%s] Generated %d/%d lineups (%.1f%% complete)\n",
-          format(Sys.time(), "%H:%M:%S"),
-          length(lineups),
-          n_lineups,
-          (length(lineups) / n_lineups) * 100
-        )
-      )
+  for(p1 in 1:(n_players-5)) {
+    for(p2 in (p1+1):(n_players-4)) {
+      s12 <- salaries[p1] + salaries[p2]
+      cuts12 <- cut_probs[p1] + cut_probs[p2]
+      
+      # Early termination: if best possible lineup can't beat cutoff
+      max_possible_remaining <- sum(sorted_cuts[1:4]) - sum(cut_probs[c(p1, p2)])
+      if(cuts12 + max_possible_remaining < min_expected_cuts_cutoff) next
+      if(s12 > max_salary - 4 * min(salaries)) next
+      
+      for(p3 in (p2+1):(n_players-3)) {
+        s123 <- s12 + salaries[p3]
+        cuts123 <- cuts12 + cut_probs[p3]
+        
+        max_possible_remaining_3 <- sum(sorted_cuts[1:3]) - sum(cut_probs[c(p1, p2, p3)])
+        if(cuts123 + max_possible_remaining_3 < min_expected_cuts_cutoff) next
+        if(s123 > max_salary - 3 * min(salaries)) next
+        
+        for(p4 in (p3+1):(n_players-2)) {
+          s1234 <- s123 + salaries[p4]
+          cuts1234 <- cuts123 + cut_probs[p4]
+          
+          max_possible_remaining_4 <- sum(sorted_cuts[1:2]) - sum(cut_probs[c(p1, p2, p3, p4)])
+          if(cuts1234 + max_possible_remaining_4 < min_expected_cuts_cutoff) next
+          if(s1234 > max_salary - 2 * min(salaries)) next
+          
+          for(p5 in (p4+1):(n_players-1)) {
+            s12345 <- s1234 + salaries[p5]
+            cuts12345 <- cuts1234 + cut_probs[p5]
+            
+            max_possible_remaining_5 <- sorted_cuts[1] - max(cut_probs[c(p1, p2, p3, p4, p5)])
+            if(cuts12345 + max_possible_remaining_5 < min_expected_cuts_cutoff) next
+            if(s12345 > max_salary - min(salaries)) next
+            
+            for(p6 in (p5+1):n_players) {
+              total_combos_checked <- total_combos_checked + 1
+              total_salary <- s12345 + salaries[p6]
+              
+              if(total_salary < min_salary || total_salary > max_salary) next
+              
+              expected_cuts <- cuts12345 + cut_probs[p6]
+              if(expected_cuts < min_expected_cuts_cutoff) next
+              
+              valid_found <- valid_found + 1
+              
+              # Store lineup
+              top_lineups[[length(top_lineups) + 1]] <- list(
+                ExpectedCuts = expected_cuts,
+                indices = c(p1, p2, p3, p4, p5, p6),
+                TotalSalary = total_salary
+              )
+              
+              # Maintain top N only
+              if(length(top_lineups) > target_lineups * 1.5) {
+                # Sort by expected cuts and keep top target_lineups
+                scores <- sapply(top_lineups, function(x) x$ExpectedCuts)
+                keep_indices <- order(scores, decreasing = TRUE)[1:target_lineups]
+                top_lineups <- top_lineups[keep_indices]
+                
+                # Update cutoff
+                min_expected_cuts_cutoff <- min(sapply(top_lineups, function(x) x$ExpectedCuts))
+                
+                cat(sprintf("Cutoff raised to %.3f expected cuts | Top lineups: %s\n", 
+                            min_expected_cuts_cutoff, format(length(top_lineups), big.mark = ",")))
+              }
+              
+              # Progress
+              if(total_combos_checked %% 100000 == 0) {
+                current_time <- Sys.time()
+                elapsed <- difftime(current_time, start_time, units = "mins")
+                rate <- total_combos_checked / as.numeric(elapsed)
+                
+                cat(sprintf("[%s] Checked: %s | Valid: %s | Stored: %s | Rate: %.0f/min\n",
+                            format(current_time, "%H:%M:%S"),
+                            format(total_combos_checked, big.mark = ","),
+                            format(valid_found, big.mark = ","),
+                            format(length(top_lineups), big.mark = ","),
+                            rate))
+              }
+            }
+          }
+        }
+      }
     }
+  }
+  
+  # Convert to final format
+  final_lineups <- list()
+  for(i in 1:length(top_lineups)) {
+    lineup <- top_lineups[[i]]
+    indices <- lineup$indices
     
-    # Sample 6 players using weighted sampling
-    selected_indices <- sample(n_players, 6, prob = cut_weights, replace = FALSE)
+    lineup_players <- players[indices]
+    lineup_cut_probs <- cut_probs[indices]
+    lineup_std_proj <- std_proj[indices]
+    lineup_ceil_proj <- ceil_proj[indices]
+    lineup_ownership <- ownership[indices]
     
-    # Check salary constraint
-    total_salary <- sum(salaries[selected_indices])
-    if (total_salary > salary_cap)
-      next
-    
-    # Create lineup signature for uniqueness check
-    lineup_sig <- paste(sort(players[selected_indices]), collapse = "|")
-    if (lineup_sig %in% used_lineups)
-      next
-    
-    # Calculate lineup metrics
-    lineup_players <- players[selected_indices]
-    lineup_cut_probs <- cut_probs[selected_indices]
-    lineup_salaries <- salaries[selected_indices]
-    lineup_std_proj <- std_proj[selected_indices]
-    lineup_ceil_proj <- ceil_proj[selected_indices]
-    lineup_ownership <- ownership[selected_indices]
-    
-    expected_cuts <- sum(lineup_cut_probs)
-    total_std_proj <- sum(lineup_std_proj)
-    total_ceil_proj <- sum(lineup_ceil_proj)
-    
-    # Calculate ownership metrics
-    cumulative_ownership <- sum(lineup_ownership)
-    geometric_mean_ownership <- exp(mean(log(pmax(lineup_ownership, 0.01))))  # Use 0.01 as minimum to avoid log(0)
-    
-    # Calculate cut distributions
     cut_dist <- calculate_cut_distribution(lineup_cut_probs)
     
-    # Store lineup
-    lineup_num <- length(lineups) + 1
-    lineups[[lineup_num]] <- list(
+    final_lineups[[i]] <- list(
       Player1 = lineup_players[1],
       Player2 = lineup_players[2],
       Player3 = lineup_players[3],
       Player4 = lineup_players[4],
       Player5 = lineup_players[5],
       Player6 = lineup_players[6],
-      ExpectedCuts = expected_cuts,
-      TotalSalary = total_salary,
-      StandardProj = total_std_proj,
-      CeilingProj = total_ceil_proj,
-      CumulativeOwnership = cumulative_ownership,
-      GeometricMeanOwnership = geometric_mean_ownership,
+      ExpectedCuts = lineup$ExpectedCuts,
+      TotalSalary = lineup$TotalSalary,
+      StandardProj = sum(lineup_std_proj),
+      CeilingProj = sum(lineup_ceil_proj),
+      CumulativeOwnership = sum(lineup_ownership),
+      GeometricMeanOwnership = exp(mean(log(pmax(lineup_ownership, 0.01)))),
       Exactly0 = cut_dist$exact[1],
       Exactly1 = cut_dist$exact[2],
       Exactly2 = cut_dist$exact[3],
@@ -442,33 +487,25 @@ generate_mme_lineups <- function(player_data, salary_cap, n_lineups = 15000, pla
       AtLeast5 = cut_dist$atleast[6],
       AtLeast6 = cut_dist$atleast[7]
     )
-    
-    # Mark as used
-    used_lineups[[length(used_lineups) + 1]] <- lineup_sig
   }
   
-  # Convert to data frame and sort by 6-cut probability
-  if (length(lineups) > 0) {
-    lineup_df <- do.call(rbind,
-                         lapply(lineups, data.frame, stringsAsFactors = FALSE))
-    lineup_df <- lineup_df[order(lineup_df$AtLeast6, decreasing = TRUE), ]
-    
-    # Final summary
-    final_count <- nrow(lineup_df)
-    cat("\n=== MME LINEUP GENERATION COMPLETED ===\n")
-    cat("Platform:", platform_name, "\n")
-    cat("Successfully generated:", final_count, "lineups\n")
-    cat("Total attempts:", attempts, "\n")
-    cat("Success rate:", sprintf("%.1f%%", (final_count / attempts) * 100), "\n")
-    cat("Completion time:", format(Sys.time(), "%H:%M:%S"), "\n\n")
-    
-    return(lineup_df)
+  end_time <- Sys.time()
+  elapsed <- difftime(end_time, start_time, units = "mins")
+  
+  cat("\n=== GENERATION COMPLETE ===\n")
+  cat("Total combinations checked:", format(total_combos_checked, big.mark = ","), "\n")
+  cat("Valid lineups found:", format(valid_found, big.mark = ","), "\n")
+  cat("Top lineups kept:", format(length(final_lineups), big.mark = ","), "\n")
+  cat("Final cutoff:", sprintf("%.3f expected cuts", min_expected_cuts_cutoff), "\n")
+  cat("Total time:", sprintf("%.2f minutes", as.numeric(elapsed)), "\n\n")
+  
+  if (length(final_lineups) > 0) {
+    lineup_df <- do.call(rbind, lapply(final_lineups, data.frame, stringsAsFactors = FALSE))
+    return(lineup_df[order(lineup_df$ExpectedCuts, decreasing = TRUE), ])
   } else {
-    cat("No valid lineups generated\n")
     return(NULL)
   }
 }
-
 generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = NULL) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
@@ -1544,6 +1581,7 @@ server <- function(input, output, session) {
     })
   })
   
+  
   observeEvent(input$run_dk_mme_optimization, {
     req(rv$mme_data)
     
@@ -1557,7 +1595,7 @@ server <- function(input, output, session) {
       cat("Target lineups: 15,000\n")
       cat("Players available:", nrow(rv$mme_data), "\n\n")
       
-      rv$dk_mme_lineups <- generate_mme_lineups(rv$mme_data, DK_SALARY_CAP, 15000, "dk")
+      rv$dk_mme_lineups <- generate_top_expected_cuts_lineups(rv$mme_data, DK_SALARY_CAP, "dk", 50000, 2000)
       
       dk_end_time <- Sys.time()
       dk_elapsed <- difftime(dk_end_time, dk_start_time, units = "mins")
@@ -1565,7 +1603,7 @@ server <- function(input, output, session) {
       cat("Total time:", sprintf("%.2f minutes", as.numeric(dk_elapsed)), "\n")
       cat("Generated:", ifelse(is.null(rv$dk_mme_lineups), 0, nrow(rv$dk_mme_lineups)), "lineups\n\n")
       
-      rv$dk_mme_complete <- TRUE
+      rv$dk_mme_complete <- TRUE  # <-- ADD THIS LINE
       
       # Update excluded golfers dropdown
       if (!is.null(rv$mme_data)) {
@@ -1589,51 +1627,51 @@ server <- function(input, output, session) {
     })
   })
   
-  
   observeEvent(input$run_fd_mme_optimization, {
-  req(rv$mme_data)
-  
-  withProgress(message = 'Generating FanDuel MME lineups...', value = 0, {
-    # Start timing for FD
-    fd_start_time <- Sys.time()
-    cat("\n=== MME FANDUEL LINEUP GENERATION STARTED ===\n")
-    cat("Start time:",
-        format(fd_start_time, "%Y-%m-%d %H:%M:%S"),
-        "\n")
-    cat("Target lineups: 15,000\n")
-    cat("Players available:", nrow(rv$mme_data), "\n\n")
+    req(rv$mme_data)
     
-    rv$fd_mme_lineups <- generate_mme_lineups(rv$mme_data, FD_SALARY_CAP, 15000, "fd")
-    
-    fd_end_time <- Sys.time()
-    fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
-    cat("=== FANDUEL COMPLETED ===\n")
-    cat("Total time:", sprintf("%.2f minutes", as.numeric(fd_elapsed)), "\n")
-    cat("Generated:", ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)), "lineups\n\n")
-    
-    rv$fd_mme_complete <- TRUE
-    
-    # Update excluded golfers dropdown
-    if (!is.null(rv$mme_data)) {
-      all_golfers <- unique(rv$mme_data$Golfer)
-      updateSelectizeInput(session,
-                           "fd_excluded_golfers",
-                           choices = all_golfers,
-                           selected = NULL)
-    }
-    
-    # Show success message
-    showModal(modalDialog(
-      title = "Success",
-      sprintf(
-        "Generated %d FanDuel MME lineups for filtering!\n\nTotal time: %.2f minutes",
-        ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)),
-        as.numeric(fd_elapsed)
-      ),
-      easyClose = TRUE
-    ))
+    withProgress(message = 'Generating FanDuel MME lineups...', value = 0, {
+      # Start timing for FD
+      fd_start_time <- Sys.time()
+      cat("\n=== MME FANDUEL LINEUP GENERATION STARTED ===\n")
+      cat("Start time:",
+          format(fd_start_time, "%Y-%m-%d %H:%M:%S"),
+          "\n")
+      cat("Target lineups: 15,000\n")
+      cat("Players available:", nrow(rv$mme_data), "\n\n")
+      
+      rv$fd_mme_lineups <- generate_top_expected_cuts_lineups(rv$mme_data, FD_SALARY_CAP, "fd", 50000, 2000)
+      
+      fd_end_time <- Sys.time()
+      fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
+      cat("=== FANDUEL COMPLETED ===\n")
+      cat("Total time:", sprintf("%.2f minutes", as.numeric(fd_elapsed)), "\n")
+      cat("Generated:", ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)), "lineups\n\n")
+      
+      rv$fd_mme_complete <- TRUE  # <-- ADD THIS LINE
+      
+      # Update excluded golfers dropdown
+      if (!is.null(rv$mme_data)) {
+        all_golfers <- unique(rv$mme_data$Golfer)
+        updateSelectizeInput(session,
+                             "fd_excluded_golfers",
+                             choices = all_golfers,
+                             selected = NULL)
+      }
+      
+      # Show success message
+      showModal(modalDialog(
+        title = "Success",
+        sprintf(
+          "Generated %d FanDuel MME lineups for filtering!\n\nTotal time: %.2f minutes",
+          ifelse(is.null(rv$fd_mme_lineups), 0, nrow(rv$fd_mme_lineups)),
+          as.numeric(fd_elapsed)
+        ),
+        easyClose = TRUE
+      ))
+    })
   })
-})
+  
   
   # Update DK slider ranges when MME lineups are generated
   observeEvent(rv$dk_mme_lineups, {
