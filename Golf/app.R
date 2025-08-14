@@ -317,7 +317,7 @@ generate_cash_lineups <- function(player_data, salary_cap, n_lineups = 50, platf
   }
 }
 
-generate_top_expected_cuts_lineups <- function(player_data, salary_cap, platform = "dk", target_lineups = 50000, tolerance = 2000) {
+generate_fast_smart_sample <- function(player_data, salary_cap, platform = "dk", target_lineups = 100000, tolerance = 2000) {
   # Setup
   players <- player_data$Golfer
   cut_probs <- player_data$CutPct
@@ -346,133 +346,182 @@ generate_top_expected_cuts_lineups <- function(player_data, salary_cap, platform
   min_salary <- salary_cap - tolerance
   max_salary <- salary_cap
   
-  # Simple list to track top lineups - faster than data.table for this
-  top_lineups <- list()
-  min_expected_cuts_cutoff <- 0
-  
-  cat("\n=== GENERATING TOP", format(target_lineups, big.mark = ","), "LINEUPS BY EXPECTED CUTS ===\n")
-  cat("Target salary range: $", format(min_salary, big.mark = ","), " - $", format(max_salary, big.mark = ","), "\n\n")
+  cat("\n=== FAST SMART SAMPLING ===\n")
+  cat("Target lineups:", format(target_lineups, big.mark = ","), "\n")
+  cat("Players available:", n_players, "\n")
+  cat("Strategy: Multi-tier weighted sampling\n\n")
   
   start_time <- Sys.time()
-  total_combos_checked <- 0
-  valid_found <- 0
   
-  # Pre-sort players by cut probability for early termination
-  sorted_cuts <- sort(cut_probs, decreasing = TRUE)
+  # Create multiple tier systems for different strategies
   
-  for(p1 in 1:(n_players-5)) {
-    for(p2 in (p1+1):(n_players-4)) {
-      s12 <- salaries[p1] + salaries[p2]
-      cuts12 <- cut_probs[p1] + cut_probs[p2]
+  # Cut probability tiers
+  cut_tiers <- list(
+    elite = which(cut_probs >= quantile(cut_probs, 0.8)),      # Top 20%
+    solid = which(cut_probs >= quantile(cut_probs, 0.4) & cut_probs < quantile(cut_probs, 0.8)),  # Middle 40%
+    value = which(cut_probs < quantile(cut_probs, 0.4))        # Bottom 40%
+  )
+  
+  # Standard projection tiers
+  std_tiers <- list(
+    elite = which(std_proj >= quantile(std_proj, 0.8)),
+    solid = which(std_proj >= quantile(std_proj, 0.4) & std_proj < quantile(std_proj, 0.8)),
+    value = which(std_proj < quantile(std_proj, 0.4))
+  )
+  
+  # Ceiling projection tiers
+  ceil_tiers <- list(
+    elite = which(ceil_proj >= quantile(ceil_proj, 0.8)),
+    solid = which(ceil_proj >= quantile(ceil_proj, 0.4) & ceil_proj < quantile(ceil_proj, 0.8)),
+    value = which(ceil_proj < quantile(ceil_proj, 0.4))
+  )
+  
+  # Salary efficiency tiers (projection per $1k salary)
+  proj_per_k <- std_proj / (salaries / 1000)
+  efficiency_tiers <- list(
+    elite = which(proj_per_k >= quantile(proj_per_k, 0.8)),
+    solid = which(proj_per_k >= quantile(proj_per_k, 0.4) & proj_per_k < quantile(proj_per_k, 0.8)),
+    value = which(proj_per_k < quantile(proj_per_k, 0.4))
+  )
+  
+  cat("Player tiers created:\n")
+  cat("  Cut Probability - Elite:", length(cut_tiers$elite), "| Solid:", length(cut_tiers$solid), "| Value:", length(cut_tiers$value), "\n")
+  cat("  Standard Proj - Elite:", length(std_tiers$elite), "| Solid:", length(std_tiers$solid), "| Value:", length(std_tiers$value), "\n")
+  cat("  Ceiling Proj - Elite:", length(ceil_tiers$elite), "| Solid:", length(ceil_tiers$solid), "| Value:", length(ceil_tiers$value), "\n")
+  cat("  Salary Efficiency - Elite:", length(efficiency_tiers$elite), "| Solid:", length(efficiency_tiers$solid), "| Value:", length(efficiency_tiers$value), "\n\n")
+  
+  valid_lineups <- list()
+  used_signatures <- character(0)
+  attempts <- 0
+  max_attempts <- target_lineups * 3  # Reasonable limit
+  
+  # Expanded sampling strategies for comprehensive coverage
+  strategies <- list(
+    # Cut probability based strategies (40% total weight)
+    list(name = "Cut-Elite-Heavy", tier_system = "cut", elite = 3, solid = 2, value = 1, weight = 0.15),
+    list(name = "Cut-Balanced", tier_system = "cut", elite = 2, solid = 2, value = 2, weight = 0.15),
+    list(name = "Cut-All-Elite", tier_system = "cut", elite = 4, solid = 1, value = 1, weight = 0.10),
+    
+    # Standard projection based strategies (25% total weight)
+    list(name = "Std-Elite-Heavy", tier_system = "std", elite = 3, solid = 2, value = 1, weight = 0.10),
+    list(name = "Std-Balanced", tier_system = "std", elite = 2, solid = 3, value = 1, weight = 0.10),
+    list(name = "Std-Value-Heavy", tier_system = "std", elite = 1, solid = 2, value = 3, weight = 0.05),
+    
+    # Ceiling projection based strategies (20% total weight)
+    list(name = "Ceil-Elite-Heavy", tier_system = "ceil", elite = 3, solid = 2, value = 1, weight = 0.08),
+    list(name = "Ceil-Balanced", tier_system = "ceil", elite = 2, solid = 2, value = 2, weight = 0.07),
+    list(name = "Ceil-All-Elite", tier_system = "ceil", elite = 4, solid = 1, value = 1, weight = 0.05),
+    
+    # Salary efficiency based strategies (10% total weight)
+    list(name = "Efficiency-Heavy", tier_system = "efficiency", elite = 2, solid = 3, value = 1, weight = 0.05),
+    list(name = "Efficiency-Value", tier_system = "efficiency", elite = 1, solid = 2, value = 3, weight = 0.05),
+    
+    # Pure random strategy (5% total weight)
+    list(name = "Pure-Random", tier_system = "random", elite = 0, solid = 0, value = 0, weight = 0.05)
+  )
+  
+  while(length(valid_lineups) < target_lineups && attempts < max_attempts) {
+    attempts <- attempts + 1
+    
+    # Choose strategy based on weights
+    strategy_weights <- sapply(strategies, function(x) x$weight)
+    chosen_strategy <- strategies[[sample(length(strategies), 1, prob = strategy_weights)]]
+    
+    # Sample players based on chosen strategy and tier system
+    if(chosen_strategy$tier_system == "random") {
+      # Completely random sampling
+      selected_indices <- sample(n_players, 6, replace = FALSE)
+    } else {
+      # Get the appropriate tier system
+      current_tiers <- switch(chosen_strategy$tier_system,
+                              "cut" = cut_tiers,
+                              "std" = std_tiers,
+                              "ceil" = ceil_tiers,
+                              "efficiency" = efficiency_tiers)
       
-      # Early termination: if best possible lineup can't beat cutoff
-      max_possible_remaining <- sum(sorted_cuts[1:4]) - sum(cut_probs[c(p1, p2)])
-      if(cuts12 + max_possible_remaining < min_expected_cuts_cutoff) next
-      if(s12 > max_salary - 4 * min(salaries)) next
+      # Tier-based sampling
+      selected_indices <- c()
       
-      for(p3 in (p2+1):(n_players-3)) {
-        s123 <- s12 + salaries[p3]
-        cuts123 <- cuts12 + cut_probs[p3]
-        
-        max_possible_remaining_3 <- sum(sorted_cuts[1:3]) - sum(cut_probs[c(p1, p2, p3)])
-        if(cuts123 + max_possible_remaining_3 < min_expected_cuts_cutoff) next
-        if(s123 > max_salary - 3 * min(salaries)) next
-        
-        for(p4 in (p3+1):(n_players-2)) {
-          s1234 <- s123 + salaries[p4]
-          cuts1234 <- cuts123 + cut_probs[p4]
-          
-          max_possible_remaining_4 <- sum(sorted_cuts[1:2]) - sum(cut_probs[c(p1, p2, p3, p4)])
-          if(cuts1234 + max_possible_remaining_4 < min_expected_cuts_cutoff) next
-          if(s1234 > max_salary - 2 * min(salaries)) next
-          
-          for(p5 in (p4+1):(n_players-1)) {
-            s12345 <- s1234 + salaries[p5]
-            cuts12345 <- cuts1234 + cut_probs[p5]
-            
-            max_possible_remaining_5 <- sorted_cuts[1] - max(cut_probs[c(p1, p2, p3, p4, p5)])
-            if(cuts12345 + max_possible_remaining_5 < min_expected_cuts_cutoff) next
-            if(s12345 > max_salary - min(salaries)) next
-            
-            for(p6 in (p5+1):n_players) {
-              total_combos_checked <- total_combos_checked + 1
-              total_salary <- s12345 + salaries[p6]
-              
-              if(total_salary < min_salary || total_salary > max_salary) next
-              
-              expected_cuts <- cuts12345 + cut_probs[p6]
-              if(expected_cuts < min_expected_cuts_cutoff) next
-              
-              valid_found <- valid_found + 1
-              
-              # Store lineup
-              top_lineups[[length(top_lineups) + 1]] <- list(
-                ExpectedCuts = expected_cuts,
-                indices = c(p1, p2, p3, p4, p5, p6),
-                TotalSalary = total_salary
-              )
-              
-              # Maintain top N only
-              if(length(top_lineups) > target_lineups * 1.5) {
-                # Sort by expected cuts and keep top target_lineups
-                scores <- sapply(top_lineups, function(x) x$ExpectedCuts)
-                keep_indices <- order(scores, decreasing = TRUE)[1:target_lineups]
-                top_lineups <- top_lineups[keep_indices]
-                
-                # Update cutoff
-                min_expected_cuts_cutoff <- min(sapply(top_lineups, function(x) x$ExpectedCuts))
-                
-                cat(sprintf("Cutoff raised to %.3f expected cuts | Top lineups: %s\n", 
-                            min_expected_cuts_cutoff, format(length(top_lineups), big.mark = ",")))
-              }
-              
-              # Progress
-              if(total_combos_checked %% 100000 == 0) {
-                current_time <- Sys.time()
-                elapsed <- difftime(current_time, start_time, units = "mins")
-                rate <- total_combos_checked / as.numeric(elapsed)
-                
-                cat(sprintf("[%s] Checked: %s | Valid: %s | Stored: %s | Rate: %.0f/min\n",
-                            format(current_time, "%H:%M:%S"),
-                            format(total_combos_checked, big.mark = ","),
-                            format(valid_found, big.mark = ","),
-                            format(length(top_lineups), big.mark = ","),
-                            rate))
-              }
-            }
-          }
+      # Sample from elite tier
+      if(chosen_strategy$elite > 0 && length(current_tiers$elite) > 0) {
+        elite_sample <- sample(current_tiers$elite, 
+                               min(chosen_strategy$elite, length(current_tiers$elite)), 
+                               replace = FALSE)
+        selected_indices <- c(selected_indices, elite_sample)
+      }
+      
+      # Sample from solid tier
+      if(chosen_strategy$solid > 0 && length(current_tiers$solid) > 0) {
+        available_solid <- setdiff(current_tiers$solid, selected_indices)
+        if(length(available_solid) > 0) {
+          solid_sample <- sample(available_solid, 
+                                 min(chosen_strategy$solid, length(available_solid)), 
+                                 replace = FALSE)
+          selected_indices <- c(selected_indices, solid_sample)
         }
       }
+      
+      # Sample from value tier
+      if(chosen_strategy$value > 0 && length(current_tiers$value) > 0) {
+        available_value <- setdiff(current_tiers$value, selected_indices)
+        if(length(available_value) > 0) {
+          value_sample <- sample(available_value, 
+                                 min(chosen_strategy$value, length(available_value)), 
+                                 replace = FALSE)
+          selected_indices <- c(selected_indices, value_sample)
+        }
+      }
+      
+      # Fill remaining spots randomly if needed
+      while(length(selected_indices) < 6) {
+        available_players <- setdiff(1:n_players, selected_indices)
+        if(length(available_players) == 0) break
+        selected_indices <- c(selected_indices, sample(available_players, 1))
+      }
     }
-  }
-  
-  # Convert to final format
-  final_lineups <- list()
-  for(i in 1:length(top_lineups)) {
-    lineup <- top_lineups[[i]]
-    indices <- lineup$indices
     
-    lineup_players <- players[indices]
-    lineup_cut_probs <- cut_probs[indices]
-    lineup_std_proj <- std_proj[indices]
-    lineup_ceil_proj <- ceil_proj[indices]
-    lineup_ownership <- ownership[indices]
+    # Skip if we don't have 6 players
+    if(length(selected_indices) != 6) next
+    
+    # Quick salary check
+    total_salary <- sum(salaries[selected_indices])
+    if(total_salary < min_salary || total_salary > max_salary) next
+    
+    # Check uniqueness
+    lineup_sig <- paste(sort(selected_indices), collapse = "-")
+    if(lineup_sig %in% used_signatures) next
+    
+    used_signatures <- c(used_signatures, lineup_sig)
+    
+    # Calculate all metrics
+    lineup_players <- players[selected_indices]
+    lineup_cut_probs <- cut_probs[selected_indices]
+    lineup_std_proj <- std_proj[selected_indices]
+    lineup_ceil_proj <- ceil_proj[selected_indices]
+    lineup_ownership <- ownership[selected_indices]
+    
+    expected_cuts <- sum(lineup_cut_probs)
+    total_std_proj <- sum(lineup_std_proj)
+    total_ceil_proj <- sum(lineup_ceil_proj)
+    cumulative_ownership <- sum(lineup_ownership)
+    geometric_mean_ownership <- exp(mean(log(pmax(lineup_ownership, 0.01))))
     
     cut_dist <- calculate_cut_distribution(lineup_cut_probs)
     
-    final_lineups[[i]] <- list(
+    # Store lineup
+    valid_lineups[[length(valid_lineups) + 1]] <- list(
       Player1 = lineup_players[1],
       Player2 = lineup_players[2],
       Player3 = lineup_players[3],
       Player4 = lineup_players[4],
       Player5 = lineup_players[5],
       Player6 = lineup_players[6],
-      ExpectedCuts = lineup$ExpectedCuts,
-      TotalSalary = lineup$TotalSalary,
-      StandardProj = sum(lineup_std_proj),
-      CeilingProj = sum(lineup_ceil_proj),
-      CumulativeOwnership = sum(lineup_ownership),
-      GeometricMeanOwnership = exp(mean(log(pmax(lineup_ownership, 0.01)))),
+      ExpectedCuts = expected_cuts,
+      TotalSalary = total_salary,
+      StandardProj = total_std_proj,
+      CeilingProj = total_ceil_proj,
+      CumulativeOwnership = cumulative_ownership,
+      GeometricMeanOwnership = geometric_mean_ownership,
       Exactly0 = cut_dist$exact[1],
       Exactly1 = cut_dist$exact[2],
       Exactly2 = cut_dist$exact[3],
@@ -487,25 +536,60 @@ generate_top_expected_cuts_lineups <- function(player_data, salary_cap, platform
       AtLeast5 = cut_dist$atleast[6],
       AtLeast6 = cut_dist$atleast[7]
     )
+    
+    # Progress reporting with strategy tracking
+    if(length(valid_lineups) %% 10000 == 0) {
+      current_time <- Sys.time()
+      elapsed <- difftime(current_time, start_time, units = "mins")
+      rate <- length(valid_lineups) / as.numeric(elapsed)
+      success_rate <- (length(valid_lineups) / attempts) * 100
+      
+      cat(sprintf("[%s] Generated: %s | Attempts: %s | Success: %.1f%% | Rate: %.0f/min | Last: %s\n",
+                  format(current_time, "%H:%M:%S"),
+                  format(length(valid_lineups), big.mark = ","),
+                  format(attempts, big.mark = ","),
+                  success_rate,
+                  rate,
+                  chosen_strategy$name))
+    }
   }
   
   end_time <- Sys.time()
   elapsed <- difftime(end_time, start_time, units = "mins")
   
   cat("\n=== GENERATION COMPLETE ===\n")
-  cat("Total combinations checked:", format(total_combos_checked, big.mark = ","), "\n")
-  cat("Valid lineups found:", format(valid_found, big.mark = ","), "\n")
-  cat("Top lineups kept:", format(length(final_lineups), big.mark = ","), "\n")
-  cat("Final cutoff:", sprintf("%.3f expected cuts", min_expected_cuts_cutoff), "\n")
-  cat("Total time:", sprintf("%.2f minutes", as.numeric(elapsed)), "\n\n")
+  cat("Lineups generated:", format(length(valid_lineups), big.mark = ","), "\n")
+  cat("Total attempts:", format(attempts, big.mark = ","), "\n")
+  cat("Success rate:", sprintf("%.2f%%", (length(valid_lineups) / attempts) * 100), "\n")
+  cat("Total time:", sprintf("%.2f minutes", as.numeric(elapsed)), "\n")
   
-  if (length(final_lineups) > 0) {
-    lineup_df <- do.call(rbind, lapply(final_lineups, data.frame, stringsAsFactors = FALSE))
-    return(lineup_df[order(lineup_df$ExpectedCuts, decreasing = TRUE), ])
+  if (length(valid_lineups) > 0) {
+    lineup_df <- do.call(rbind, lapply(valid_lineups, data.frame, stringsAsFactors = FALSE))
+    
+    # Sort by expected cuts
+    lineup_df <- lineup_df[order(lineup_df$ExpectedCuts, decreasing = TRUE), ]
+    
+    # Show diversity stats
+    cat("\n=== DIVERSITY STATS ===\n")
+    all_players_in_lineups <- unlist(lineup_df[, c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6")])
+    exposure_counts <- table(all_players_in_lineups)
+    exposure_pcts <- (exposure_counts / nrow(lineup_df)) * 100
+    
+    cat("Highest exposure:", sprintf("%.1f%%", max(exposure_pcts)), 
+        "(", names(exposure_pcts)[which.max(exposure_pcts)], ")\n")
+    cat("Expected cuts range:", sprintf("%.3f - %.3f", 
+                                        min(lineup_df$ExpectedCuts), max(lineup_df$ExpectedCuts)), "\n")
+    cat("Players with >50% exposure:", sum(exposure_pcts > 50), "\n")
+    cat("Players with >25% exposure:", sum(exposure_pcts > 25), "\n\n")
+    
+    return(lineup_df)
   } else {
     return(NULL)
   }
 }
+
+
+
 generate_filtered_mme_lineups <- function(optimal_lineups, filters, mme_data = NULL) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
@@ -1595,7 +1679,7 @@ server <- function(input, output, session) {
       cat("Target lineups: 15,000\n")
       cat("Players available:", nrow(rv$mme_data), "\n\n")
       
-      rv$dk_mme_lineups <- generate_top_expected_cuts_lineups(rv$mme_data, DK_SALARY_CAP, "dk", 50000, 2000)
+      rv$dk_mme_lineups <- generate_fast_smart_sample(rv$mme_data, DK_SALARY_CAP, "dk", 100000, 2000)
       
       dk_end_time <- Sys.time()
       dk_elapsed <- difftime(dk_end_time, dk_start_time, units = "mins")
@@ -1640,7 +1724,7 @@ server <- function(input, output, session) {
       cat("Target lineups: 15,000\n")
       cat("Players available:", nrow(rv$mme_data), "\n\n")
       
-      rv$fd_mme_lineups <- generate_top_expected_cuts_lineups(rv$mme_data, FD_SALARY_CAP, "fd", 50000, 2000)
+      rv$fd_mme_lineups <- generate_fast_smart_sample(rv$mme_data, FD_SALARY_CAP, "fd", 100000, 2000)
       
       fd_end_time <- Sys.time()
       fd_elapsed <- difftime(fd_end_time, fd_start_time, units = "mins")
