@@ -5836,41 +5836,46 @@ server <- function(input, output, session) {
   
   observeEvent(rv$dk_optimal_lineups, {
     if (!is.null(rv$dk_optimal_lineups)) {
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
+      # Only update sliders if they haven't been manually set
+      if (input$sidebar_menu == "optimal_lineups" || 
+          (is.null(input$dk_ownership_range) || identical(input$dk_ownership_range, c(0, 600)))) {
         
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
+        # Update ownership slider based on actual data
+        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
+          ownership_values <- ownership_values[!is.na(ownership_values)]
           
-          updateSliderInput(
-            session,
-            "dk_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
+          if (length(ownership_values) > 0) {
+            min_own <- floor(min(ownership_values))
+            max_own <- ceiling(max(ownership_values))
+            
+            updateSliderInput(
+              session,
+              "dk_ownership_range",
+              min = min_own,
+              max = max_own,
+              value = c(min_own, max_own)
+            )
+          }
         }
-      }
-      
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
         
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
+        # Update geometric mean slider based on actual data
+        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+          geometric_values <- rv$dk_optimal_lineups$GeometricMean
+          geometric_values <- geometric_values[!is.na(geometric_values)]
           
-          updateSliderInput(
-            session,
-            "dk_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
+          if (length(geometric_values) > 0) {
+            min_geo <- floor(min(geometric_values))
+            max_geo <- ceiling(max(geometric_values))
+            
+            updateSliderInput(
+              session,
+              "dk_geometric_range",
+              min = min_geo,
+              max = max_geo,
+              value = c(min_geo, max_geo)
+            )
+          }
         }
       }
     }
@@ -5962,94 +5967,6 @@ server <- function(input, output, session) {
     }
   })
   
-  observe({
-    if(input$sidebar_menu == "lineup_builder") {
-      # Add a small delay to ensure UI is rendered
-      invalidateLater(500, session)
-      
-      # Update DraftKings sliders if data exists
-      if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-        # Update ownership slider
-        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(
-              session,
-              "dk_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own)
-            )
-          }
-        }
-        
-        # Update geometric mean slider
-        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(
-              session,
-              "dk_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo)
-            )
-          }
-        }
-      }
-      
-      # Update FanDuel sliders if data exists
-      if(!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
-        # Update ownership slider
-        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(
-              session,
-              "fd_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own)
-            )
-          }
-        }
-        
-        # Update geometric mean slider
-        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          geometric_values <- rv$fd_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(
-              session,
-              "fd_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo)
-            )
-          }
-        }
-      }
-    }
-  })
   
   # Fixed filter change observers with debouncing
   observeEvent(dk_current_filters(), {
