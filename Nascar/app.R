@@ -279,6 +279,84 @@ process_input_data <- function(input_data) {
   )
 }
 
+create_lineup_display_data <- function(full_lineups, max_display = 100) {
+  if (is.null(full_lineups) || nrow(full_lineups) == 0) {
+    return(list(display = NULL, full = NULL))
+  }
+  
+  # Sort by Top1Count descending, then Top5Count descending
+  setDT(full_lineups)
+  setorder(full_lineups, -Top1Count, -Top5Count)
+  
+  # Create display subset (top N lineups)
+  display_lineups <- head(full_lineups, max_display)
+  
+  cat("Created display data: showing top", nrow(display_lineups), "of", nrow(full_lineups), "total lineups\n")
+  
+  return(list(
+    display = as.data.frame(display_lineups),
+    full = as.data.frame(full_lineups)
+  ))
+}
+
+# Memory management utilities
+configure_memory_settings <- function() {
+  # Configure data.table for better memory usage
+  data.table::setDTthreads(0)  # Use all available cores
+  options(datatable.optimize = 2)
+  
+  # More aggressive garbage collection
+  gcinfo(FALSE)  # Disable verbose GC messages
+}
+
+
+
+# Efficient memory cleanup
+cleanup_memory <- function(verbose = FALSE) {
+  if (verbose) cat("Running memory cleanup...\n")
+  
+  # Force garbage collection
+  for(i in 1:3) {
+    gc(verbose = FALSE, full = TRUE)
+    Sys.sleep(0.1)  # Brief pause between collections
+  }
+  
+  if (verbose) {
+    mem_info <- gc()
+    cat("Memory after cleanup - Used:", sum(mem_info[,2]), "MB\n")
+  }
+}
+
+optimize_simulation_storage <- function(sim_results) {
+  # Don't remove SimID immediately - let analysis functions handle it
+  # Only remove truly unnecessary columns
+  columns_to_remove <- c()  # Keep SimID for now
+  
+  for (col in columns_to_remove) {
+    if (col %in% names(sim_results)) {
+      sim_results[[col]] <- NULL
+    }
+  }
+  
+  return(sim_results)
+}
+
+
+# Pre-calculate expensive lookup data
+create_scoring_lookups <- function() {
+  list(
+    dk_finish_points = c(45, 42, 41, 40, 39, 38, 37, 36, 35, 34, 32, 31, 30, 29, 28, 
+                         27, 26, 25, 24, 23, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+    fd_finish_points = c(43, 40, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 
+                         25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+  )
+}
+
+# Initialize memory settings when app starts
+configure_memory_settings()
+
 create_driver_lookups <- function(drivers_dt) {
   # Pre-compute salary and name lookups to avoid repeated searches
   dk_lookup <- NULL
@@ -297,100 +375,112 @@ create_driver_lookups <- function(drivers_dt) {
   list(dk = dk_lookup, fd = fd_lookup)
 }
 
-simulate_finishing_positions <- function(drivers_dt) {
+precompute_driver_distributions <- function(drivers_dt) {
   n_drivers <- nrow(drivers_dt)
   
-  # Pre-extract all probability columns at once (small optimization)
-  w_vals <- drivers_dt$W
-  t3_vals <- drivers_dt$T3
-  t5_vals <- drivers_dt$T5
-  t10_vals <- drivers_dt$T10
-  t15_vals <- drivers_dt$T15
-  t20_vals <- drivers_dt$T20
-  t25_vals <- drivers_dt$T25
-  t30_vals <- drivers_dt$T30
+  # Extract probability columns once
+  prob_matrix <- as.matrix(drivers_dt[, .(W, T3, T5, T10, T15, T20, T25, T30)])
   
-  # Pre-define position ranges (same as before)
-  pos_ranges <- list(
-    1,
-    # W: Position 1
-    2:3,
-    # T3: Positions 2-3
-    4:5,
-    # T5: Positions 4-5
-    6:10,
-    # T10: Positions 6-10
-    11:15,
-    # T15: Positions 11-15
-    16:20,
-    # T20: Positions 16-20
-    21:25,
-    # T25: Positions 21-25
-    26:30,
-    # T30: Positions 26-30
-    31:n_drivers  # Beyond T30
-  )
+  # Handle NAs efficiently
+  prob_matrix[is.na(prob_matrix)] <- 0
   
-  # Pre-allocate vectors
-  performance_scores <- numeric(n_drivers)
-  noise_values <- runif(n_drivers, 0, 0.1)  # Pre-generate noise
+  # Pre-compute marginal probabilities for all drivers
+  marginal_probs <- array(0, dim = c(n_drivers, 9))
   
   for (i in 1:n_drivers) {
-    # Use pre-extracted values (faster than column access in loop)
-    cum_probs <- c(
-      w_vals[i],
-      t3_vals[i],
-      t5_vals[i],
-      t10_vals[i],
-      t15_vals[i],
-      t20_vals[i],
-      t25_vals[i],
-      t30_vals[i],
-      1.0
-    )
+    cum_probs <- c(prob_matrix[i, ], 1.0)
     
-    # Handle NA values (same logic)
-    cum_probs[is.na(cum_probs)] <- 0
+    # Calculate marginal probabilities
+    marg_probs <- diff(c(0, cum_probs))
+    marg_probs[marg_probs < 0] <- 0
     
-    # Calculate marginal probabilities (same logic)
-    marg_probs <- numeric(9)  # Pre-allocate with exact size
-    prev_prob <- 0
-    for (j in 1:9) {
-      marg_probs[j] <- max(0, cum_probs[j] - prev_prob)
-      prev_prob <- cum_probs[j]
-    }
-    
-    # Normalize (same logic)
+    # Normalize
     sum_probs <- sum(marg_probs)
     if (sum_probs > 0) {
       marg_probs <- marg_probs / sum_probs
     } else {
-      marg_probs <- rep(1 / 9, 9)  # Use exact number instead of length()
+      marg_probs <- rep(1/9, 9)
     }
     
-    # Sample position range (same logic)
-    pos_range_idx <- sample(1:9, 1, prob = marg_probs)
-    pos_range <- pos_ranges[[pos_range_idx]]
+    marginal_probs[i, ] <- marg_probs
+  }
+  
+  # Pre-define position ranges
+  position_ranges <- list(
+    c(1),
+    c(2, 3),
+    c(4, 5),
+    c(6, 7, 8, 9, 10),
+    c(11, 12, 13, 14, 15),
+    c(16, 17, 18, 19, 20),
+    c(21, 22, 23, 24, 25),
+    c(26, 27, 28, 29, 30),
+    c(31:n_drivers)
+  )
+  
+  return(list(
+    marginal_probs = marginal_probs,
+    position_ranges = position_ranges,
+    n_drivers = n_drivers
+  ))
+}
+
+# Vectorized finish position simulation
+simulate_finish_positions_vectorized <- function(driver_distributions, n_sims) {
+  n_drivers <- driver_distributions$n_drivers
+  marginal_probs <- driver_distributions$marginal_probs
+  position_ranges <- driver_distributions$position_ranges
+  
+  # Pre-allocate result matrix
+  all_positions <- matrix(0, nrow = n_drivers, ncol = n_sims)
+  
+  # Generate all random numbers at once
+  random_matrix <- matrix(runif(n_drivers * n_sims), nrow = n_drivers, ncol = n_sims)
+  noise_matrix <- matrix(runif(n_drivers * n_sims, 0, 0.1), nrow = n_drivers, ncol = n_sims)
+  
+  # Vectorized simulation
+  for (sim in 1:n_sims) {
+    performance_scores <- numeric(n_drivers)
     
-    # Sample position within range (same logic)
-    if (length(pos_range) > 1) {
-      sampled_pos <- sample(pos_range, 1)
-    } else {
-      sampled_pos <- pos_range
+    # Vectorized sampling for all drivers in this simulation
+    for (i in 1:n_drivers) {
+      # Sample position range using pre-computed probabilities
+      random_val <- random_matrix[i, sim]
+      cumsum_probs <- cumsum(marginal_probs[i, ])
+      pos_range_idx <- which(random_val <= cumsum_probs)[1]
+      
+      if (is.na(pos_range_idx)) pos_range_idx <- 9
+      
+      pos_range <- position_ranges[[pos_range_idx]]
+      
+      # Sample within range
+      if (length(pos_range) > 1) {
+        range_random <- (random_val * 1000) %% 1
+        sampled_pos <- pos_range[ceiling(range_random * length(pos_range))]
+      } else {
+        sampled_pos <- pos_range[1]
+      }
+      
+      performance_scores[i] <- sampled_pos + noise_matrix[i, sim]
     }
     
-    # Use pre-generated noise
-    performance_scores[i] <- sampled_pos + noise_values[i]
+    # Rank to get final positions
+    all_positions[, sim] <- rank(performance_scores)
   }
   
-  # Same ranking logic
-  finish_positions <- rank(performance_scores)
-  
-  if (anyDuplicated(finish_positions)) {
-    finish_positions <- rank(performance_scores + runif(n_drivers, 0, 0.001))
-  }
-  
-  return(finish_positions)
+  return(all_positions)
+}
+
+# Pre-compute scoring lookups once
+create_scoring_system <- function() {
+  list(
+    dk_finish_points = c(45, 42, 41, 40, 39, 38, 37, 36, 35, 34, 32, 31, 30, 29, 28, 
+                         27, 26, 25, 24, 23, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, rep(0, 100)),  # Extend for safety
+    fd_finish_points = c(43, 40, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 
+                         25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, rep(0, 100))   # Extend for safety
+  )
 }
 
 assign_dk_dominator_points <- function(race_results,
@@ -623,11 +713,7 @@ assign_dk_dominator_points <- function(race_results,
   return(race_results)
 }
 
-
-# Optimized assign_fd_dominator_points with similar improvements
-assign_fd_dominator_points <- function(race_results,
-                                       fd_dominator_data,
-                                       total_dom_points) {
+assign_fd_dominator_points <- function(race_results, fd_dominator_data, total_dom_points) {
   setDT(race_results)
   setDT(fd_dominator_data)
   
@@ -635,10 +721,12 @@ assign_fd_dominator_points <- function(race_results,
   result[, FDDominatorPoints := 0]
   remaining_points <- total_dom_points
   
-  # Same fallback logic
+  # Clean and validate dominator data
+  fd_dominator_data <- fd_dominator_data[!is.na(PtLow) | !is.na(PtHigh)]
+  
   if (nrow(fd_dominator_data) == 0) {
     if (remaining_points > 0 && nrow(result) > 0) {
-      top_drivers <- result[order(FDDomTier, FinishPosition)][1:min(5, .N)]
+      top_drivers <- result[order(FDDomTier, FinishPosition)][1:min(3, .N)]
       if (nrow(top_drivers) > 0) {
         points_per_driver <- round(remaining_points / nrow(top_drivers), 2)
         result[Name %in% top_drivers$Name, FDDominatorPoints := points_per_driver]
@@ -647,94 +735,99 @@ assign_fd_dominator_points <- function(race_results,
     return(result)
   }
   
-  # Same rank processing
+  # Process rank data
   if ("Rank" %in% names(fd_dominator_data)) {
     fd_dominator_data[, ProcessedRank := {
-      ifelse(Rank == "Strategy",
-             0,
-             ifelse(Rank == "DomDead", 999, as.numeric(Rank)))
+      sapply(Rank, function(x) {
+        x_char <- as.character(x)
+        if (x_char == "Strategy") return(0)
+        if (x_char == "DomDead") return(999)
+        
+        num_val <- suppressWarnings(as.numeric(x_char))
+        if (is.na(num_val)) return(999)
+        return(num_val)
+      })
     }]
     setorder(fd_dominator_data, ProcessedRank)
   }
   
-  # Pre-index and cache values for performance
-  setkey(result, FDDomTier, FinishPosition)
+  # Ensure required columns exist with proper defaults
+  required_cols <- list(OR = "R", TierMin = 1, TierMax = 3, FinLow = 1, FinHigh = 35)
+  
+  for (col_name in names(required_cols)) {
+    if (!col_name %in% names(fd_dominator_data)) {
+      fd_dominator_data[, (col_name) := required_cols[[col_name]]]
+    }
+  }
+  
   drivers_with_points <- character(0)
   
-  # Cache frequently accessed columns
-  result_names <- result$Name
-  result_tiers <- result$FDDomTier
-  result_positions <- result$FinishPosition
-  result_dom_points <- result$FDDominatorPoints
-  
-  # Process rules with vectorized lookups
+  # Process each dominator rule
   for (i in 1:nrow(fd_dominator_data)) {
-    if (remaining_points <= 0)
-      break
+    if (remaining_points <= 0.01) break
     
     rule <- fd_dominator_data[i]
-    if (is.null(rule) || length(rule) == 0)
-      next
     
-    # Same parameter extraction
-    fin_low <- ifelse(is.na(rule$FinLow), 1, rule$FinLow)
-    fin_high <- ifelse(is.na(rule$FinHigh), Inf, rule$FinHigh)
-    tier_min <- ifelse(is.na(rule$TierMin), 1, rule$TierMin)
-    tier_max <- ifelse(is.na(rule$TierMax), Inf, rule$TierMax)
+    # Extract rule parameters with validation
+    fin_low <- max(1, ifelse(is.na(rule$FinLow), 1, rule$FinLow))
+    fin_high <- min(ifelse(is.na(rule$FinHigh), 40, rule$FinHigh), 40)
+    tier_min <- max(1, ifelse(is.na(rule$TierMin), 1, rule$TierMin))
+    tier_max <- min(ifelse(is.na(rule$TierMax), 3, rule$TierMax), 5)
     pt_low <- max(0, ifelse(is.na(rule$PtLow), 0, rule$PtLow))
-    pt_high <- min(ifelse(is.na(rule$PtHigh), 5, rule$PtHigh), remaining_points)
+    pt_high <- min(ifelse(is.na(rule$PtHigh), 10, rule$PtHigh), remaining_points)
     
-    if (pt_low > pt_high)
-      next
+    if (pt_low > pt_high) next
     
-    # Vectorized eligible search
-    eligible_mask <- !(result_names %in% drivers_with_points) &
-      result_positions >= fin_low &
-      result_positions <= fin_high &
-      result_tiers >= tier_min &
-      result_tiers <= tier_max
+    # Find eligible drivers
+    eligible <- result[!(Name %in% drivers_with_points) & 
+                         FDDominatorPoints == 0 &
+                         FinishPosition >= fin_low & 
+                         FinishPosition <= fin_high &
+                         FDDomTier >= tier_min & 
+                         FDDomTier <= tier_max]
     
-    eligible_indices <- which(eligible_mask)
-    if (length(eligible_indices) == 0)
-      next
+    if (nrow(eligible) == 0) {
+      # Try expanding criteria slightly
+      eligible_expanded <- result[!(Name %in% drivers_with_points) & 
+                                    FDDominatorPoints == 0 &
+                                    FinishPosition >= fin_low & 
+                                    FinishPosition <= (fin_high + 3) &
+                                    FDDomTier >= tier_min & 
+                                    FDDomTier <= tier_max]
+      
+      if (nrow(eligible_expanded) > 0) {
+        eligible <- eligible_expanded
+      } else {
+        next
+      }
+    }
     
-    eligible <- result[eligible_indices]
+    # Select driver based on OR value
+    or_value <- rule$OR
+    if (is.na(or_value) || is.null(or_value)) or_value <- "R"
     
-    # Same selection method
-    has_or_value <- !is.null(rule$OR) &&
-      !is.na(rule$OR) && length(rule$OR) > 0
-    
-    selected_driver <- if (has_or_value && rule$OR == "R") {
+    selected_driver <- if (or_value == "R") {
       eligible[sample.int(nrow(eligible), 1)]
     } else {
       eligible[order(FinishPosition)][1]
     }
     
-    # Same point assignment
+    # Assign points
     points_to_assign <- round(runif(1, pt_low, pt_high), 2)
     points_to_assign <- min(points_to_assign, remaining_points)
     
     if (points_to_assign > 0) {
-      selected_name <- selected_driver$Name
-      result[Name == selected_name, FDDominatorPoints := FDDominatorPoints + points_to_assign]
-      
-      # Update cached values
-      match_idx <- which(result_names == selected_name)
-      result_dom_points[match_idx] <- result_dom_points[match_idx] + points_to_assign
-      
-      drivers_with_points <- c(drivers_with_points, selected_name)
+      result[Name == selected_driver$Name, FDDominatorPoints := FDDominatorPoints + points_to_assign]
+      drivers_with_points <- c(drivers_with_points, selected_driver$Name)
       remaining_points <- remaining_points - points_to_assign
     }
   }
   
-  # Same remaining point logic (optimized with vectorized operations)
+  # Distribute remaining points
   if (remaining_points > (total_dom_points * 0.1)) {
-    # Vectorized search
-    dom_mask <- !(result_names %in% drivers_with_points) &
-      result_tiers <= 2 &
-      result_positions > 10
-    
-    potential_dominators <- result[dom_mask]
+    potential_dominators <- result[!(Name %in% drivers_with_points) & 
+                                     FDDomTier <= 2 & 
+                                     FinishPosition > 10]
     
     if (nrow(potential_dominators) > 0) {
       selected <- potential_dominators[order(-FinishPosition)][1]
@@ -745,449 +838,376 @@ assign_fd_dominator_points <- function(race_results,
     }
   }
   
-  # Same final distribution with vectorized weight calculation
   if (remaining_points > 0.5) {
-    potential_mask <- !(result_names %in% drivers_with_points) &
-      result_positions <= 15 &
-      result_tiers <= 3
+    remaining_drivers <- result[!(Name %in% drivers_with_points) & 
+                                  FinishPosition <= 15 & 
+                                  FDDomTier <= 3]
     
-    potential_recipients <- result[potential_mask]
-    
-    if (nrow(potential_recipients) > 0) {
-      potential_recipients <- potential_recipients[order(FDDomTier, FinishPosition)]
-      n_recipients <- min(3, nrow(potential_recipients))
-      
-      # Vectorized weight calculation
-      indices <- 1:n_recipients - 1
-      weights <- exp(-0.7 * indices)
-      weights <- weights / sum(weights)
+    if (nrow(remaining_drivers) > 0) {
+      remaining_drivers <- remaining_drivers[order(FDDomTier, FinishPosition)]
+      n_recipients <- min(3, nrow(remaining_drivers))
       
       for (i in 1:n_recipients) {
-        points_to_add <- round(remaining_points * weights[i], 2)
-        if (points_to_add < 0.1)
-          next
+        points_to_add <- round(remaining_points * (0.4 / n_recipients), 2)
+        if (points_to_add < 0.1) break
         
-        result[Name == potential_recipients$Name[i], FDDominatorPoints := FDDominatorPoints + points_to_add]
+        result[Name == remaining_drivers$Name[i], FDDominatorPoints := FDDominatorPoints + points_to_add]
         remaining_points <- remaining_points - points_to_add
       }
     }
   }
   
-  # Same final scaling
+  # Final validation and scaling
   total_allocated <- sum(result$FDDominatorPoints, na.rm = TRUE)
   
-  if (total_allocated > total_dom_points) {
+  if (total_allocated > total_dom_points * 1.01) {
     scale_factor <- total_dom_points / total_allocated
     result[, FDDominatorPoints := round(FDDominatorPoints * scale_factor, 2)]
-  } else if (total_allocated < total_dom_points &&
-             (total_dom_points - total_allocated) >= 0.5) {
-    remainder <- total_dom_points - total_allocated
+  } else if (total_allocated < total_dom_points * 0.9) {
+    shortage <- total_dom_points - total_allocated
     top_dominator <- result[order(-FDDominatorPoints)][1]
-    result[Name == top_dominator$Name, FDDominatorPoints := FDDominatorPoints + remainder]
+    if (nrow(top_dominator) > 0) {
+      result[Name == top_dominator$Name, FDDominatorPoints := FDDominatorPoints + shortage]
+    }
   }
   
   result[, FDDominatorPoints := round(FDDominatorPoints, 2)]
+  
   return(result)
 }
 
-
-# FanDuel lap points assignment
 assign_fd_lap_points <- function(race_results, fd_laps_data) {
-  # Ensure both are data.tables
   setDT(race_results)
   setDT(fd_laps_data)
   
-  # Create a copy to avoid modifying the original
   result <- copy(race_results)
-  
-  # Initialize lap points without affecting other columns
   result[, FDLapPoints := 0]
   
-  # If no lap data, return early
-  if (nrow(fd_laps_data) == 0)
-    return(result)
-  
-  # Ensure necessary columns exist
+  # Validate required columns
   if (!"ps" %in% names(fd_laps_data)) {
-    warning("No 'ps' column in lap data, returning zeros for lap points")
     return(result)
   }
   
-  if (!"Pt" %in% names(fd_laps_data) &&
-      !all(c("PtLow", "PtHigh") %in% names(fd_laps_data))) {
-    warning("No point columns found in lap data, returning zeros for lap points")
+  # Determine point column to use
+  point_col <- NULL
+  if ("Pt" %in% names(fd_laps_data)) {
+    point_col <- "Pt"
+  } else if ("PtLow" %in% names(fd_laps_data)) {
+    point_col <- "PtLow"
+  } else if ("PtHigh" %in% names(fd_laps_data)) {
+    point_col <- "PtHigh"
+  }
+  
+  if (is.null(point_col)) {
     return(result)
   }
   
-  # Determine which column to use
-  point_col <- if ("Pt" %in% names(fd_laps_data))
-    "Pt"
-  else
-    "PtLow"
-  
-  # Ensure ps is numeric
+  # Clean and prepare lap data
   fd_laps_data[, ps := as.numeric(ps)]
+  fd_laps_data[, (point_col) := as.numeric(get(point_col))]
   
-  # Remove any NA rows
-  fd_laps_data <- fd_laps_data[!is.na(ps) & !is.na(get(point_col))]
+  # Remove invalid rows
+  fd_laps_data <- fd_laps_data[!is.na(ps) & !is.na(get(point_col)) & ps > 0]
   
-  # If no valid data after filtering, return early
-  if (nrow(fd_laps_data) == 0)
+  if (nrow(fd_laps_data) == 0) {
     return(result)
-  
-  # Build a complete positions lookup table from 1 to max position
-  max_pos <- max(result$FinishPosition, na.rm = TRUE)
-  max_ps <- max(fd_laps_data$ps, na.rm = TRUE)
-  
-  # Create a lookup table for all possible positions
-  all_positions <- data.table(position = 1:max(max_pos, max_ps))
-  
-  # For each position in the lookup table, find the points value
-  for (i in 1:nrow(all_positions)) {
-    pos <- all_positions$position[i]
-    
-    # Try exact match first
-    exact_match <- fd_laps_data[ps == pos]
-    
-    if (nrow(exact_match) > 0) {
-      # Use exact match
-      all_positions$points[i] <- exact_match[[point_col]][1]
-    } else {
-      # Find nearest lower value
-      lower_match <- fd_laps_data[ps < pos][order(-ps)]
-      if (nrow(lower_match) > 0) {
-        # Use the nearest lower value
-        all_positions$points[i] <- lower_match[[point_col]][1]
-      } else {
-        # No lower value, use the nearest higher
-        higher_match <- fd_laps_data[ps > pos][order(ps)]
-        if (nrow(higher_match) > 0) {
-          all_positions$points[i] <- higher_match[[point_col]][1]
-        } else {
-          # No match at all, default to 0
-          all_positions$points[i] <- 0
-        }
-      }
-    }
   }
   
-  # Enforce the non-increasing property
-  for (i in 2:nrow(all_positions)) {
-    if (all_positions$points[i] > all_positions$points[i - 1]) {
-      all_positions$points[i] <- all_positions$points[i - 1]
-    }
-  }
+  # Sort by position for efficient lookup
+  setorder(fd_laps_data, ps)
+  setkey(fd_laps_data, ps)
   
-  # Apply lap points to each driver based on finish position
+  # Process each driver's finish position
   for (i in 1:nrow(result)) {
-    if (!is.na(result$FinishPosition[i])) {
-      pos <- result$FinishPosition[i]
-      if (pos <= nrow(all_positions)) {
-        result$FDLapPoints[i] <- all_positions$points[pos]
-      } else {
-        # Position out of range, use the last available value
-        result$FDLapPoints[i] <- all_positions$points[nrow(all_positions)]
-      }
-    } else {
-      # NA finish position gets 0 points
+    finish_pos <- result$FinishPosition[i]
+    
+    if (is.na(finish_pos) || finish_pos <= 0) {
       result$FDLapPoints[i] <- 0
+      next
     }
+    
+    # Find the appropriate lap points for this finish position
+    lap_points <- get_lap_points_for_position(finish_pos, fd_laps_data, point_col)
+    result$FDLapPoints[i] <- lap_points
   }
   
-  # Ensure consistent precision
+  # Round to appropriate precision
   result[, FDLapPoints := round(FDLapPoints, 1)]
   
   return(result)
 }
 
-run_integrated_simulations <- function(input_data,
-                                       n_sims = 1000,
-                                       batch_size = 100) {
+
+# Add these helper functions to your code
+
+create_scoring_system <- function() {
+  list(
+    dk_finish_points = c(45, 42, 41, 40, 39, 38, 37, 36, 35, 34, 32, 31, 30, 29, 28, 
+                         27, 26, 25, 24, 23, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, rep(0, 100)),  # Extend for safety
+    fd_finish_points = c(43, 40, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 
+                         25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 
+                         10, 9, 8, 7, 6, 5, 4, 3, 2, 1, rep(0, 100))   # Extend for safety
+  )
+}
+
+calculate_dominator_points_batch <- function(finish_positions, dominator_rules, total_points, platform = "DK") {
+  n_sims <- ncol(finish_positions)
+  n_drivers <- nrow(finish_positions)
+  
+  # Pre-allocate dominator points matrix
+  dominator_points <- matrix(0, nrow = n_drivers, ncol = n_sims)
+  
+  if (nrow(dominator_rules) == 0) {
+    # Fallback allocation
+    for (sim in 1:n_sims) {
+      top_performers <- order(finish_positions[, sim])[1:min(5, n_drivers)]
+      points_per_driver <- total_points / length(top_performers)
+      dominator_points[top_performers, sim] <- points_per_driver
+    }
+    return(dominator_points)
+  }
+  
+  # Process each simulation
+  for (sim in 1:n_sims) {
+    sim_positions <- finish_positions[, sim]
+    remaining_points <- total_points
+    drivers_with_points <- integer(0)
+    
+    # Process dominator rules
+    for (rule_idx in 1:nrow(dominator_rules)) {
+      if (remaining_points <= 0) break
+      
+      rule <- dominator_rules[rule_idx, ]
+      
+      # Extract rule parameters
+      fin_low <- ifelse(is.na(rule$FinLow), 1, rule$FinLow)
+      fin_high <- ifelse(is.na(rule$FinHigh), n_drivers, rule$FinHigh)
+      pt_low <- ifelse(is.na(rule$PtLow), 0, rule$PtLow)
+      pt_high <- ifelse(is.na(rule$PtHigh), 5, rule$PtHigh)
+      
+      # Find eligible drivers (vectorized)
+      eligible_mask <- !(1:n_drivers %in% drivers_with_points) &
+        dominator_points[, sim] == 0 &
+        sim_positions >= fin_low &
+        sim_positions <= fin_high
+      
+      eligible_drivers <- which(eligible_mask)
+      
+      if (length(eligible_drivers) > 0) {
+        # Select driver based on OR value
+        or_value <- ifelse(is.na(rule$OR), "R", rule$OR)
+        
+        selected_driver <- if (or_value == "R") {
+          sample(eligible_drivers, 1)
+        } else {
+          eligible_drivers[which.min(sim_positions[eligible_drivers])]
+        }
+        
+        # Assign points
+        points_to_assign <- min(runif(1, pt_low, pt_high), remaining_points)
+        dominator_points[selected_driver, sim] <- points_to_assign
+        drivers_with_points <- c(drivers_with_points, selected_driver)
+        remaining_points <- remaining_points - points_to_assign
+      }
+    }
+    
+    # Distribute any remaining points
+    if (remaining_points > 0.1) {
+      remaining_drivers <- setdiff(1:n_drivers, drivers_with_points)
+      if (length(remaining_drivers) > 0) {
+        # Give to best remaining finisher
+        best_remaining <- remaining_drivers[which.min(sim_positions[remaining_drivers])]
+        dominator_points[best_remaining, sim] <- remaining_points
+      }
+    }
+  }
+  
+  return(dominator_points)
+}
+
+
+
+# Helper function for efficient lap point lookup
+get_lap_points_for_position <- function(finish_pos, fd_laps_data, point_col) {
+  # Try exact match first using data.table's fast binary search
+  exact_match <- fd_laps_data[.(finish_pos)]
+  if (!is.na(exact_match$ps[1])) {
+    return(exact_match[[point_col]][1])
+  }
+  
+  # Find the closest lower position
+  lower_positions <- fd_laps_data[ps < finish_pos]
+  if (nrow(lower_positions) > 0) {
+    closest_lower_idx <- which.max(lower_positions$ps)
+    return(lower_positions[[point_col]][closest_lower_idx])
+  }
+  
+  # If no lower position, find the closest higher position
+  higher_positions <- fd_laps_data[ps > finish_pos]
+  if (nrow(higher_positions) > 0) {
+    closest_higher_idx <- which.min(higher_positions$ps)
+    return(higher_positions[[point_col]][closest_higher_idx])
+  }
+  
+  # No match found
+  return(0)
+}
+
+
+# Helper function for efficient lap point lookup
+get_lap_points_for_position <- function(finish_pos, fd_laps_data, point_col) {
+  # Try exact match first using data.table's fast binary search
+  exact_match <- fd_laps_data[.(finish_pos)]
+  if (!is.na(exact_match$ps[1])) {
+    return(exact_match[[point_col]][1])
+  }
+  
+  # Find the closest lower position
+  lower_positions <- fd_laps_data[ps < finish_pos]
+  if (nrow(lower_positions) > 0) {
+    # Use the highest position that's still lower than finish_pos
+    closest_lower_idx <- which.max(lower_positions$ps)
+    return(lower_positions[[point_col]][closest_lower_idx])
+  }
+  
+  # If no lower position, find the closest higher position
+  higher_positions <- fd_laps_data[ps > finish_pos]
+  if (nrow(higher_positions) > 0) {
+    closest_higher_idx <- which.min(higher_positions$ps)
+    return(higher_positions[[point_col]][closest_higher_idx])
+  }
+  
+  # No match found - this shouldn't happen with reasonable data
+  return(0)
+}
+
+
+run_efficient_simulation <- function(input_data, n_sims = 1000) {
   drivers_dt <- as.data.table(input_data$drivers)
   n_drivers <- nrow(drivers_dt)
   
-  # Platform detection (same as original)
-  has_dk <- "DKSalary" %in% names(drivers_dt) &&
-    length(input_data$dk_dom_points) > 0
-  has_fd <- "FDSalary" %in% names(drivers_dt) &&
-    length(input_data$fd_dom_points) > 0
+  # Platform detection
+  has_dk <- "DKSalary" %in% names(drivers_dt) && length(input_data$dk_dom_points) > 0
+  has_fd <- "FDSalary" %in% names(drivers_dt) && length(input_data$fd_dom_points) > 0
   
-  # Pre-compute scoring vectors (same as original)
-  dk_finish_points <- c(
-    45,
-    42,
-    41,
-    40,
-    39,
-    38,
-    37,
-    36,
-    35,
-    34,
-    32,
-    31,
-    30,
-    29,
-    28,
-    27,
-    26,
-    25,
-    24,
-    23,
-    21,
-    20,
-    19,
-    18,
-    17,
-    16,
-    15,
-    14,
-    13,
-    12,
-    10,
-    9,
-    8,
-    7,
-    6,
-    5,
-    4,
-    3,
-    2,
-    1,
-    0
+  # Pre-compute everything once
+  driver_distributions <- precompute_driver_distributions(drivers_dt)
+  scoring_system <- create_scoring_system()
+  
+  # Extract static data once
+  static_data <- list(
+    names = drivers_dt$Name,
+    starting = drivers_dt$Starting
   )
   
-  fd_finish_points <- c(
-    43,
-    40,
-    38,
-    37,
-    36,
-    35,
-    34,
-    33,
-    32,
-    31,
-    30,
-    29,
-    28,
-    27,
-    26,
-    25,
-    24,
-    23,
-    22,
-    21,
-    20,
-    19,
-    18,
-    17,
-    16,
-    15,
-    14,
-    13,
-    12,
-    11,
-    10,
-    9,
-    8,
-    7,
-    6,
-    5,
-    4,
-    3,
-    2,
-    1,
-    0
-  )
-  
-  # OPTIMIZATION: Pre-compute all static driver data once
-  static_names <- drivers_dt$Name
-  static_starting <- drivers_dt$Starting
-  
-  static_dk_data <- if (has_dk) {
-    list(
+  if (has_dk) {
+    static_data$dk <- list(
       salary = drivers_dt$DKSalary,
       op = drivers_dt$DKOP,
       name = drivers_dt$DKName,
       tier = drivers_dt$DKDomTier
     )
-  } else
-    NULL
+  }
   
-  static_fd_data <- if (has_fd) {
-    list(
+  if (has_fd) {
+    static_data$fd <- list(
       salary = drivers_dt$FDSalary,
       op = drivers_dt$FDOP,
       name = drivers_dt$FDName,
       tier = drivers_dt$FDDomTier
     )
-  } else
-    NULL
+  }
   
-  cat("Starting optimized simulation with", n_sims, "races...\n")
+  # Generate all finish positions at once
+  cat("Generating finish positions for", n_sims, "simulations...\n")
+  all_finish_positions <- simulate_finish_positions_vectorized(driver_distributions, n_sims)
   
-  # OPTIMIZATION: Smarter batch sizing based on memory and driver count
-  optimal_batch_size <- min(batch_size, max(25, ceiling(5000 / n_drivers)))
-  n_batches <- ceiling(n_sims / optimal_batch_size)
+  # Calculate dominator points in batch
+  dk_dominator_points <- NULL
+  fd_dominator_points <- NULL
   
-  # OPTIMIZATION: Pre-allocate final results structure more efficiently
-  total_rows <- n_drivers * n_sims
+  if (has_dk) {
+    cat("Calculating DK dominator points...\n")
+    dk_dominator_points <- calculate_dominator_points_batch(
+      all_finish_positions, 
+      input_data$dk_dominator, 
+      input_data$dk_dom_points[1], 
+      "DK"
+    )
+  }
   
-  # Create column lists for efficient rbindlist later
-  results_list <- vector("list", n_batches)
+  if (has_fd) {
+    cat("Calculating FD dominator points...\n")
+    fd_dominator_points <- calculate_dominator_points_batch(
+      all_finish_positions, 
+      input_data$fd_dominator, 
+      input_data$fd_dom_points[1], 
+      "FD"
+    )
+  }
   
-  # Process in optimized batches
-  for (batch in 1:n_batches) {
-    batch_start <- Sys.time()
-    
-    start_sim <- (batch - 1) * optimal_batch_size + 1
-    end_sim <- min(batch * optimal_batch_size, n_sims)
-    current_batch_size <- end_sim - start_sim + 1
-    
-    cat(
-      "Processing batch",
-      batch,
-      "of",
-      n_batches,
-      "(simulations",
-      start_sim,
-      "to",
-      end_sim,
-      ")\n"
+  # Vectorized fantasy point calculation - KEEP SimID!
+  cat("Calculating fantasy points...\n")
+  results_list <- vector("list", n_sims)
+  
+  for (sim in 1:n_sims) {
+    sim_result <- data.table(
+      SimID = sim,  # KEEP THIS!
+      Name = static_data$names,
+      Starting = static_data$starting,
+      FinishPosition = all_finish_positions[, sim]
     )
     
-    # OPTIMIZATION: Create batch results with exact size pre-allocation
-    batch_cols <- list(
-      SimID = rep(start_sim:end_sim, each = n_drivers),
-      Name = rep(static_names, current_batch_size),
-      Starting = rep(static_starting, current_batch_size),
-      FinishPosition = integer(n_drivers * current_batch_size)
-    )
-    
-    # Add platform-specific columns only if needed
     if (has_dk) {
-      batch_cols$DKSalary <- rep(static_dk_data$salary, current_batch_size)
-      batch_cols$DKOP <- rep(static_dk_data$op, current_batch_size)
-      batch_cols$DKName <- rep(static_dk_data$name, current_batch_size)
-      batch_cols$DKDominatorPoints <- numeric(n_drivers * current_batch_size)
-      batch_cols$DKFantasyPoints <- numeric(n_drivers * current_batch_size)
+      # Vectorized DK calculations
+      dk_finish_pts <- scoring_system$dk_finish_points[pmin(all_finish_positions[, sim], 
+                                                            length(scoring_system$dk_finish_points))]
+      dk_place_diff <- static_data$starting - all_finish_positions[, sim]
+      dk_dom_pts <- if (!is.null(dk_dominator_points)) dk_dominator_points[, sim] else rep(0, n_drivers)
+      
+      sim_result[, `:=`(
+        DKSalary = static_data$dk$salary,
+        DKOP = static_data$dk$op,
+        DKName = static_data$dk$name,
+        DKDomTier = static_data$dk$tier,
+        DKDominatorPoints = dk_dom_pts,
+        DKFantasyPoints = dk_finish_pts + dk_place_diff + dk_dom_pts
+      )]
     }
     
     if (has_fd) {
-      batch_cols$FDSalary <- rep(static_fd_data$salary, current_batch_size)
-      batch_cols$FDOP <- rep(static_fd_data$op, current_batch_size)
-      batch_cols$FDName <- rep(static_fd_data$name, current_batch_size)
-      batch_cols$FDDominatorPoints <- numeric(n_drivers * current_batch_size)
-      batch_cols$FDLapPoints <- numeric(n_drivers * current_batch_size)
-      batch_cols$FDFantasyPoints <- numeric(n_drivers * current_batch_size)
+      # Vectorized FD calculations
+      fd_finish_pts <- scoring_system$fd_finish_points[pmin(all_finish_positions[, sim], 
+                                                            length(scoring_system$fd_finish_points))]
+      fd_place_diff <- (static_data$starting - all_finish_positions[, sim]) * 0.5
+      fd_dom_pts <- if (!is.null(fd_dominator_points)) fd_dominator_points[, sim] else rep(0, n_drivers)
+      
+      sim_result[, `:=`(
+        FDSalary = static_data$fd$salary,
+        FDOP = static_data$fd$op,
+        FDName = static_data$fd$name,
+        FDDomTier = static_data$fd$tier,
+        FDDominatorPoints = fd_dom_pts,
+        FDLapPoints = rep(0, n_drivers),  # Implement lap points if needed
+        FDFantasyPoints = fd_finish_pts + fd_place_diff + fd_dom_pts
+      )]
     }
     
-    # Create data.table from lists (more efficient than growing)
-    batch_results <- setDT(batch_cols)
-    
-    # OPTIMIZATION: Process simulations with vectorized operations where possible
-    for (sim_offset in 1:current_batch_size) {
-      sim <- start_sim + sim_offset - 1
-      sim_start_idx <- (sim_offset - 1) * n_drivers + 1
-      sim_end_idx <- sim_start_idx + n_drivers - 1
-      
-      # Generate finish positions
-      finish_positions <- simulate_finishing_positions(drivers_dt)
-      
-      # OPTIMIZATION: Direct assignment instead of using set()
-      batch_results$FinishPosition[sim_start_idx:sim_end_idx] <- finish_positions
-      
-      # Process DraftKings points if needed
-      if (has_dk) {
-        # Create minimal race result for dominator processing
-        race_result <- data.table(
-          Name = static_names,
-          FinishPosition = finish_positions,
-          DKDomTier = static_dk_data$tier
-        )
-        
-        # Calculate dominator points
-        dk_dom_result <- assign_dk_dominator_points(race_result,
-                                                    input_data$dk_dominator,
-                                                    input_data$dk_dom_points[1])
-        
-        # OPTIMIZATION: Vectorized fantasy point calculation
-        dk_finish_pts <- dk_finish_points[pmin(finish_positions, length(dk_finish_points))]
-        dk_place_diff <- static_starting - finish_positions
-        dk_fantasy_points <- dk_finish_pts + dk_place_diff + dk_dom_result$DKDominatorPoints
-        
-        # Direct assignment
-        batch_results$DKDominatorPoints[sim_start_idx:sim_end_idx] <- dk_dom_result$DKDominatorPoints
-        batch_results$DKFantasyPoints[sim_start_idx:sim_end_idx] <- dk_fantasy_points
-      }
-      
-      # Process FanDuel points if needed
-      if (has_fd) {
-        # Create minimal race result for dominator processing
-        race_result <- data.table(
-          Name = static_names,
-          FinishPosition = finish_positions,
-          FDDomTier = static_fd_data$tier
-        )
-        
-        # Calculate dominator points
-        fd_dom_result <- assign_fd_dominator_points(race_result,
-                                                    input_data$fd_dominator,
-                                                    input_data$fd_dom_points[1])
-        
-        # Calculate lap points
-        fd_lap_result <- assign_fd_lap_points(fd_dom_result, input_data$fd_laps)
-        
-        # OPTIMIZATION: Vectorized fantasy point calculation
-        fd_finish_pts <- fd_finish_points[pmin(finish_positions, length(fd_finish_points))]
-        fd_place_diff <- (static_starting - finish_positions) * 0.5
-        fd_fantasy_points <- fd_finish_pts + fd_place_diff +
-          fd_dom_result$FDDominatorPoints + fd_lap_result$FDLapPoints
-        
-        # Direct assignment
-        batch_results$FDDominatorPoints[sim_start_idx:sim_end_idx] <- fd_dom_result$FDDominatorPoints
-        batch_results$FDLapPoints[sim_start_idx:sim_end_idx] <- fd_lap_result$FDLapPoints
-        batch_results$FDFantasyPoints[sim_start_idx:sim_end_idx] <- fd_fantasy_points
-      }
-    }
-    
-    # Store batch results for later combination
-    results_list[[batch]] <- batch_results
-    
-    # Progress reporting and memory management
-    batch_end <- Sys.time()
-    batch_time <- difftime(batch_end, batch_start, units = "secs")
-    cat(sprintf(
-      "Batch %d/%d completed in %.1f seconds\n",
-      batch,
-      n_batches,
-      as.numeric(batch_time)
-    ))
-    
-    # OPTIMIZATION: More aggressive memory cleanup
-    if (batch %% 2 == 0) {
-      gc(verbose = FALSE, full = TRUE)
-    }
+    results_list[[sim]] <- sim_result
   }
   
-  # OPTIMIZATION: Efficient final combination using rbindlist
-  cat("Combining results...\n")
-  combined_results <- rbindlist(results_list, use.names = TRUE)
+  # Combine results
+  combined_results <- rbindlist(results_list)
   
-  # Clean up intermediate results
-  rm(results_list)
-  gc(verbose = FALSE, full = TRUE)
+  cat("Efficient simulation completed!\n")
+  cat("Generated", nrow(combined_results), "total results\n")
   
-  # Set key for better performance
-  setkey(combined_results, SimID)
-  
-  cat("Optimized simulation completed!\n")
-  
-  # Return same format as original
-  list(results = combined_results,
-       has_dk = has_dk,
-       has_fd = has_fd)
+  return(list(
+    results = combined_results,
+    has_dk = has_dk,
+    has_fd = has_fd
+  ))
 }
 
 # Analysis Functions (optimized with data.table)
@@ -1219,6 +1239,15 @@ analyze_finishing_positions <- function(sim_results) {
 analyze_dk_dominator_points <- function(sim_results) {
   setDT(sim_results)
   
+  # Check if SimID exists, if not create it
+  if (!"SimID" %in% names(sim_results)) {
+    n_drivers <- length(unique(sim_results$Name))
+    sim_results[, SimID := rep(1:(nrow(sim_results) %/% n_drivers + 1), each = n_drivers)[1:nrow(sim_results)]]
+    created_simid <- TRUE
+  } else {
+    created_simid <- FALSE
+  }
+  
   # Calculate dominator rank for each simulation
   sim_results[, DKDominatorRank := frank(-DKDominatorPoints, ties.method = "min"), by = SimID]
   
@@ -1236,24 +1265,23 @@ analyze_dk_dominator_points <- function(sim_results) {
     Top10_DomRate = mean(DKDominatorRank <= 10) * 100
   ), by = Name]
   
+  # Clean up temporary columns
+  sim_results[, DKDominatorRank := NULL]
+  if (created_simid) {
+    sim_results[, SimID := NULL]
+  }
+  
   # Ensure numeric columns before rounding
   numeric_cols <- c(
-    "Starting",
-    "DKSalary",
-    "Avg_Dom",
-    "Median_Dom",
-    "Max_Dom",
-    "Avg_DomRank",
-    "Median_DomRank",
-    "Top_DomRate",
-    "Top3_DomRate",
-    "Top5_DomRate",
-    "Top10_DomRate"
+    "Starting", "DKSalary", "Avg_Dom", "Median_Dom", "Max_Dom",
+    "Avg_DomRank", "Median_DomRank", "Top_DomRate", "Top3_DomRate", 
+    "Top5_DomRate", "Top10_DomRate"
   )
   
-  # Convert to numeric and round to 1 decimal place
   for (col in numeric_cols) {
-    results[, (col) := round(as.numeric(get(col)), 1)]
+    if (col %in% names(results)) {
+      results[, (col) := round(as.numeric(get(col)), 1)]
+    }
   }
   
   # Sort by Average Dominator Points in descending order
@@ -1262,8 +1290,18 @@ analyze_dk_dominator_points <- function(sim_results) {
   return(results)
 }
 
+# Update analyze_fd_dominator_points function similarly:
 analyze_fd_dominator_points <- function(sim_results) {
   setDT(sim_results)
+  
+  # Check if SimID exists, if not create it
+  if (!"SimID" %in% names(sim_results)) {
+    n_drivers <- length(unique(sim_results$Name))
+    sim_results[, SimID := rep(1:(nrow(sim_results) %/% n_drivers + 1), each = n_drivers)[1:nrow(sim_results)]]
+    created_simid <- TRUE
+  } else {
+    created_simid <- FALSE
+  }
   
   # Calculate dominator rank for each simulation
   sim_results[, FDDominatorRank := frank(-FDDominatorPoints, ties.method = "min"), by = SimID]
@@ -1281,23 +1319,22 @@ analyze_fd_dominator_points <- function(sim_results) {
     Top5_DomRate = mean(FDDominatorRank <= 5) * 100
   ), by = Name]
   
+  # Clean up temporary columns
+  sim_results[, FDDominatorRank := NULL]
+  if (created_simid) {
+    sim_results[, SimID := NULL]
+  }
+  
   # Ensure numeric columns before rounding
   numeric_cols <- c(
-    "Starting",
-    "FDSalary",
-    "Avg_Dom",
-    "Median_Dom",
-    "Max_Dom",
-    "Avg_DomRank",
-    "Median_DomRank",
-    "Top_DomRate",
-    "Top3_DomRate",
-    "Top5_DomRate"
+    "Starting", "FDSalary", "Avg_Dom", "Median_Dom", "Max_Dom",
+    "Avg_DomRank", "Median_DomRank", "Top_DomRate", "Top3_DomRate", "Top5_DomRate"
   )
   
-  # Convert to numeric and round to 1 decimal place
   for (col in numeric_cols) {
-    results[, (col) := round(as.numeric(get(col)), 1)]
+    if (col %in% names(results)) {
+      results[, (col) := round(as.numeric(get(col)), 1)]
+    }
   }
   
   # Sort by Average Dominator Points in descending order
@@ -1305,6 +1342,7 @@ analyze_fd_dominator_points <- function(sim_results) {
   
   return(results)
 }
+
 
 analyze_fd_lap_points <- function(sim_results) {
   setDT(sim_results)
@@ -1381,11 +1419,19 @@ analyze_fd_fantasy_points <- function(sim_results) {
   return(results)
 }
 
-# Accuracy analysis
 analyze_simulation_accuracy <- function(sim_results, input_data) {
   # Make sure we're working with data.tables
   setDT(sim_results)
   setDT(input_data)
+  
+  # Check if SimID exists, if not create it temporarily
+  if (!"SimID" %in% names(sim_results)) {
+    n_drivers <- length(unique(sim_results$Name))
+    sim_results[, SimID := rep(1:(nrow(sim_results) %/% n_drivers + 1), each = n_drivers)[1:nrow(sim_results)]]
+    created_simid <- TRUE
+  } else {
+    created_simid <- FALSE
+  }
   
   # Get unique drivers
   drivers <- unique(input_data$Name)
@@ -1399,8 +1445,7 @@ analyze_simulation_accuracy <- function(sim_results, input_data) {
     driver_input <- input_data[Name == driver]
     
     total_sims <- nrow(driver_sims)
-    if (total_sims == 0)
-      next
+    if (total_sims == 0) next
     
     # Calculate simulated percentages
     sim_pcts <- c(
@@ -1425,14 +1470,17 @@ analyze_simulation_accuracy <- function(sim_results, input_data) {
             Driver = driver,
             Metric = metric,
             Input = input_value * 100,
-            # Convert to percentage
             Simulated = sim_value * 100,
-            # Convert to percentage
-            Difference = abs(input_value * 100 - sim_value * 100) # Convert to percentage
+            Difference = abs(input_value * 100 - sim_value * 100)
           )
         )
       }
     }
+  }
+  
+  # Clean up temporary SimID if we created it
+  if (created_simid) {
+    sim_results[, SimID := NULL]
   }
   
   # Sort by driver and metric
@@ -1440,7 +1488,6 @@ analyze_simulation_accuracy <- function(sim_results, input_data) {
   
   return(results)
 }
-
 
 # Cash simulation functions
 read_field_lineups <- function(file_path) {
@@ -1627,646 +1674,335 @@ simulate_h2h_cash_contest <- function(user_lineups,
   )
 }
 
-# Lineup optimization functions
-# DraftKings optimal lineup finder with memory optimizations
-find_dk_optimal_lineups <- function(sim_data, k = 5) {
-  # Ensure data.table
-  setDT(sim_data)
-  
-  sim_data <- sim_data[!is.na(DKSalary) & DKSalary > 0 &
-                         !is.na(DKName) &
-                         DKName != "" & DKName != "NA"]
-  
-  
-  # Calculate PPD directly instead of adding a column to save memory
-  # Use vector operations instead of adding columns
-  dk_fantasy_points <- sim_data$DKFantasyPoints
-  dk_salary <- sim_data$DKSalary
-  ppd_values <- dk_fantasy_points / (dk_salary / 1000)
-  
-  # Find indices of top candidates directly without creating intermediate data frames
-  top_points_idx <- order(-dk_fantasy_points)[1:min(15, length(dk_fantasy_points))]
-  top_ppd_idx <- order(-ppd_values)[1:min(15, length(ppd_values))]
-  
-  # Combine indices without redundant copies
-  candidate_idx <- unique(c(top_points_idx, top_ppd_idx))
-  
-  # Create candidates data frame directly from indices - only needed columns
-  candidates <- sim_data[candidate_idx, .(DKName, DKSalary, DKFantasyPoints)]
-  
-  n <- nrow(candidates)
-  if (n < DK_ROSTER_SIZE)
-    return(NULL)
-  
-  # Initialize results with exact size to prevent reallocations
-  lineup_results <- data.frame(
-    Lineup = character(k),
-    Rank = integer(k),
-    stringsAsFactors = FALSE
-  )
-  
-  # Track excluded pairs for diversity
-  excluded_pairs <- list()
-  
-  # Find k lineups
-  lineup_count <- 0
-  for (i in 1:k) {
-    # Create constraint matrix
-    const_rows <- 2 + length(excluded_pairs)
-    const.mat <- matrix(0, nrow = const_rows, ncol = n)
-    
-    # Basic constraints
-    const.mat[1, ] <- candidates$DKSalary  # Salary cap
-    const.mat[2, ] <- 1                    # Roster size
-    
-    # Add previous lineup exclusions
-    if (length(excluded_pairs) > 0) {
-      for (j in 1:length(excluded_pairs)) {
-        const.mat[2 + j, excluded_pairs[[j]]] <- 1
-      }
-    }
-    
-    const.dir <- c("<=", "==", rep("<=", length(excluded_pairs)))
-    const.rhs <- c(DK_SALARY_CAP,
-                   DK_ROSTER_SIZE,
-                   rep(DK_ROSTER_SIZE - 1, length(excluded_pairs)))
-    
-    # Solve with error handling - minimal options for lower memory usage
-    result <- tryCatch({
-      suppressWarnings(
-        lp(
-          "max",
-          candidates$DKFantasyPoints,
-          const.mat,
-          const.dir,
-          const.rhs,
-          all.bin = TRUE,
-          presolve = 0,
-          compute.sens = 0
-        )
-      )
-    }, error = function(e) {
-      NULL
-    })
-    
-    if (is.null(result) || result$status != 0)
-      break
-    
-    # Get selected drivers - avoid creating unnecessary vectors
-    selected_indices <- which(result$solution > 0.9)
-    
-    if (length(selected_indices) != DK_ROSTER_SIZE)
-      break
-    
-    # Create lineup string
-    selected_drivers <- sort(candidates$DKName[selected_indices])
-    lineup_str <- paste(selected_drivers, collapse = "|")
-    
-    # Add to results
-    lineup_count <- lineup_count + 1
-    lineup_results$Lineup[lineup_count] <- lineup_str
-    lineup_results$Rank[lineup_count] <- i
-    
-    # Track for diversity
-    excluded_pairs[[length(excluded_pairs) + 1]] <- selected_indices
-    
-    # Free memory
-    rm(result)
-  }
-  
-  # Return only the valid results
-  if (lineup_count == 0)
-    return(NULL)
-  if (lineup_count < k) {
-    lineup_results <- lineup_results[1:lineup_count, , drop = FALSE]
-  }
-  
-  return(lineup_results)
-}
 
-# FanDuel optimal lineup finder with memory optimizations
-find_fd_optimal_lineups <- function(sim_data, k = 5) {
-  # Ensure data.table
-  setDT(sim_data)
-  
-  # Filter using data.table syntax instead of dplyr
-  sim_data <- sim_data[!is.na(FDSalary) & FDSalary > 0 &
-                         !is.na(FDName) &
-                         FDName != "" & FDName != "NA"]
-  
-  # Calculate PPD directly instead of adding a column to save memory
-  # Use vector operations instead of adding columns
-  fd_fantasy_points <- sim_data$FDFantasyPoints
-  fd_salary <- sim_data$FDSalary
-  ppd_values <- fd_fantasy_points / (fd_salary / 1000)
-  
-  # Find indices of top candidates directly without creating intermediate data frames
-  top_points_idx <- order(-fd_fantasy_points)[1:min(15, length(fd_fantasy_points))]
-  top_ppd_idx <- order(-ppd_values)[1:min(15, length(ppd_values))]
-  
-  # Combine indices without redundant copies
-  candidate_idx <- unique(c(top_points_idx, top_ppd_idx))
-  
-  # Create candidates data frame directly from indices - only needed columns
-  candidates <- sim_data[candidate_idx, .(FDName, FDSalary, FDFantasyPoints)]
-  
-  n <- nrow(candidates)
-  if (n < FD_ROSTER_SIZE)
-    return(NULL)
-  
-  # Initialize results with exact size to prevent reallocations
-  lineup_results <- data.frame(
-    Lineup = character(k),
-    Rank = integer(k),
-    stringsAsFactors = FALSE
-  )
-  
-  # Track excluded pairs for diversity
-  excluded_pairs <- list()
-  
-  # Find k lineups
-  lineup_count <- 0
-  for (i in 1:k) {
-    # Create constraint matrix
-    const_rows <- 2 + length(excluded_pairs)
-    const.mat <- matrix(0, nrow = const_rows, ncol = n)
-    
-    # Basic constraints
-    const.mat[1, ] <- candidates$FDSalary  # Salary cap
-    const.mat[2, ] <- 1                    # Roster size
-    
-    # Add previous lineup exclusions
-    if (length(excluded_pairs) > 0) {
-      for (j in 1:length(excluded_pairs)) {
-        const.mat[2 + j, excluded_pairs[[j]]] <- 1
-      }
-    }
-    
-    const.dir <- c("<=", "==", rep("<=", length(excluded_pairs)))
-    const.rhs <- c(FD_SALARY_CAP,
-                   FD_ROSTER_SIZE,
-                   rep(FD_ROSTER_SIZE - 1, length(excluded_pairs)))
-    
-    # Solve with error handling
-    result <- tryCatch({
-      suppressWarnings(
-        lp(
-          "max",
-          candidates$FDFantasyPoints,
-          const.mat,
-          const.dir,
-          const.rhs,
-          all.bin = TRUE,
-          presolve = 0,
-          compute.sens = 0
-        )
-      )
-    }, error = function(e) {
-      NULL
-    })
-    
-    if (is.null(result) || result$status != 0)
-      break
-    
-    # Get selected drivers
-    selected_indices <- which(result$solution > 0.9)
-    
-    if (length(selected_indices) != FD_ROSTER_SIZE)
-      break
-    
-    # Create lineup string (sorted IDs for consistent identification)
-    selected_drivers <- sort(candidates$FDName[selected_indices])
-    lineup_str <- paste(selected_drivers, collapse = "|")
-    
-    # Add to results
-    lineup_count <- lineup_count + 1
-    lineup_results$Lineup[lineup_count] <- lineup_str
-    lineup_results$Rank[lineup_count] <- i
-    
-    # Track for diversity
-    excluded_pairs[[length(excluded_pairs) + 1]] <- selected_indices
-  }
-  
-  # Return only the valid results
-  if (lineup_count == 0)
-    return(NULL)
-  if (lineup_count < k) {
-    lineup_results <- lineup_results[1:lineup_count, , drop = FALSE]
-  }
-  
-  return(lineup_results)
-}
 
-# Updated count_dk_optimal_lineups function with ownership-based geometric mean
-count_dk_optimal_lineups <- function(sim_results) {
-  # Always use top_k=5
-  top_k <- 5
+# FIXED OPTIMIZATION FUNCTIONS - Replace the previous versions with these
+
+# Pre-compute all the static data structures we'll need
+prepare_optimization_data <- function(sim_results, platform = "DK") {
+  setDT(sim_results)
   
-  # Create data.table for better performance
-  sim_results_dt <- as.data.table(sim_results)
+  if (platform == "DK") {
+    fantasy_col <- "DKFantasyPoints"
+    salary_col <- "DKSalary"
+    name_col <- "DKName"
+    op_col <- "DKOP"
+    roster_size <- 6
+    salary_cap <- 50000
+  } else {
+    fantasy_col <- "FDFantasyPoints"
+    salary_col <- "FDSalary" 
+    name_col <- "FDName"
+    op_col <- "FDOP"
+    roster_size <- 5
+    salary_cap <- 50000
+  }
   
-  sim_results_dt <- sim_results_dt[!is.na(DKSalary) &
-                                     DKSalary > 0 &
-                                     !is.na(DKName) &
-                                     DKName != "" & DKName != "NA"]
+  # Check if required columns exist
+  required_cols <- c(fantasy_col, salary_col, name_col, op_col, "Name", "Starting", "SimID")
+  missing_cols <- setdiff(required_cols, names(sim_results))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
   
-  # Extract only necessary columns to reduce memory usage
-  sim_results_dt[, .(SimID, Name, DKName, DKSalary, DKFantasyPoints, DKOP)]
-  
-  # Split by simulation ID
-  all_sim_ids <- unique(sim_results_dt$SimID)
-  n_sims <- length(all_sim_ids)
-  
-  # Initialize results storage
-  all_lineups <- vector("list", n_sims)
-  
-  # Process in chunks for memory efficiency
-  chunk_size <- 50
-  chunks <- ceiling(n_sims / chunk_size)
-  
-  for (chunk in 1:chunks) {
-    start_idx <- (chunk - 1) * chunk_size + 1
-    end_idx <- min(chunk * chunk_size, n_sims)
-    chunk_sim_ids <- all_sim_ids[start_idx:end_idx]
-    
-    # Process only the current chunk of simulations
-    message(
-      sprintf(
-        "Processing chunk %d/%d (simulations %d to %d)",
-        chunk,
-        chunks,
-        start_idx,
-        end_idx
-      )
+  # Get unique drivers and create lookup tables - FIXED syntax
+  driver_info <- sim_results[, {
+    list(
+      Salary = first(.SD[[salary_col]]),
+      OP = first(.SD[[op_col]]),
+      Name = first(Name),
+      Starting = first(Starting)
     )
+  }, by = name_col]
+  
+  # Rename the grouping column to DriverID
+  setnames(driver_info, name_col, "DriverID")
+  setkey(driver_info, DriverID)
+  
+  # Create fantasy points matrix: drivers x simulations
+  sim_ids <- unique(sim_results$SimID)
+  driver_ids <- driver_info$DriverID
+  
+  # Pre-allocate matrix
+  fantasy_matrix <- matrix(0, nrow = length(driver_ids), ncol = length(sim_ids))
+  rownames(fantasy_matrix) <- driver_ids
+  colnames(fantasy_matrix) <- as.character(sim_ids)
+  
+  # Fill matrix efficiently - FIXED syntax
+  for (i in seq_along(driver_ids)) {
+    driver_data <- sim_results[get(name_col) == driver_ids[i]]
+    if (nrow(driver_data) > 0) {
+      sim_indices <- match(driver_data$SimID, sim_ids)
+      valid_indices <- !is.na(sim_indices)
+      if (any(valid_indices)) {
+        fantasy_matrix[i, sim_indices[valid_indices]] <- driver_data[[fantasy_col]][valid_indices]
+      }
+    }
+  }
+  
+  # Pre-compute constraint matrix (this never changes)
+  n_drivers <- length(driver_ids)
+  constraint_matrix <- matrix(0, nrow = 2, ncol = n_drivers)
+  constraint_matrix[1, ] <- driver_info$Salary  # Salary constraint
+  constraint_matrix[2, ] <- 1                   # Roster size constraint
+  
+  constraint_dirs <- c("<=", "==")
+  constraint_rhs <- c(salary_cap, roster_size)
+  
+  return(list(
+    fantasy_matrix = fantasy_matrix,
+    driver_info = driver_info,
+    constraint_matrix = constraint_matrix,
+    constraint_dirs = constraint_dirs,
+    constraint_rhs = constraint_rhs,
+    sim_ids = sim_ids,
+    driver_ids = driver_ids,
+    roster_size = roster_size,
+    name_col = name_col
+  ))
+}
+
+# Vectorized lineup finding - processes multiple simulations in parallel batches
+find_optimal_lineups_vectorized <- function(opt_data, batch_size = 50, k_per_sim = 3) {
+  n_sims <- length(opt_data$sim_ids)
+  n_drivers <- length(opt_data$driver_ids)
+  
+  cat("Processing", n_sims, "simulations in batches of", batch_size, "...\n")
+  
+  # Store all lineups found
+  all_lineups <- list()
+  
+  # Process simulations in batches for memory efficiency
+  n_batches <- ceiling(n_sims / batch_size)
+  
+  for (batch in 1:n_batches) {
+    start_sim <- (batch - 1) * batch_size + 1
+    end_sim <- min(batch * batch_size, n_sims)
+    batch_sims <- start_sim:end_sim
     
-    # Get data for just this chunk of simulations
-    chunk_data <- sim_results_dt[SimID %in% chunk_sim_ids]
+    if (batch %% 10 == 1 || batch == n_batches) {
+      cat("Processing batch", batch, "of", n_batches, "(sims", start_sim, "to", end_sim, ")...\n")
+    }
     
-    # Split this chunk by simulation ID
-    chunk_sim_list <- split(chunk_data, by = "SimID")
-    
-    # Process each simulation in this chunk
-    for (i in 1:length(chunk_sim_list)) {
-      sim_idx <- start_idx + i - 1
-      if (sim_idx <= n_sims) {
-        all_lineups[[sim_idx]] <- find_dk_optimal_lineups(chunk_sim_list[[i]], k = top_k)
+    # Process each simulation in this batch
+    for (sim_idx in batch_sims) {
+      sim_id <- opt_data$sim_ids[sim_idx]
+      objective_vector <- opt_data$fantasy_matrix[, sim_idx]
+      
+      # Skip if all zeros (shouldn't happen but safety check)
+      if (all(objective_vector == 0)) next
+      
+      # Find multiple optimal lineups per simulation for diversity
+      excluded_combinations <- list()
+      
+      for (k in 1:k_per_sim) {
+        # Create constraint matrix with exclusions
+        n_constraints <- 2 + length(excluded_combinations)
+        const_matrix <- matrix(0, nrow = n_constraints, ncol = n_drivers)
+        
+        # Basic constraints
+        const_matrix[1:2, ] <- opt_data$constraint_matrix
+        
+        # Add exclusion constraints
+        if (length(excluded_combinations) > 0) {
+          for (exc_idx in seq_along(excluded_combinations)) {
+            const_matrix[2 + exc_idx, excluded_combinations[[exc_idx]]] <- 1
+          }
+        }
+        
+        const_dirs <- c(opt_data$constraint_dirs, rep("<=", length(excluded_combinations)))
+        const_rhs <- c(opt_data$constraint_rhs, rep(opt_data$roster_size - 1, length(excluded_combinations)))
+        
+        # Solve optimization
+        result <- tryCatch({
+          suppressWarnings(
+            lp("max", objective_vector, const_matrix, const_dirs, const_rhs, 
+               all.bin = TRUE, presolve = 0, compute.sens = 0)
+          )
+        }, error = function(e) {
+          cat("LP solver error in sim", sim_id, "iteration", k, ":", e$message, "\n")
+          NULL
+        })
+        
+        if (!is.null(result) && result$status == 0) {
+          selected_indices <- which(result$solution > 0.9)
+          
+          if (length(selected_indices) == opt_data$roster_size) {
+            # Create lineup identifier
+            selected_drivers <- sort(opt_data$driver_ids[selected_indices])
+            lineup_key <- paste(selected_drivers, collapse = "|")
+            
+            # Track this lineup
+            if (lineup_key %in% names(all_lineups)) {
+              all_lineups[[lineup_key]]$sims <- c(all_lineups[[lineup_key]]$sims, sim_id)
+              all_lineups[[lineup_key]]$ranks <- c(all_lineups[[lineup_key]]$ranks, k)
+            } else {
+              all_lineups[[lineup_key]] <- list(
+                drivers = selected_drivers,
+                sims = sim_id,
+                ranks = k,
+                total_salary = sum(opt_data$driver_info[selected_drivers]$Salary),
+                avg_ownership = mean(opt_data$driver_info[selected_drivers]$OP, na.rm = TRUE)
+              )
+            }
+            
+            # Add to exclusions for next iteration
+            excluded_combinations[[length(excluded_combinations) + 1]] <- selected_indices
+          }
+        } else if (!is.null(result)) {
+          cat("LP solver failed with status", result$status, "in sim", sim_id, "iteration", k, "\n")
+        }
       }
     }
     
-    # Clean up chunk variables to free memory
-    rm(chunk_data, chunk_sim_list)
-    
-    # Garbage collection every chunk
-    gc(verbose = FALSE, full = TRUE)
-    
-    # Progress reporting
-    cat(sprintf(
-      "Processed %d/%d simulations (%.1f%%)\n",
-      min(end_idx, n_sims),
-      n_sims,
-      min(end_idx, n_sims) / n_sims * 100
-    ))
+    # Periodic cleanup and progress report
+    if (batch %% 10 == 0) {
+      gc(verbose = FALSE)
+      cat("Completed", batch, "batches, found", length(all_lineups), "unique lineups so far...\n")
+    }
   }
   
-  # Combine and process results more efficiently
-  valid_indices <- which(!sapply(all_lineups, is.null))
-  valid_lineups <- all_lineups[valid_indices]
+  return(all_lineups)
+}
+
+# Convert lineup results to final format with all metrics
+process_lineup_results <- function(all_lineups, opt_data) {
+  if (length(all_lineups) == 0) return(NULL)
   
-  # Free memory
-  rm(all_lineups)
-  gc(verbose = FALSE, full = TRUE)
+  cat("Processing", length(all_lineups), "unique lineups...\n")
   
-  # Return NULL if no valid lineups
-  if (length(valid_lineups) == 0)
-    return(NULL)
+  # Calculate statistics for each lineup
+  lineup_stats <- data.frame(
+    Lineup = names(all_lineups),
+    stringsAsFactors = FALSE
+  )
   
-  combined_lineups <- do.call(rbind, valid_lineups)
+  # Pre-allocate columns
+  for (rank in 1:5) {
+    lineup_stats[[paste0("Rank", rank, "Count")]] <- 0
+  }
   
-  # Free more memory
-  rm(valid_lineups)
-  gc(verbose = FALSE, full = TRUE)
+  # Fill in the rank counts
+  for (i in seq_along(all_lineups)) {
+    lineup_data <- all_lineups[[i]]
+    
+    # Count how many times this lineup appeared at each rank
+    rank_counts <- table(factor(lineup_data$ranks, levels = 1:5))
+    
+    for (rank in 1:5) {
+      lineup_stats[i, paste0("Rank", rank, "Count")] <- as.numeric(rank_counts[rank])
+    }
+  }
   
-  # Return NULL if no valid lineups
-  if (is.null(combined_lineups) ||
-      nrow(combined_lineups) == 0)
-    return(NULL)
+  # Calculate cumulative counts
+  lineup_stats$Top1Count <- lineup_stats$Rank1Count
+  lineup_stats$Top2Count <- lineup_stats$Rank1Count + lineup_stats$Rank2Count
+  lineup_stats$Top3Count <- lineup_stats$Top2Count + lineup_stats$Rank3Count
+  lineup_stats$Top5Count <- rowSums(lineup_stats[, paste0("Rank", 1:5, "Count")])
   
-  # Count lineup appearances by rank
-  lineup_table <- table(combined_lineups$Lineup, combined_lineups$Rank)
+  # Add salary and ownership metrics efficiently
+  cat("Adding salary and ownership metrics...\n")
   
-  # Create result dataframe
-  lineup_data <- data.frame(Lineup = rownames(lineup_table),
-                            stringsAsFactors = FALSE)
+  lineup_stats$TotalSalary <- sapply(seq_along(all_lineups), function(i) {
+    all_lineups[[i]]$total_salary
+  })
   
-  # Add individual rank counts
-  for (i in 1:top_k) {
-    col_name <- paste0("Rank", i, "Count")
-    lineup_data[[col_name]] <- if (as.character(i) %in% colnames(lineup_table)) {
-      lineup_table[, as.character(i)]
+  # Calculate cumulative and geometric ownership
+  lineup_stats$CumulativeOwnership <- sapply(lineup_stats$Lineup, function(lineup_str) {
+    drivers <- strsplit(lineup_str, "\\|")[[1]]
+    
+    # Use match to find drivers in the lookup table
+    driver_indices <- match(drivers, opt_data$driver_info$DriverID)
+    valid_indices <- !is.na(driver_indices)
+    
+    if (any(valid_indices)) {
+      ownerships <- opt_data$driver_info$OP[driver_indices[valid_indices]]
+      
+      # Convert to percentage if needed
+      if (max(ownerships, na.rm = TRUE) <= 1) {
+        ownerships <- ownerships * 100
+      }
+      sum(ownerships, na.rm = TRUE)
     } else {
       0
     }
-  }
-  
-  # Add cumulative counts
-  lineup_data$Top1Count <- lineup_data$Rank1Count
-  lineup_data$Top2Count <- lineup_data$Rank1Count + lineup_data$Rank2Count
-  lineup_data$Top3Count <- lineup_data$Rank1Count + lineup_data$Rank2Count + lineup_data$Rank3Count
-  lineup_data$Top5Count <- rowSums(lineup_data[, paste0("Rank", 1:5, "Count")])
-  
-  # Pre-compute a salary lookup for efficiency with proper fantasy points
-  salary_lookup <- sim_results_dt[, .(
-    DKSalary = first(DKSalary),
-    DKOP = first(DKOP),
-    MedianFantasyPoints = median(DKFantasyPoints, na.rm = TRUE)
-  ), by = DKName]
-  setkey(salary_lookup, DKName)
-  
-  # Calculate total salary more efficiently
-  lineup_data$TotalSalary <- sapply(lineup_data$Lineup, function(lineup_str) {
-    drivers <- strsplit(lineup_str, "\\|")[[1]]
-    salaries <- salary_lookup[drivers, on = "DKName", nomatch = 0]$DKSalary
-    sum(salaries, na.rm = TRUE)
   })
   
-  lineup_data$CumulativeOwnership <- sapply(lineup_data$Lineup, function(lineup_str) {
+  lineup_stats$GeometricMean <- sapply(lineup_stats$Lineup, function(lineup_str) {
     drivers <- strsplit(lineup_str, "\\|")[[1]]
-    ownerships <- salary_lookup[drivers, on = "DKName", nomatch = 0]$DKOP
-    # Convert to percentage if values are between 0-1
-    if (length(ownerships) > 0 &&
-        max(ownerships, na.rm = TRUE) <= 1) {
-      ownerships <- ownerships * 100
-    }
-    sum(ownerships, na.rm = TRUE)
-  })
-  
-  # UPDATED: GeometricMean calculation using ownership instead of fantasy points
-  lineup_data$GeometricMean <- sapply(lineup_data$Lineup, function(lineup_str) {
-    drivers <- strsplit(lineup_str, "\\|")[[1]]
-    ownerships <- salary_lookup[drivers, on = "DKName", nomatch = 0]$DKOP
     
-    # Convert to percentage if values are between 0-1
-    if (length(ownerships) > 0 && max(ownerships, na.rm = TRUE) <= 1) {
-      ownerships <- ownerships * 100
-    }
+    # Use match to find drivers in the lookup table
+    driver_indices <- match(drivers, opt_data$driver_info$DriverID)
+    valid_indices <- !is.na(driver_indices)
     
-    # Check if we have valid ownership data for all drivers
-    if (length(ownerships) == DK_ROSTER_SIZE &&
-        all(!is.na(ownerships)) && all(ownerships > 0)) {
-      # Calculate geometric mean: exp(mean(log(values)))
-      tryCatch({
+    if (sum(valid_indices) == opt_data$roster_size) {
+      ownerships <- opt_data$driver_info$OP[driver_indices[valid_indices]]
+      
+      # Convert to percentage if needed
+      if (max(ownerships, na.rm = TRUE) <= 1) {
+        ownerships <- ownerships * 100
+      }
+      
+      if (all(!is.na(ownerships)) && all(ownerships > 0)) {
         exp(mean(log(ownerships)))
-      }, error = function(e) {
-        # If geometric mean fails, return arithmetic mean as fallback
-        mean(ownerships)
-      })
+      } else {
+        NA_real_
+      }
     } else {
-      # If we don't have complete ownership data, return NA
       NA_real_
     }
   })
   
-  # Sort by Top1Count
-  lineup_data <- lineup_data[order(-lineup_data$Top1Count), ]
+  # Sort by Top1Count descending
+  lineup_stats <- lineup_stats[order(-lineup_stats$Top1Count), ]
   
-  # Split driver columns for display
-  driver_cols <- do.call(rbind, strsplit(lineup_data$Lineup, "\\|"))
+  # Split into driver columns
+  driver_cols <- do.call(rbind, strsplit(lineup_stats$Lineup, "\\|"))
+  colnames(driver_cols) <- paste0("Driver", 1:opt_data$roster_size)
   
-  # Validate column count
-  if (ncol(driver_cols) != DK_ROSTER_SIZE) {
-    warning(paste(
-      "Expected",
-      DK_ROSTER_SIZE,
-      "driver columns, got",
-      ncol(driver_cols)
-    ))
-    return(NULL)
-  }
+  # Combine everything
+  final_result <- cbind(
+    as.data.frame(driver_cols, stringsAsFactors = FALSE),
+    lineup_stats[, !names(lineup_stats) %in% "Lineup"]
+  )
   
-  colnames(driver_cols) <- paste0("Driver", 1:DK_ROSTER_SIZE)
-  
-  # Create final result - directly combining without copying
-  result <- cbind(as.data.frame(driver_cols), lineup_data[, grep("Count$|Salary$|CumulativeOwnership|GeometricMean",
-                                                                 names(lineup_data),
-                                                                 value = TRUE), drop = FALSE])
-  
-  # Clean up to free memory
-  rm(lineup_data,
-     driver_cols,
-     combined_lineups,
-     lineup_table,
-     salary_lookup)
-  gc(verbose = FALSE, full = TRUE)
-  
-  return(result)
+  return(final_result)
 }
 
-# Updated count_fd_optimal_lineups function with ownership-based geometric mean
-count_fd_optimal_lineups <- function(sim_results) {
-  # Always use top_k=5
-  top_k <- 5
+# Main function that replaces your existing slow functions
+count_optimal_lineups_efficient <- function(sim_results, platform = "DK") {
+  cat("Starting efficient optimization for", platform, "- processing ALL simulations...\n")
   
-  # Create data.table for better performance
-  sim_results_dt <- as.data.table(sim_results)
-  
-  sim_results_dt <- sim_results_dt[!is.na(FDSalary) &
-                                     FDSalary > 0 &
-                                     !is.na(FDName) &
-                                     FDName != "" & FDName != "NA"]
-  
-  # Extract only necessary columns to reduce memory usage
-  sim_results_dt <- sim_results_dt[, .(SimID, Name, FDName, FDSalary, FDFantasyPoints, FDOP)]
-  
-  # Split by simulation ID
-  all_sim_ids <- unique(sim_results_dt$SimID)
-  n_sims <- length(all_sim_ids)
-  
-  # Initialize results storage
-  all_lineups <- vector("list", n_sims)
-  
-  # Process in chunks for memory efficiency
-  chunk_size <- 50
-  chunks <- ceiling(n_sims / chunk_size)
-  
-  for (chunk in 1:chunks) {
-    start_idx <- (chunk - 1) * chunk_size + 1
-    end_idx <- min(chunk * chunk_size, n_sims)
-    chunk_sim_ids <- all_sim_ids[start_idx:end_idx]
+  tryCatch({
+    # Step 1: Prepare all optimization data structures
+    cat("Preparing optimization data structures...\n")
+    opt_data <- prepare_optimization_data(sim_results, platform)
     
-    # Process only the current chunk of simulations
-    message(
-      sprintf(
-        "Processing chunk %d/%d (simulations %d to %d)",
-        chunk,
-        chunks,
-        start_idx,
-        end_idx
-      )
-    )
+    # Step 2: Find optimal lineups using vectorized approach
+    cat("Finding optimal lineups across all simulations...\n")
+    all_lineups <- find_optimal_lineups_vectorized(opt_data, batch_size = 50, k_per_sim = 3)
     
-    # Get data for just this chunk of simulations
-    chunk_data <- sim_results_dt[SimID %in% chunk_sim_ids]
-    
-    # Split this chunk by simulation ID
-    chunk_sim_list <- split(chunk_data, by = "SimID")
-    
-    # Process each simulation in this chunk
-    for (i in 1:length(chunk_sim_list)) {
-      sim_idx <- start_idx + i - 1
-      if (sim_idx <= n_sims) {
-        all_lineups[[sim_idx]] <- find_fd_optimal_lineups(chunk_sim_list[[i]], k = top_k)
-      }
+    if (length(all_lineups) == 0) {
+      cat("No optimal lineups found.\n")
+      return(NULL)
     }
     
-    # Clean up chunk variables to free memory
-    rm(chunk_data, chunk_sim_list)
+    # Step 3: Process results into final format
+    cat("Processing results into final format...\n")
+    final_result <- process_lineup_results(all_lineups, opt_data)
     
-    # Garbage collection every chunk
-    gc(verbose = FALSE, full = TRUE)
+    cat("Efficient optimization completed! Found", nrow(final_result), "unique lineups.\n")
+    cat("Each lineup's frequency reflects its true optimality across ALL", length(opt_data$sim_ids), "simulations.\n")
     
-    # Progress reporting
-    cat(sprintf(
-      "Processed %d/%d simulations (%.1f%%)\n",
-      min(end_idx, n_sims),
-      n_sims,
-      min(end_idx, n_sims) / n_sims * 100
-    ))
-  }
-  
-  # Combine and process results more efficiently
-  valid_indices <- which(!sapply(all_lineups, is.null))
-  valid_lineups <- all_lineups[valid_indices]
-  
-  # Free memory
-  rm(all_lineups)
-  gc(verbose = FALSE, full = TRUE)
-  
-  # Return NULL if no valid lineups
-  if (length(valid_lineups) == 0)
-    return(NULL)
-  
-  combined_lineups <- do.call(rbind, valid_lineups)
-  
-  # Free more memory
-  rm(valid_lineups)
-  gc(verbose = FALSE, full = TRUE)
-  
-  # Return NULL if no valid lineups
-  if (is.null(combined_lineups) ||
-      nrow(combined_lineups) == 0)
-    return(NULL)
-  
-  # Count lineup appearances by rank
-  lineup_table <- table(combined_lineups$Lineup, combined_lineups$Rank)
-  
-  # Create result dataframe
-  lineup_data <- data.frame(Lineup = rownames(lineup_table),
-                            stringsAsFactors = FALSE)
-  
-  # Add individual rank counts
-  for (i in 1:top_k) {
-    col_name <- paste0("Rank", i, "Count")
-    lineup_data[[col_name]] <- if (as.character(i) %in% colnames(lineup_table)) {
-      lineup_table[, as.character(i)]
-    } else {
-      0
-    }
-  }
-  
-  # Add cumulative counts
-  lineup_data$Top1Count <- lineup_data$Rank1Count
-  lineup_data$Top2Count <- lineup_data$Rank1Count + lineup_data$Rank2Count
-  lineup_data$Top3Count <- lineup_data$Rank1Count + lineup_data$Rank2Count + lineup_data$Rank3Count
-  lineup_data$Top5Count <- rowSums(lineup_data[, paste0("Rank", 1:5, "Count")])
-  
-  # Pre-compute a salary lookup for efficiency with proper fantasy points
-  salary_lookup <- sim_results_dt[, .(
-    FDSalary = first(FDSalary),
-    FDOP = first(FDOP),
-    MedianFantasyPoints = median(FDFantasyPoints, na.rm = TRUE)
-  ), by = FDName]
-  setkey(salary_lookup, FDName)
-  
-  # Calculate total salary more efficiently
-  lineup_data$TotalSalary <- sapply(lineup_data$Lineup, function(lineup_str) {
-    drivers <- strsplit(lineup_str, "\\|")[[1]]
-    salaries <- salary_lookup[drivers, on = "FDName", nomatch = 0]$FDSalary
-    sum(salaries, na.rm = TRUE)
+    return(final_result)
+    
+  }, error = function(e) {
+    cat("Error in efficient optimization:", e$message, "\n")
+    cat("Simulation data columns:", paste(names(sim_results), collapse = ", "), "\n")
+    stop(e)
   })
-  
-  # Calculate cumulative ownership
-  lineup_data$CumulativeOwnership <- sapply(lineup_data$Lineup, function(lineup_str) {
-    drivers <- strsplit(lineup_str, "\\|")[[1]]
-    ownerships <- salary_lookup[drivers, on = "FDName", nomatch = 0]$FDOP
-    # Convert to percentage if values are between 0-1
-    if (length(ownerships) > 0 &&
-        max(ownerships, na.rm = TRUE) <= 1) {
-      ownerships <- ownerships * 100
-    }
-    sum(ownerships, na.rm = TRUE)
-  })
-  
-  # UPDATED: Calculate geometric mean using ownership instead of fantasy points
-  lineup_data$GeometricMean <- sapply(lineup_data$Lineup, function(lineup_str) {
-    drivers <- strsplit(lineup_str, "\\|")[[1]]
-    ownerships <- salary_lookup[drivers, on = "FDName", nomatch = 0]$FDOP
-    
-    # Convert to percentage if values are between 0-1
-    if (length(ownerships) > 0 && max(ownerships, na.rm = TRUE) <= 1) {
-      ownerships <- ownerships * 100
-    }
-    
-    # Check if we have valid ownership data for all drivers
-    if (length(ownerships) == FD_ROSTER_SIZE &&
-        all(!is.na(ownerships)) && all(ownerships > 0)) {
-      # Calculate geometric mean: exp(mean(log(values)))
-      tryCatch({
-        exp(mean(log(ownerships)))
-      }, error = function(e) {
-        # If geometric mean fails, return arithmetic mean as fallback
-        mean(ownerships)
-      })
-    } else {
-      # If we don't have complete ownership data, return NA
-      NA_real_
-    }
-  })
-  
-  # Sort by Top1Count
-  lineup_data <- lineup_data[order(-lineup_data$Top1Count), ]
-  
-  # Split driver columns for display
-  driver_cols <- do.call(rbind, strsplit(lineup_data$Lineup, "\\|"))
-  
-  # Validate column count
-  if (ncol(driver_cols) != FD_ROSTER_SIZE) {
-    warning(paste(
-      "Expected",
-      FD_ROSTER_SIZE,
-      "driver columns, got",
-      ncol(driver_cols)
-    ))
-    return(NULL)
-  }
-  
-  colnames(driver_cols) <- paste0("Driver", 1:FD_ROSTER_SIZE)
-  
-  # Create final result - directly combining without copying
-  result <- cbind(as.data.frame(driver_cols), lineup_data[, grep("Count$|Salary$|CumulativeOwnership|GeometricMean",
-                                                                 names(lineup_data),
-                                                                 value = TRUE), drop = FALSE])
-  
-  # Clean up to free memory
-  rm(lineup_data,
-     driver_cols,
-     combined_lineups,
-     lineup_table,
-     salary_lookup)
-  gc(verbose = FALSE, full = TRUE)
-  
-  return(result)
 }
+
 
 calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -3581,10 +3317,18 @@ server <- function(input, output, session) {
     file_uploaded = FALSE,
     simulation_complete = FALSE,
     field_lineups = NULL,
-    dk_cash_results = NULL
+    dk_cash_results = NULL,
+    dk_optimal_lineups_display = NULL,
+    dk_optimal_lineups_full = NULL,
+    fd_optimal_lineups_display = NULL,
+    fd_optimal_lineups_full = NULL,
+    updating_sliders = FALSE 
   )
   
-  dk_current_filters <- reactive({
+  # Configure memory settings when server starts
+  configure_memory_settings()
+  
+  dk_filters <- reactive({
     list(
       min_top1_count = input$dk_min_top1_count,
       min_top2_count = input$dk_min_top2_count,
@@ -3598,8 +3342,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # 2. ADD: Reactive expression to monitor FanDuel filter changes
-  fd_current_filters <- reactive({
+  fd_filters <- reactive({
     list(
       min_top1_count = input$fd_min_top1_count,
       min_top2_count = input$fd_min_top2_count,
@@ -3613,6 +3356,89 @@ server <- function(input, output, session) {
     )
   })
   
+  # Periodic memory cleanup (every 5 minutes)
+  observe({
+    invalidateLater(300000, session)  # 5 minutes
+    
+    # Only clean up if we have significant data
+    if (!is.null(rv$simulation_results)) {
+      cleanup_memory(verbose = FALSE)
+    }
+  })
+  
+  
+  
+  observeEvent({
+    list(
+      input$dk_min_top1_count,
+      input$dk_min_top2_count, 
+      input$dk_min_top3_count,
+      input$dk_min_top5_count,
+      input$dk_ownership_range,
+      input$dk_geometric_range,
+      input$dk_excluded_drivers
+    )
+  }, {
+    # Only update if we're not in the middle of a programmatic slider update
+    # and we have the necessary data
+    if (!rv$updating_sliders && 
+        !is.null(rv$dk_optimal_lineups) && 
+        !is.null(rv$dk_driver_exposure)) {
+      
+      # Get existing driver mapping from the current exposure data
+      existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
+      
+      # Calculate updated driver exposure with new filters
+      rv$dk_driver_exposure <- calculate_dk_driver_exposure(
+        rv$dk_optimal_lineups,
+        existing_mapping,
+        rv$dk_random_lineups,
+        dk_filters()
+      )
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+  
+  # FanDuel filter observer - with protection against circular updates
+  observeEvent({
+    list(
+      input$fd_min_top1_count,
+      input$fd_min_top2_count,
+      input$fd_min_top3_count, 
+      input$fd_min_top5_count,
+      input$fd_ownership_range,
+      input$fd_geometric_range,
+      input$fd_excluded_drivers
+    )
+  }, {
+    # Only update if we're not in the middle of a programmatic slider update
+    # and we have the necessary data
+    if (!rv$updating_sliders && 
+        !is.null(rv$fd_optimal_lineups) && 
+        !is.null(rv$fd_driver_exposure)) {
+      
+      # Get existing driver mapping from the current exposure data
+      existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
+      
+      # Calculate updated driver exposure with new filters
+      rv$fd_driver_exposure <- calculate_fd_driver_exposure(
+        rv$fd_optimal_lineups,
+        existing_mapping,
+        rv$fd_random_lineups,
+        fd_filters()
+      )
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+  
+  # Cleanup when simulation data changes
+  observeEvent(rv$simulation_results, {
+    # Clean up previous analysis results when new simulation starts
+    if (!is.null(rv$simulation_results)) {
+      # Remove any large intermediate objects that might be hanging around
+      cleanup_memory(verbose = FALSE)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+
   output$has_draftkings <- reactive({
     # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
     result <- tolower(as.character(rv$has_draftkings))
@@ -3788,7 +3614,6 @@ server <- function(input, output, session) {
     })
   })
   
-  # Run simulation button handler
   observeEvent(input$run_sim, {
     req(rv$processed_data)
     
@@ -3815,19 +3640,18 @@ server <- function(input, output, session) {
       # Run the simulations
       setProgress(0.1, detail = "Initializing simulation...")
       
-      simulation_results <- run_integrated_simulations(rv$processed_data,
-                                                       n_sims = input$n_sims,
-                                                       batch_size = 100)
+      simulation_results <- run_efficient_simulation(rv$processed_data, n_sims = input$n_sims)
       
-      # Store results
+      # Store results - KEEP SimID! (Don't remove it here)
       rv$simulation_results <- simulation_results$results
       
-      # Remove dominator rank columns to save memory
-      if ("DKDominatorRank" %in% names(rv$simulation_results)) {
-        rv$simulation_results$DKDominatorRank <- NULL
-      }
-      if ("FDDominatorRank" %in% names(rv$simulation_results)) {
-        rv$simulation_results$FDDominatorRank <- NULL
+      # DON'T remove SimID here - we need it for optimal lineups!
+      # Only remove truly temporary analysis columns if they exist
+      temp_columns_to_remove <- c("DKDominatorRank", "FDDominatorRank")
+      for (col in temp_columns_to_remove) {
+        if (col %in% names(rv$simulation_results)) {
+          rv$simulation_results[[col]] <- NULL
+        }
       }
       
       # Update platform availability
@@ -3865,6 +3689,9 @@ server <- function(input, output, session) {
       # Mark simulation as complete
       rv$simulation_complete <- TRUE
       
+      cat("Simulation completed successfully with", nrow(rv$simulation_results), "total results\n")
+      # REMOVED: cat("SimID column preserved for optimal lineup calculation\n")
+      
       # Switch to finish analysis tab
       updateTabItems(session, "sidebar_menu", selected = "upload")
       
@@ -3881,7 +3708,6 @@ server <- function(input, output, session) {
       gc(verbose = FALSE, full = TRUE)
     })
   })
-  
   
   
   output$upload_content <- renderUI({
@@ -4994,8 +4820,8 @@ server <- function(input, output, session) {
       
       # Calculate optimal lineups
       setProgress(0.2, detail = "Finding optimal lineups...")
-      rv$dk_optimal_lineups <- tryCatch({
-        count_dk_optimal_lineups(rv$simulation_results)
+      dk_lineups_result <- tryCatch({
+        count_optimal_lineups_efficient(rv$simulation_results, "DK")
       }, error = function(e) {
         message("Error finding optimal lineups: ", e$message)
         removeModal()
@@ -5006,6 +4832,19 @@ server <- function(input, output, session) {
         ))
         NULL
       })
+      
+      if (!is.null(dk_lineups_result)) {
+        # Create display and full datasets
+        display_data <- create_lineup_display_data(dk_lineups_result, max_display = 100)
+        rv$dk_optimal_lineups_display <- display_data$display
+        rv$dk_optimal_lineups_full <- display_data$full
+        # Keep the old variable for backward compatibility with other functions
+        rv$dk_optimal_lineups <- display_data$full
+      } else {
+        rv$dk_optimal_lineups_display <- NULL
+        rv$dk_optimal_lineups_full <- NULL
+        rv$dk_optimal_lineups <- NULL
+      }
       
       gc(verbose = FALSE, full = TRUE)
       
@@ -5117,25 +4956,29 @@ server <- function(input, output, session) {
   })
   
   
-  # Calculate FanDuel optimal lineup
   observeEvent(input$run_fd_optimization, {
     req(rv$simulation_results, rv$has_fanduel)
     
     # Clear previous analysis results but keep simulation data
     rv$fd_optimal_lineups <- NULL
+    rv$fd_optimal_lineups_display <- NULL
+    rv$fd_optimal_lineups_full <- NULL
     rv$fd_driver_exposure <- NULL
     rv$fd_random_lineups <- NULL
     
     # Also clear DraftKings lineups if they exist
     rv$dk_optimal_lineups <- NULL
+    rv$dk_optimal_lineups_display <- NULL
+    rv$dk_optimal_lineups_full <- NULL
     rv$dk_driver_exposure <- NULL
     rv$dk_random_lineups <- NULL
     
-    gc(verbose = FALSE, full = TRUE)
+    # Force garbage collection before starting
+    cleanup_memory()
     
     # Show progress dialog
     withProgress(message = 'Calculating FanDuel optimal lineups...', value = 0, {
-      # Show a specific modal
+      # Show modal to user
       showModal(
         modalDialog(
           title = "Processing FanDuel Optimal Lineups",
@@ -5147,29 +4990,43 @@ server <- function(input, output, session) {
       
       # Calculate optimal lineups
       setProgress(0.2, detail = "Finding optimal lineups...")
-      rv$fd_optimal_lineups <- tryCatch({
-        count_fd_optimal_lineups(rv$simulation_results)
+      fd_lineups_result <- tryCatch({
+        count_optimal_lineups_efficient(rv$simulation_results, "FD")
       }, error = function(e) {
-        message("Error finding optimal lineups: ", e$message)
         removeModal()
         showModal(modalDialog(
           title = "Error Finding Optimal Lineups",
-          paste("There was an error:", e$message),
+          paste("There was an error calculating FanDuel lineups:", e$message),
           easyClose = TRUE
         ))
-        NULL
+        return(NULL)
       })
       
-      gc(verbose = FALSE, full = TRUE)
+      # Process results if successful
+      if (!is.null(fd_lineups_result)) {
+        setProgress(0.6, detail = "Processing lineup data...")
+        
+        # Create display and full datasets for performance
+        display_data <- create_lineup_display_data(fd_lineups_result, max_display = 100)
+        rv$fd_optimal_lineups_display <- display_data$display
+        rv$fd_optimal_lineups_full <- display_data$full
+        
+        # Keep the old variable for backward compatibility with other functions
+        rv$fd_optimal_lineups <- display_data$full
+        
+        # Force cleanup after processing large datasets
+        cleanup_memory()
+      }
       
-      # Create a driver mapping from the simulation results
+      # Create driver mapping from simulation results
       setProgress(0.7, detail = "Creating driver mapping...")
       driver_mapping <- NULL
+      
       if (!is.null(rv$fd_optimal_lineups)) {
         # Get all unique drivers from optimal lineups
         driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
         
-        # Use a generic approach that works with both data.frame and data.table
+        # Extract all drivers from lineups
         lineup_drivers <- c()
         for (col in driver_cols) {
           if (col %in% names(rv$fd_optimal_lineups)) {
@@ -5178,24 +5035,26 @@ server <- function(input, output, session) {
         }
         lineup_drivers <- unique(lineup_drivers)
         
+        # Create mapping dataframe
         driver_mapping <- data.frame(
           FDName = lineup_drivers,
-          # Using FDName as primary key
           Name = NA_character_,
           FDSalary = NA_real_,
           FDOP = NA_real_,
           Starting = NA_real_,
-          Proj = NA_real_
+          Proj = NA_real_,
+          stringsAsFactors = FALSE
         )
         
         # Get mapping from simulation results
-        unique_sim_drivers <- rv$simulation_results[!duplicated(rv$simulation_results$FDName), c("FDName", "Name", "FDSalary", "FDOP", "Starting")]
+        unique_sim_drivers <- rv$simulation_results[!duplicated(rv$simulation_results$FDName), 
+                                                    c("FDName", "Name", "FDSalary", "FDOP", "Starting")]
         
         # Match each driver from lineups to the simulation results
         for (i in 1:nrow(driver_mapping)) {
           fd_name <- driver_mapping$FDName[i]
-          # Try to find this driver in the simulation results
           matches <- which(unique_sim_drivers$FDName == fd_name)
+          
           if (length(matches) > 0) {
             match_idx <- matches[1]
             driver_mapping$Name[i] <- unique_sim_drivers$Name[match_idx]
@@ -5203,7 +5062,7 @@ server <- function(input, output, session) {
             driver_mapping$FDOP[i] <- unique_sim_drivers$FDOP[match_idx]
             driver_mapping$Starting[i] <- unique_sim_drivers$Starting[match_idx]
             
-            # Get projection from fantasy analysis
+            # Get projection from fantasy analysis if available
             if (!is.null(rv$fd_fantasy_analysis)) {
               name_match <- which(rv$fd_fantasy_analysis$Name == unique_sim_drivers$Name[match_idx])
               if (length(name_match) > 0) {
@@ -5217,10 +5076,10 @@ server <- function(input, output, session) {
       # Calculate initial driver exposure with the mapping
       setProgress(0.8, detail = "Calculating driver exposure...")
       if (!is.null(rv$fd_optimal_lineups)) {
-        if (!is.null(driver_mapping) && nrow(driver_mapping) > 0) {
-          rv$fd_driver_exposure <- calculate_fd_driver_exposure(rv$fd_optimal_lineups, driver_mapping)
+        rv$fd_driver_exposure <- if (!is.null(driver_mapping) && nrow(driver_mapping) > 0) {
+          calculate_fd_driver_exposure(rv$fd_optimal_lineups, driver_mapping)
         } else {
-          rv$fd_driver_exposure <- calculate_fd_driver_exposure(rv$fd_optimal_lineups, rv$fd_fantasy_analysis)
+          calculate_fd_driver_exposure(rv$fd_optimal_lineups, rv$fd_fantasy_analysis)
         }
       }
       
@@ -5230,28 +5089,18 @@ server <- function(input, output, session) {
     
     # Update UI elements if optimization was successful
     if (!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
-      # Get all drivers from the driver exposure data
+      # Update excluded drivers dropdown
       driver_data <- rv$fd_driver_exposure
-      
-      # Create basic named vector for choices
       driver_names <- driver_data$Name
       driver_ids <- driver_data$FDName
-      
-      # Create simple labels with name and optimal rate
-      driver_labels <- paste0(driver_names,
-                              " (",
-                              round(driver_data$OptimalRate, 1),
-                              "%)")
-      
-      # Create choices with names
+      driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
       driver_choices <- setNames(driver_ids, driver_labels)
       
-      # Update the select input with choices
       updateSelectizeInput(
         session = session,
         inputId = "fd_excluded_drivers",
         choices = driver_choices,
-        selected = character(0)  # Empty selection initially
+        selected = character(0)
       )
       
       # Update ownership slider based on actual data
@@ -5263,7 +5112,6 @@ server <- function(input, output, session) {
           min_own <- floor(min(ownership_values))
           max_own <- ceiling(max(ownership_values))
           
-          # Update the slider with actual data range
           updateSliderInput(
             session,
             "fd_ownership_range",
@@ -5283,7 +5131,6 @@ server <- function(input, output, session) {
           min_geo <- floor(min(geometric_values))
           max_geo <- ceiling(max(geometric_values))
           
-          # Update the slider with actual data range
           updateSliderInput(
             session,
             "fd_geometric_range",
@@ -5300,27 +5147,34 @@ server <- function(input, output, session) {
         HTML(
           sprintf(
             "Successfully generated <b>%d</b> optimal lineups for FanDuel!<br><br>
+          <strong>Display:</strong> Showing top 100 lineups in table for performance<br>
+          <strong>Download:</strong> All lineups available via download button<br><br>
           You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.",
             nrow(rv$fd_optimal_lineups)
           )
         ), 
         easyClose = TRUE
       ))
+      
     } else {
       # Show error message if optimization failed
       showModal(modalDialog(
         title = "Error",
-        "Failed to generate optimal lineups. Please check your data and try again.",
+        "Failed to generate FanDuel optimal lineups. Please check your data and simulation results, then try again.",
         easyClose = TRUE
       ))
     }
+    
+    # Final cleanup
+    cleanup_memory()
   })
+
   
   output$dk_optimal_lineups_table <- renderDT({
-    req(rv$dk_optimal_lineups)
+    req(rv$dk_optimal_lineups_display)
     
     # Clone lineups for display
-    display_data <- as.data.table(rv$dk_optimal_lineups)
+    display_data <- as.data.table(rv$dk_optimal_lineups_display)
     
     # Format driver columns to show names
     if (!is.null(rv$dk_fantasy_analysis)) {
@@ -5428,10 +5282,10 @@ server <- function(input, output, session) {
   
   
   output$fd_optimal_lineups_table <- renderDT({
-    req(rv$fd_optimal_lineups)
+    req(rv$fd_optimal_lineups_display)  
     
     # Clone lineups for display
-    display_data <- as.data.table(rv$fd_optimal_lineups)
+    display_data <- as.data.table(rv$fd_optimal_lineups_display) 
     
     # Format driver columns to show names
     if (!is.null(rv$fd_fantasy_analysis)) {
@@ -5632,56 +5486,50 @@ server <- function(input, output, session) {
   
   output$download_dk_optimal_lineups <- downloadHandler(
     filename = function() {
-      paste("dk_optimal_lineups_",
-            format(Sys.time(), "%Y%m%d_%H%M%S"),
-            ".csv",
-            sep = "")
+      paste("dk_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
     },
     content = function(file) {
       # Format data for download (convert to data.frame first to avoid data.table issues)
-      download_data <- as.data.frame(rv$dk_optimal_lineups)
+      download_data <- as.data.frame(rv$dk_optimal_lineups_full)  # CHANGED
       
       # Keep only driver columns, TopX Count columns, and TotalSalary
       cols_to_keep <- c(
         paste0("Driver", 1:DK_ROSTER_SIZE),
         grep("^Top[0-9]+Count$", names(download_data), value = TRUE),
-        "TotalSalary",
-        "CumulativeOwnership",
-        "GeometricMean"
+        "TotalSalary", "CumulativeOwnership", "GeometricMean"
       )
       cols_to_keep <- intersect(cols_to_keep, names(download_data))
       download_data <- download_data[, cols_to_keep, drop = FALSE]
       
       write.csv(download_data, file, row.names = FALSE)
     },
-    contentType = "text/csv"  # Explicitly set MIME type for CSV
+    contentType = "text/csv"
   )
+  
+  
+  
   output$download_fd_optimal_lineups <- downloadHandler(
     filename = function() {
-      paste("fd_optimal_lineups_",
-            format(Sys.time(), "%Y%m%d_%H%M%S"),
-            ".csv",
-            sep = "")
+      paste("fd_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
     },
     content = function(file) {
       # Format data for download (convert to data.frame first to avoid data.table issues)
-      download_data <- as.data.frame(rv$fd_optimal_lineups)
+      download_data <- as.data.frame(rv$fd_optimal_lineups_full)  # CHANGED
       
       # Keep only driver columns, TopX Count columns, TotalSalary, CumulativeOwnership, and GeometricMean
       cols_to_keep <- c(
         paste0("Driver", 1:FD_ROSTER_SIZE),
         grep("^Top[0-9]+Count$", names(download_data), value = TRUE),
-        "TotalSalary",
-        "CumulativeOwnership",
-        "GeometricMean"
+        "TotalSalary", "CumulativeOwnership", "GeometricMean"
       )
       cols_to_keep <- intersect(cols_to_keep, names(download_data))
       download_data <- download_data[, cols_to_keep, drop = FALSE]
       
       write.csv(download_data, file, row.names = FALSE)
     },
-    contentType = "text/csv"  # Explicitly set MIME type for CSV
+    contentType = "text/csv"
   )
+  
   
   # Memory cleanup functions
   observe({
@@ -5691,6 +5539,7 @@ server <- function(input, output, session) {
   
   # Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
+    rv$updating_sliders <- FALSE
     req(rv$dk_optimal_lineups)
     
     # Create filters for lineup generation
@@ -5835,8 +5684,18 @@ server <- function(input, output, session) {
   })
   
   observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups)) {
-      # Update ownership slider based on actual data
+    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+      
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
+      
+      # Update Top Count inputs to default to 0 (no minimum requirement)
+      updateNumericInput(session, "dk_min_top1_count", value = 0)
+      updateNumericInput(session, "dk_min_top2_count", value = 0)
+      updateNumericInput(session, "dk_min_top3_count", value = 0)
+      updateNumericInput(session, "dk_min_top5_count", value = 0)
+      
+      # Update ownership slider based on actual data range
       if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
         ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
         ownership_values <- ownership_values[!is.na(ownership_values)]
@@ -5848,14 +5707,15 @@ server <- function(input, output, session) {
           updateSliderInput(
             session,
             "dk_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
+            min = min_own,           # Set min limit to actual minimum
+            max = max_own,           # Set max limit to actual maximum  
+            value = c(min_own, max_own),  # Set initial values to full range
+            step = 1
           )
         }
       }
       
-      # Update geometric mean slider based on actual data
+      # Update geometric mean slider based on actual data range
       if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
         geometric_values <- rv$dk_optimal_lineups$GeometricMean
         geometric_values <- geometric_values[!is.na(geometric_values)]
@@ -5867,56 +5727,78 @@ server <- function(input, output, session) {
           updateSliderInput(
             session,
             "dk_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
+            min = min_geo,           # Set min limit to actual minimum
+            max = max_geo,           # Set max limit to actual maximum
+            value = c(min_geo, max_geo),  # Set initial values to full range
+            step = 0.1
           )
         }
       }
+      
+      # Reset flag after a brief delay
+      invalidateLater(500, session)
+      rv$updating_sliders <- FALSE
     }
-  })
+  }, once = TRUE)
   
+  # Also update the FanDuel initialization similarly:
   observeEvent(rv$fd_optimal_lineups, {
-  if (!is.null(rv$fd_optimal_lineups)) {
-    # Update ownership slider based on actual data
-    if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-      ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-      ownership_values <- ownership_values[!is.na(ownership_values)]
+    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
       
-      if (length(ownership_values) > 0) {
-        min_own <- floor(min(ownership_values))
-        max_own <- ceiling(max(ownership_values))
-        
-        updateSliderInput(
-          session,
-          "fd_ownership_range",
-          min = min_own,
-          max = max_own,
-          value = c(min_own, max_own)
-        )
-      }
-    }
-    
-    # Update geometric mean slider based on actual data
-    if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-      geometric_values <- rv$fd_optimal_lineups$GeometricMean
-      geometric_values <- geometric_values[!is.na(geometric_values)]
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
       
-      if (length(geometric_values) > 0) {
-        min_geo <- floor(min(geometric_values))
-        max_geo <- ceiling(max(geometric_values))
+      # Update Top Count inputs to default to 0 (no minimum requirement)
+      updateNumericInput(session, "fd_min_top1_count", value = 0)
+      updateNumericInput(session, "fd_min_top2_count", value = 0)
+      updateNumericInput(session, "fd_min_top3_count", value = 0)
+      updateNumericInput(session, "fd_min_top5_count", value = 0)
+      
+      # Update ownership slider based on actual data range
+      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+        ownership_values <- ownership_values[!is.na(ownership_values)]
         
-        updateSliderInput(
-          session,
-          "fd_geometric_range",
-          min = min_geo,
-          max = max_geo,
-          value = c(min_geo, max_geo)
-        )
+        if (length(ownership_values) > 0) {
+          min_own <- floor(min(ownership_values))
+          max_own <- ceiling(max(ownership_values))
+          
+          updateSliderInput(
+            session,
+            "fd_ownership_range",
+            min = min_own,
+            max = max_own,
+            value = c(min_own, max_own),
+            step = 1
+          )
+        }
       }
+      
+      # Update geometric mean slider based on actual data range
+      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+        geometric_values <- rv$fd_optimal_lineups$GeometricMean
+        geometric_values <- geometric_values[!is.na(geometric_values)]
+        
+        if (length(geometric_values) > 0) {
+          min_geo <- floor(min(geometric_values))
+          max_geo <- ceiling(max(geometric_values))
+          
+          updateSliderInput(
+            session,
+            "fd_geometric_range",
+            min = min_geo,
+            max = max_geo,
+            value = c(min_geo, max_geo),
+            step = 0.1
+          )
+        }
+      }
+      
+      # Reset flag after a brief delay
+      invalidateLater(500, session)
+      rv$updating_sliders <- FALSE
     }
-  }
-})
+  }, once = TRUE)
   
   
   # Update driver dropdowns when visiting lineup builder tab (but NOT sliders)
@@ -5962,129 +5844,110 @@ server <- function(input, output, session) {
     }
   })
   
-  observe({
-    if(input$sidebar_menu == "lineup_builder") {
-      # Add a small delay to ensure UI is rendered
+  observeEvent(rv$dk_optimal_lineups, {
+    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+      
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
+      
+      # Update ownership slider based on actual data
+      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
+        ownership_values <- ownership_values[!is.na(ownership_values)]
+        
+        if (length(ownership_values) > 0) {
+          min_own <- floor(min(ownership_values))
+          max_own <- ceiling(max(ownership_values))
+          
+          updateSliderInput(
+            session,
+            "dk_ownership_range",
+            min = min_own,
+            max = max_own,
+            value = c(min_own, max_own)
+          )
+        }
+      }
+      
+      # Update geometric mean slider based on actual data
+      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+        geometric_values <- rv$dk_optimal_lineups$GeometricMean
+        geometric_values <- geometric_values[!is.na(geometric_values)]
+        
+        if (length(geometric_values) > 0) {
+          min_geo <- floor(min(geometric_values))
+          max_geo <- ceiling(max(geometric_values))
+          
+          updateSliderInput(
+            session,
+            "dk_geometric_range",
+            min = min_geo,
+            max = max_geo,
+            value = c(min_geo, max_geo)
+          )
+        }
+      }
+      
+      # Reset flag after a brief delay
       invalidateLater(500, session)
+      rv$updating_sliders <- FALSE
+    }
+  }, once = TRUE)  # Only run once when data first becomes available
+  
+  # FanDuel slider initialization - only when data first becomes available  
+  observeEvent(rv$fd_optimal_lineups, {
+    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
       
-      # Update DraftKings sliders if data exists
-      if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-        # Update ownership slider
-        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(
-              session,
-              "dk_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own)
-            )
-          }
-        }
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
+      
+      # Update ownership slider based on actual data
+      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+        ownership_values <- ownership_values[!is.na(ownership_values)]
         
-        # Update geometric mean slider
-        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
+        if (length(ownership_values) > 0) {
+          min_own <- floor(min(ownership_values))
+          max_own <- ceiling(max(ownership_values))
           
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(
-              session,
-              "dk_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo)
-            )
-          }
+          updateSliderInput(
+            session,
+            "fd_ownership_range",
+            min = min_own,
+            max = max_own,
+            value = c(min_own, max_own)
+          )
         }
       }
       
-      # Update FanDuel sliders if data exists
-      if(!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
-        # Update ownership slider
-        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            updateSliderInput(
-              session,
-              "fd_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own)
-            )
-          }
-        }
+      # Update geometric mean slider based on actual data
+      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+        geometric_values <- rv$fd_optimal_lineups$GeometricMean
+        geometric_values <- geometric_values[!is.na(geometric_values)]
         
-        # Update geometric mean slider
-        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          geometric_values <- rv$fd_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
+        if (length(geometric_values) > 0) {
+          min_geo <- floor(min(geometric_values))
+          max_geo <- ceiling(max(geometric_values))
           
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            updateSliderInput(
-              session,
-              "fd_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo)
-            )
-          }
+          updateSliderInput(
+            session,
+            "fd_geometric_range",
+            min = min_geo,
+            max = max_geo,
+            value = c(min_geo, max_geo)
+          )
         }
       }
-    }
-  })
-  
-  # Fixed filter change observers with debouncing
-  observeEvent(dk_current_filters(), {
-    if (!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
-      # Get existing driver mapping from the current exposure data
-      existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters
-      rv$dk_driver_exposure <- calculate_dk_driver_exposure(
-        rv$dk_optimal_lineups,
-        existing_mapping,
-        rv$dk_random_lineups,
-        dk_current_filters()
-      )
+      # Reset flag after a brief delay
+      invalidateLater(500, session)
+      rv$updating_sliders <- FALSE
     }
-  }, ignoreNULL = FALSE, ignoreInit = TRUE)
-  
-  observeEvent(fd_current_filters(), {
-    if (!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
-      # Get existing driver mapping from the current exposure data
-      existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
-      
-      # Calculate updated driver exposure with new filters
-      rv$fd_driver_exposure <- calculate_fd_driver_exposure(
-        rv$fd_optimal_lineups,
-        existing_mapping,
-        rv$fd_random_lineups,
-        fd_current_filters()  # Add this parameter!
-      )
-    }
-  }, ignoreNULL = FALSE, ignoreInit = TRUE)
-
+  }, once = TRUE)
   
   # Generate random FanDuel lineups
   observeEvent(input$generate_fd_lineups, {
+    rv$updating_sliders <- FALSE
     req(rv$fd_optimal_lineups)
     
     # Create filters for lineup generation
