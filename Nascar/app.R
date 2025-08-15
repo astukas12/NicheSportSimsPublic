@@ -5319,15 +5319,26 @@ server <- function(input, output, session) {
   output$dk_optimal_lineups_table <- renderDT({
     req(rv$dk_optimal_lineups)
     
-    # Clone lineups for display
+    # Clone lineups for display - ONLY TOP 100
     display_data <- as.data.table(rv$dk_optimal_lineups)
+    
+    # Sort first to get top 100
+    if ("Top1Count" %in% names(display_data) &&
+        "Top5Count" %in% names(display_data)) {
+      setorder(display_data, -Top1Count, -Top5Count)
+    } else if ("Top1Count" %in% names(display_data)) {
+      setorder(display_data, -Top1Count)
+    }
+    
+    # Take only top 100 for display
+    display_data <- display_data[1:min(100, nrow(display_data))]
     
     # Format driver columns to show names
     if (!is.null(rv$dk_fantasy_analysis)) {
       for (i in 1:DK_ROSTER_SIZE) {
         col <- paste0("Driver", i)
         display_data[[col]] <- sapply(display_data[[col]], function(id) {
-          match_idx <- which(rv$dk_fantasy_analysis$DKID == id)
+          match_idx <- which(rv$dk_fantasy_analysis$DKName == id)
           if (length(match_idx) > 0) {
             rv$dk_fantasy_analysis$Name[match_idx[1]]
           } else {
@@ -5350,28 +5361,18 @@ server <- function(input, output, session) {
     # Use the correct data.table syntax with ..cols_to_keep
     display_data <- display_data[, ..cols_to_keep]
     
-    # Sort the data by Top1Count, then Top5Count (both descending)
-    if ("Top1Count" %in% names(display_data) &&
-        "Top5Count" %in% names(display_data)) {
-      setorder(display_data, -Top1Count, -Top5Count)
-    } else if ("Top1Count" %in% names(display_data)) {
-      setorder(display_data, -Top1Count)
-    }
-    
     # Find TopXCount column indices for ordering
     top1_idx <- which(names(display_data) == "Top1Count") - 1  # 0-based index for JS
     top5_idx <- which(names(display_data) == "Top5Count") - 1   # 0-based index for JS
     
-    # Create the datatable with pagination but no length control
+    # Create the datatable with pagination
     dt <- datatable(
       display_data,
       options = list(
         pageLength = 25,
         scrollX = TRUE,
         rownames = FALSE,
-        # No row numbers
-        dom = "ftp",
-        # Only show table and pagination
+        dom = "ftp",  # Show filter, table, and pagination
         ordering = TRUE,
         order = if (length(top1_idx) > 0 && length(top5_idx) > 0) {
           list(list(top1_idx, 'desc'), list(top5_idx, 'desc'))
@@ -5383,7 +5384,11 @@ server <- function(input, output, session) {
         ))
       ),
       class = 'cell-border stripe compact',
-      rownames = FALSE      # Explicitly set rownames to FALSE again at the table level
+      rownames = FALSE,
+      caption = htmltools::tags$caption(
+        style = "caption-side: top; text-align: center; color: #ff6600; font-weight: bold;",
+        "Showing Top 100 Lineups (Full data available in downloads and lineup builder)"
+      )
     )
     
     # Apply formatting to TotalSalary column
