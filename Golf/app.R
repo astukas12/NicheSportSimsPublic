@@ -2909,88 +2909,7 @@ server <- function(input, output, session) {
     dt
   })
   
-  # 2. DOWNLOAD HANDLERS (add these at the end of your server function):
-  
-  output$download_dk_optimal_lineups <- downloadHandler(
-    filename = function() {
-      paste("dk_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
-    },
-    content = function(file) {
-      if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
-        empty_data <- data.frame(
-          Player1 = character(0), Player2 = character(0), Player3 = character(0),
-          Player4 = character(0), Player5 = character(0), Player6 = character(0),
-          Top1Count = integer(0), Top2Count = integer(0), Top3Count = integer(0), 
-          Top5Count = integer(0), TotalSalary = integer(0),
-          CumulativeOwnership = numeric(0), GeometricMeanOwnership = numeric(0)
-        )
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
-      
-      # Include ownership columns in download
-      download_data <- as.data.frame(rv$dk_optimal_lineups)
-      keep_cols <- c(paste0("Player", 1:DK_ROSTER_SIZE), 
-                     "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-                     "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
-      keep_cols <- intersect(keep_cols, names(download_data))
-      download_data <- download_data[, keep_cols, drop = FALSE]
-      
-      write.csv(download_data, file, row.names = FALSE)
-    },
-    contentType = "text/csv"
-  )
-  
-  # Replace your download_fd_optimal_lineups handler with this:
-  output$download_fd_optimal_lineups <- downloadHandler(
-    filename = function() {
-      paste("fd_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
-    },
-    content = function(file) {
-      if(is.null(rv$fd_optimal_lineups) || nrow(rv$fd_optimal_lineups) == 0) {
-        empty_data <- data.frame(
-          Player1 = character(0), Player2 = character(0), Player3 = character(0),
-          Player4 = character(0), Player5 = character(0), Player6 = character(0),
-          Top1Count = integer(0), Top2Count = integer(0), Top3Count = integer(0), 
-          Top5Count = integer(0), TotalSalary = integer(0),
-          CumulativeOwnership = numeric(0), GeometricMeanOwnership = numeric(0)
-        )
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
-      
-      # Include ownership columns in download
-      download_data <- as.data.frame(rv$fd_optimal_lineups)
-      keep_cols <- c(paste0("Player", 1:FD_ROSTER_SIZE), 
-                     "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-                     "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
-      keep_cols <- intersect(keep_cols, names(download_data))
-      download_data <- download_data[, keep_cols, drop = FALSE]
-      
-      write.csv(download_data, file, row.names = FALSE)
-    },
-    contentType = "text/csv"
-  )
-  
-  # Download random lineups
-  output$download_dk_random_lineups <- downloadHandler(
-    filename = function() {
-      paste("dk_golf_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
-    },
-    content = function(file) {
-      if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
-        empty_data <- data.frame(
-          Player1 = character(0), Player2 = character(0), Player3 = character(0),
-          Player4 = character(0), Player5 = character(0), Player6 = character(0)
-        )
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
-      
-      write.csv(rv$dk_random_lineups, file, row.names = FALSE)
-    },
-    contentType = "text/csv"
-  )
+
   
   output$dk_player_exposure_table <- renderDT({
   req(rv$dk_player_exposure)
@@ -3086,25 +3005,205 @@ output$fd_player_exposure_table <- renderDT({
   return(dt)
 })
 
-  
-  output$download_fd_random_lineups <- downloadHandler(
-    filename = function() {
-      paste("fd_golf_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
-    },
-    content = function(file) {
-      if(is.null(rv$fd_random_lineups) || nrow(rv$fd_random_lineups) == 0) {
-        empty_data <- data.frame(
-          Player1 = character(0), Player2 = character(0), Player3 = character(0),
-          Player4 = character(0), Player5 = character(0), Player6 = character(0)
-        )
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
+output$download_dk_optimal_lineups <- downloadHandler(
+  filename = function() {
+    paste("dk_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
+      empty_data <- data.frame(
+        Player1 = character(0), Player2 = character(0), Player3 = character(0),
+        Player4 = character(0), Player5 = character(0), Player6 = character(0),
+        Top1Count = integer(0), Top2Count = integer(0), Top3Count = integer(0), 
+        Top5Count = integer(0), TotalSalary = integer(0),
+        CumulativeOwnership = numeric(0), GeometricMeanOwnership = numeric(0)
+      )
+      write.csv(empty_data, file, row.names = FALSE)
+      return()
+    }
+    
+    # Create download data with DKName substitution
+    download_data <- as.data.frame(rv$dk_optimal_lineups)
+    keep_cols <- c(paste0("Player", 1:DK_ROSTER_SIZE), 
+                   "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
+                   "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
+    keep_cols <- intersect(keep_cols, names(download_data))
+    download_data <- download_data[, keep_cols, drop = FALSE]
+    
+    # Replace player names with DKName if available
+    if(!is.null(rv$simulation_results) && "DKName" %in% names(rv$simulation_results)) {
+      # Create name mapping from simulation results
+      name_mapping <- unique(rv$simulation_results[, c("Name", "DKName")])
+      name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$DKName), ]
       
-      write.csv(rv$fd_random_lineups, file, row.names = FALSE)
-    },
-    contentType = "text/csv"
-  )
+      if(nrow(name_mapping) > 0) {
+        # Create lookup table
+        lookup <- setNames(name_mapping$DKName, name_mapping$Name)
+        
+        # Replace names in each player column
+        for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+    }
+    
+    write.csv(download_data, file, row.names = FALSE)
+  },
+  contentType = "text/csv"
+)
+
+# 2. FanDuel optimal lineups download handler
+output$download_fd_optimal_lineups <- downloadHandler(
+  filename = function() {
+    paste("fd_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    if(is.null(rv$fd_optimal_lineups) || nrow(rv$fd_optimal_lineups) == 0) {
+      empty_data <- data.frame(
+        Player1 = character(0), Player2 = character(0), Player3 = character(0),
+        Player4 = character(0), Player5 = character(0), Player6 = character(0),
+        Top1Count = integer(0), Top2Count = integer(0), Top3Count = integer(0), 
+        Top5Count = integer(0), TotalSalary = integer(0),
+        CumulativeOwnership = numeric(0), GeometricMeanOwnership = numeric(0)
+      )
+      write.csv(empty_data, file, row.names = FALSE)
+      return()
+    }
+    
+    # Create download data with FDName substitution
+    download_data <- as.data.frame(rv$fd_optimal_lineups)
+    keep_cols <- c(paste0("Player", 1:FD_ROSTER_SIZE), 
+                   "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
+                   "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
+    keep_cols <- intersect(keep_cols, names(download_data))
+    download_data <- download_data[, keep_cols, drop = FALSE]
+    
+    # Replace player names with FDName if available
+    if(!is.null(rv$simulation_results) && "FDName" %in% names(rv$simulation_results)) {
+      # Create name mapping from simulation results
+      name_mapping <- unique(rv$simulation_results[, c("Name", "FDName")])
+      name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$FDName), ]
+      
+      if(nrow(name_mapping) > 0) {
+        # Create lookup table
+        lookup <- setNames(name_mapping$FDName, name_mapping$Name)
+        
+        # Replace names in each player column
+        for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+    }
+    
+    write.csv(download_data, file, row.names = FALSE)
+  },
+  contentType = "text/csv"
+)
+
+# 3. DraftKings random lineups download handler
+output$download_dk_random_lineups <- downloadHandler(
+  filename = function() {
+    paste("dk_golf_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
+      empty_data <- data.frame(
+        Player1 = character(0), Player2 = character(0), Player3 = character(0),
+        Player4 = character(0), Player5 = character(0), Player6 = character(0)
+      )
+      write.csv(empty_data, file, row.names = FALSE)
+      return()
+    }
+    
+    # Create download data with DKName substitution
+    download_data <- as.data.frame(rv$dk_random_lineups)
+    
+    # Replace player names with DKName if available
+    if(!is.null(rv$simulation_results) && "DKName" %in% names(rv$simulation_results)) {
+      # Create name mapping from simulation results
+      name_mapping <- unique(rv$simulation_results[, c("Name", "DKName")])
+      name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$DKName), ]
+      
+      if(nrow(name_mapping) > 0) {
+        # Create lookup table
+        lookup <- setNames(name_mapping$DKName, name_mapping$Name)
+        
+        # Replace names in each player column
+        for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+    }
+    
+    write.csv(download_data, file, row.names = FALSE)
+  },
+  contentType = "text/csv"
+)
+
+# 4. FanDuel random lineups download handler
+output$download_fd_random_lineups <- downloadHandler(
+  filename = function() {
+    paste("fd_golf_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+  },
+  content = function(file) {
+    if(is.null(rv$fd_random_lineups) || nrow(rv$fd_random_lineups) == 0) {
+      empty_data <- data.frame(
+        Player1 = character(0), Player2 = character(0), Player3 = character(0),
+        Player4 = character(0), Player5 = character(0), Player6 = character(0)
+      )
+      write.csv(empty_data, file, row.names = FALSE)
+      return()
+    }
+    
+    # Create download data with FDName substitution
+    download_data <- as.data.frame(rv$fd_random_lineups)
+    
+    # Replace player names with FDName if available
+    if(!is.null(rv$simulation_results) && "FDName" %in% names(rv$simulation_results)) {
+      # Create name mapping from simulation results
+      name_mapping <- unique(rv$simulation_results[, c("Name", "FDName")])
+      name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$FDName), ]
+      
+      if(nrow(name_mapping) > 0) {
+        # Create lookup table
+        lookup <- setNames(name_mapping$FDName, name_mapping$Name)
+        
+        # Replace names in each player column
+        for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+    }
+    
+    write.csv(download_data, file, row.names = FALSE)
+  },
+  contentType = "text/csv"
+)
+
 
   
   # COMPLETE FIXED OBSERVER FUNCTIONS - Replace your existing observers with these:
