@@ -297,15 +297,43 @@ create_lineup_display_data <- function(full_lineups, max_display = 100) {
   ))
 }
 
-# Memory management utilities
 configure_memory_settings <- function() {
   # Configure data.table for better memory usage
   data.table::setDTthreads(0)  # Use all available cores
   options(datatable.optimize = 2)
   
-  # More aggressive garbage collection
+  # More aggressive garbage collection settings
   gcinfo(FALSE)  # Disable verbose GC messages
+  
+  cat("Memory settings configured:\n")
+  cat("- data.table threads:", data.table::getDTthreads(), "\n")
+  cat("- data.table optimization level:", getOption("datatable.optimize"), "\n")
 }
+
+# Enhanced cleanup with performance monitoring
+cleanup_memory <- function(verbose = TRUE) {
+  if (verbose) {
+    start_mem <- sum(gc()[,2])
+    cat("Memory cleanup starting - Used:", round(start_mem, 1), "MB\n")
+  }
+  
+  # Force garbage collection multiple times
+  for(i in 1:3) {
+    gc(verbose = FALSE, full = TRUE)
+    Sys.sleep(0.05)  # Brief pause between collections
+  }
+  
+  if (verbose) {
+    end_mem <- sum(gc()[,2])
+    freed <- start_mem - end_mem
+    cat("Memory cleanup complete - Used:", round(end_mem, 1), "MB")
+    if (freed > 0) {
+      cat(" (freed", round(freed, 1), "MB)")
+    }
+    cat("\n")
+  }
+}
+
 
 
 
@@ -720,7 +748,6 @@ get_lap_points_for_position <- function(finish_pos, fd_laps_data, point_col) {
   return(0)
 }
 
-
 run_efficient_simulation <- function(input_data, n_sims = 1000) {
   drivers_dt <- as.data.table(input_data$drivers)
   n_drivers <- nrow(drivers_dt)
@@ -729,7 +756,14 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
   has_dk <- "DKSalary" %in% names(drivers_dt) && !is.null(input_data$race_weights) && nrow(input_data$race_weights) > 0
   has_fd <- "FDSalary" %in% names(drivers_dt) && (!is.null(input_data$fd_laps) || (!is.null(input_data$race_weights) && nrow(input_data$race_weights) > 0))
   
+  cat("=== SIMULATION SETUP ===\n")
+  cat("Total simulations:", n_sims, "\n")
+  cat("Number of drivers:", n_drivers, "\n")
+  cat("Platforms: DraftKings =", has_dk, ", FanDuel =", has_fd, "\n")
+  cat("========================\n")
+  
   # Pre-compute everything once
+  cat("[SETUP] Pre-computing driver distributions...\n")
   driver_distributions <- precompute_driver_distributions(drivers_dt)
   scoring_system <- create_scoring_system()
   
@@ -745,6 +779,7 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
       op = drivers_dt$DKOP,
       name = drivers_dt$DKName
     )
+    cat("[SETUP] DraftKings data loaded\n")
   }
   
   if (has_fd) {
@@ -753,22 +788,39 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
       op = drivers_dt$FDOP,
       name = drivers_dt$FDName
     )
+    cat("[SETUP] FanDuel data loaded\n")
   }
   
   # Generate all finish positions at once
-  cat("Generating finish positions for", n_sims, "simulations...\n")
+  cat("[STEP 1/3] Generating finish positions for", n_sims, "simulations...\n")
+  start_time <- Sys.time()
   all_finish_positions <- simulate_finish_positions_vectorized(driver_distributions, n_sims)
-  
-  # Calculate dominator points in batch
-  dk_dominator_points <- NULL
-  fd_dominator_points <- NULL
-  
+  step1_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+  cat("✓ Finish positions completed in", round(step1_time, 1), "seconds\n")
   
   # Vectorized fantasy point calculation - KEEP SimID!
-  cat("Calculating fantasy points...\n")
+  cat("[STEP 2/3] Calculating fantasy points...\n")
+  step2_start <- Sys.time()
   results_list <- vector("list", n_sims)
   
+  # Progress tracking for fantasy point calculation
+  progress_interval <- max(1, floor(n_sims / 20))  # Report every 5%
+  next_progress <- progress_interval
+  
   for (sim in 1:n_sims) {
+    # Progress reporting
+    if (sim == next_progress || sim == n_sims) {
+      elapsed <- as.numeric(difftime(Sys.time(), step2_start, units = "secs"))
+      rate <- sim / elapsed
+      remaining_sims <- n_sims - sim
+      eta_seconds <- remaining_sims / rate
+      progress_pct <- round((sim / n_sims) * 100, 1)
+      
+      cat("  Progress:", progress_pct, "% (", sim, "/", n_sims, ") - ", 
+          round(rate, 1), " sims/sec - ETA:", round(eta_seconds, 0), "s\n")
+      next_progress <- next_progress + progress_interval
+    }
+    
     sim_result <- data.table(
       SimID = sim,  # KEEP THIS!
       Name = static_data$names,
@@ -794,14 +846,13 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         sim_result, 
         input_data$race_weights, 
         input_data$race_profiles,
-        input_data$dom_tier,  # Add this parameter
+        input_data$dom_tier,
         "DK"
       )
       
       # Update fantasy points with dominator points
       sim_result[, DKFantasyPoints := DKFantasyPoints + DKDominatorPoints]
     }
-    
     
     if (has_fd) {
       # Vectorized FD calculations
@@ -822,11 +873,11 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         sim_result, 
         input_data$race_weights, 
         input_data$race_profiles,
-        input_data$dom_tier,  # Add this parameter
+        input_data$dom_tier,
         "FD"
       )
       
-      # Calculate FD lap points (existing function)
+      # Calculate FD lap points
       sim_result <- assign_fd_lap_points(sim_result, input_data$fd_laps)
       
       # Update fantasy points with dominator and lap points
@@ -836,11 +887,22 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
     results_list[[sim]] <- sim_result
   }
   
-  # Combine results
-  combined_results <- rbindlist(results_list)
+  step2_time <- as.numeric(difftime(Sys.time(), step2_start, units = "secs"))
+  cat("✓ Fantasy points completed in", round(step2_time, 1), "seconds\n")
   
-  cat("Efficient simulation completed!\n")
-  cat("Generated", nrow(combined_results), "total results\n")
+  # Combine results
+  cat("[STEP 3/3] Combining results...\n")
+  step3_start <- Sys.time()
+  combined_results <- rbindlist(results_list)
+  step3_time <- as.numeric(difftime(Sys.time(), step3_start, units = "secs"))
+  cat("✓ Results combined in", round(step3_time, 1), "seconds\n")
+  
+  total_time <- step1_time + step2_time + step3_time
+  cat("=== SIMULATION COMPLETE ===\n")
+  cat("Total time:", round(total_time, 1), "seconds\n")
+  cat("Average rate:", round(n_sims / total_time, 1), "simulations/second\n")
+  cat("Results generated:", nrow(combined_results), "total results\n")
+  cat("============================\n")
   
   return(list(
     results = combined_results,
@@ -849,68 +911,64 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
   ))
 }
 
-# Analysis Functions (optimized with data.table)
-analyze_finishing_positions <- function(sim_results) {
+# REPLACE the existing analysis functions with these fixed versions
+
+# Fixed DK dominator analysis with proper data type handling
+analyze_dk_dominator_points <- function(sim_results, max_sample_size = 1000000) {
   setDT(sim_results)
   
-  results <- sim_results[, .(
-    Win_Rate = mean(FinishPosition == 1, na.rm = TRUE) * 100,
-    T3_Rate = mean(FinishPosition <= 3, na.rm = TRUE) * 100,
-    T5_Rate = mean(FinishPosition <= 5, na.rm = TRUE) * 100,
-    T10_Rate = mean(FinishPosition <= 10, na.rm = TRUE) * 100,
-    T15_Rate = mean(FinishPosition <= 15, na.rm = TRUE) * 100,
-    T20_Rate = mean(FinishPosition <= 20, na.rm = TRUE) * 100,
-    T25_Rate = mean(FinishPosition <= 25, na.rm = TRUE) * 100,
-    T30_Rate = mean(FinishPosition <= 30, na.rm = TRUE) * 100,
-    Avg_Finish = mean(FinishPosition, na.rm = TRUE),
-    Median = median(FinishPosition, na.rm = TRUE)
-  ), by = Name]
+  n_total_results <- nrow(sim_results)
+  cat("Analyzing DK dominator points:", n_total_results, "total results\n")
   
-  results <- results[order(Avg_Finish)]
-  
-  for (col in setdiff(names(results), "Name")) {
-    results[, (col) := round(get(col), 1)]
+  # Sample for performance if dataset is very large
+  analysis_data <- sim_results
+  if (n_total_results > max_sample_size) {
+    sample_size <- max_sample_size
+    sample_indices <- sample(n_total_results, sample_size)
+    analysis_data <- sim_results[sample_indices]
+    cat("Using sample of", sample_size, "results for analysis (", 
+        round(sample_size/n_total_results*100, 1), "%)\n")
   }
   
-  return(results)
-}
-
-analyze_dk_dominator_points <- function(sim_results) {
-  setDT(sim_results)
-  
   # Check if SimID exists, if not create it
-  if (!"SimID" %in% names(sim_results)) {
-    n_drivers <- length(unique(sim_results$Name))
-    sim_results[, SimID := rep(1:(nrow(sim_results) %/% n_drivers + 1), each = n_drivers)[1:nrow(sim_results)]]
+  if (!"SimID" %in% names(analysis_data)) {
+    n_drivers <- length(unique(analysis_data$Name))
+    analysis_data[, SimID := rep(1:(nrow(analysis_data) %/% n_drivers + 1), each = n_drivers)[1:nrow(analysis_data)]]
     created_simid <- TRUE
   } else {
     created_simid <- FALSE
   }
   
-  # Calculate dominator rank for each simulation
-  sim_results[, DKDominatorRank := frank(-DKDominatorPoints, ties.method = "min"), by = SimID]
+  # Ensure numeric columns are properly typed
+  analysis_data[, Starting := as.numeric(Starting)]
+  analysis_data[, DKSalary := as.numeric(DKSalary)]
+  analysis_data[, DKDominatorPoints := as.numeric(DKDominatorPoints)]
   
-  results <- sim_results[, .(
-    Starting = first(Starting),
-    DKSalary = first(DKSalary),
-    Avg_Dom = mean(DKDominatorPoints),
-    Median_Dom = median(DKDominatorPoints),
-    Max_Dom = max(DKDominatorPoints),
-    Avg_DomRank = mean(DKDominatorRank),
-    Median_DomRank = median(DKDominatorRank),
-    Top_DomRate = mean(DKDominatorRank == 1) * 100,
-    Top3_DomRate = mean(DKDominatorRank <= 3) * 100,
-    Top5_DomRate = mean(DKDominatorRank <= 5) * 100,
-    Top10_DomRate = mean(DKDominatorRank <= 10) * 100
+  # Calculate dominator rank for each simulation
+  analysis_data[, DKDominatorRank := frank(-DKDominatorPoints, ties.method = "min"), by = SimID]
+  
+  # Use explicit type conversion in aggregation
+  results <- analysis_data[, .(
+    Starting = as.numeric(first(Starting)),
+    DKSalary = as.numeric(first(DKSalary)),
+    Avg_Dom = as.numeric(mean(DKDominatorPoints, na.rm = TRUE)),
+    Median_Dom = as.numeric(median(DKDominatorPoints, na.rm = TRUE)),
+    Max_Dom = as.numeric(max(DKDominatorPoints, na.rm = TRUE)),
+    Avg_DomRank = as.numeric(mean(DKDominatorRank, na.rm = TRUE)),
+    Median_DomRank = as.numeric(median(DKDominatorRank, na.rm = TRUE)),
+    Top_DomRate = as.numeric(mean(DKDominatorRank == 1, na.rm = TRUE) * 100),
+    Top3_DomRate = as.numeric(mean(DKDominatorRank <= 3, na.rm = TRUE) * 100),
+    Top5_DomRate = as.numeric(mean(DKDominatorRank <= 5, na.rm = TRUE) * 100),
+    Top10_DomRate = as.numeric(mean(DKDominatorRank <= 10, na.rm = TRUE) * 100)
   ), by = Name]
   
   # Clean up temporary columns
-  sim_results[, DKDominatorRank := NULL]
+  analysis_data[, DKDominatorRank := NULL]
   if (created_simid) {
-    sim_results[, SimID := NULL]
+    analysis_data[, SimID := NULL]
   }
   
-  # Ensure numeric columns before rounding
+  # Round numeric columns
   numeric_cols <- c(
     "Starting", "DKSalary", "Avg_Dom", "Median_Dom", "Max_Dom",
     "Avg_DomRank", "Median_DomRank", "Top_DomRate", "Top3_DomRate", 
@@ -929,42 +987,61 @@ analyze_dk_dominator_points <- function(sim_results) {
   return(results)
 }
 
-# Update analyze_fd_dominator_points function similarly:
-analyze_fd_dominator_points <- function(sim_results) {
+# Fixed FD dominator analysis with proper data type handling
+analyze_fd_dominator_points <- function(sim_results, max_sample_size = 1000000) {
   setDT(sim_results)
   
+  n_total_results <- nrow(sim_results)
+  cat("Analyzing FD dominator points:", n_total_results, "total results\n")
+  
+  # Sample for performance if dataset is very large
+  analysis_data <- sim_results
+  if (n_total_results > max_sample_size) {
+    sample_size <- max_sample_size
+    sample_indices <- sample(n_total_results, sample_size)
+    analysis_data <- sim_results[sample_indices]
+    cat("Using sample of", sample_size, "results for analysis (", 
+        round(sample_size/n_total_results*100, 1), "%)\n")
+  }
+  
   # Check if SimID exists, if not create it
-  if (!"SimID" %in% names(sim_results)) {
-    n_drivers <- length(unique(sim_results$Name))
-    sim_results[, SimID := rep(1:(nrow(sim_results) %/% n_drivers + 1), each = n_drivers)[1:nrow(sim_results)]]
+  if (!"SimID" %in% names(analysis_data)) {
+    n_drivers <- length(unique(analysis_data$Name))
+    analysis_data[, SimID := rep(1:(nrow(analysis_data) %/% n_drivers + 1), each = n_drivers)[1:nrow(analysis_data)]]
     created_simid <- TRUE
   } else {
     created_simid <- FALSE
   }
   
-  # Calculate dominator rank for each simulation
-  sim_results[, FDDominatorRank := frank(-FDDominatorPoints, ties.method = "min"), by = SimID]
+  # Ensure numeric columns are properly typed
+  analysis_data[, Starting := as.numeric(Starting)]
+  analysis_data[, FDSalary := as.numeric(FDSalary)]
+  analysis_data[, FDDominatorPoints := as.numeric(FDDominatorPoints)]
   
-  results <- sim_results[, .(
-    Starting = first(Starting),
-    FDSalary = first(FDSalary),
-    Avg_Dom = mean(FDDominatorPoints),
-    Median_Dom = median(FDDominatorPoints),
-    Max_Dom = max(FDDominatorPoints),
-    Avg_DomRank = mean(FDDominatorRank),
-    Median_DomRank = median(FDDominatorRank),
-    Top_DomRate = mean(FDDominatorRank == 1) * 100,
-    Top3_DomRate = mean(FDDominatorRank <= 3) * 100,
-    Top5_DomRate = mean(FDDominatorRank <= 5) * 100
+  # Calculate dominator rank for each simulation
+  analysis_data[, FDDominatorRank := frank(-FDDominatorPoints, ties.method = "min"), by = SimID]
+  
+  # Use explicit type conversion in aggregation
+  results <- analysis_data[, .(
+    Starting = as.numeric(first(Starting)),
+    FDSalary = as.numeric(first(FDSalary)),
+    Avg_Dom = as.numeric(mean(FDDominatorPoints, na.rm = TRUE)),
+    Median_Dom = as.numeric(median(FDDominatorPoints, na.rm = TRUE)),
+    Max_Dom = as.numeric(max(FDDominatorPoints, na.rm = TRUE)),
+    Avg_DomRank = as.numeric(mean(FDDominatorRank, na.rm = TRUE)),
+    Median_DomRank = as.numeric(median(FDDominatorRank, na.rm = TRUE)),
+    Top_DomRate = as.numeric(mean(FDDominatorRank == 1, na.rm = TRUE) * 100),
+    Top3_DomRate = as.numeric(mean(FDDominatorRank <= 3, na.rm = TRUE) * 100),
+    Top5_DomRate = as.numeric(mean(FDDominatorRank <= 5, na.rm = TRUE) * 100)
   ), by = Name]
   
   # Clean up temporary columns
-  sim_results[, FDDominatorRank := NULL]
+  analysis_data[, FDDominatorRank := NULL]
   if (created_simid) {
-    sim_results[, SimID := NULL]
+    analysis_data[, SimID := NULL]
   }
   
-  # Ensure numeric columns before rounding
+  # Round numeric columns
   numeric_cols <- c(
     "Starting", "FDSalary", "Avg_Dom", "Median_Dom", "Max_Dom",
     "Avg_DomRank", "Median_DomRank", "Top_DomRate", "Top3_DomRate", "Top5_DomRate"
@@ -982,28 +1059,175 @@ analyze_fd_dominator_points <- function(sim_results) {
   return(results)
 }
 
+# Fixed finishing positions analysis with proper data type handling
+analyze_finishing_positions <- function(sim_results, max_display_rows = 50) {
+  setDT(sim_results)
+  
+  # For very large datasets, sample for display but keep full analysis
+  n_total_results <- nrow(sim_results)
+  n_drivers <- length(unique(sim_results$Name))
+  n_sims <- n_total_results / n_drivers
+  
+  cat("Analyzing finishing positions:", n_drivers, "drivers,", n_sims, "simulations\n")
+  
+  # Ensure FinishPosition is numeric
+  sim_results[, FinishPosition := as.numeric(FinishPosition)]
+  
+  # Always do full analysis for accuracy with explicit type conversion
+  results <- sim_results[, .(
+    Win_Rate = as.numeric(mean(FinishPosition == 1, na.rm = TRUE) * 100),
+    T3_Rate = as.numeric(mean(FinishPosition <= 3, na.rm = TRUE) * 100),
+    T5_Rate = as.numeric(mean(FinishPosition <= 5, na.rm = TRUE) * 100),
+    T10_Rate = as.numeric(mean(FinishPosition <= 10, na.rm = TRUE) * 100),
+    T15_Rate = as.numeric(mean(FinishPosition <= 15, na.rm = TRUE) * 100),
+    T20_Rate = as.numeric(mean(FinishPosition <= 20, na.rm = TRUE) * 100),
+    T25_Rate = as.numeric(mean(FinishPosition <= 25, na.rm = TRUE) * 100),
+    T30_Rate = as.numeric(mean(FinishPosition <= 30, na.rm = TRUE) * 100),
+    Avg_Finish = as.numeric(mean(FinishPosition, na.rm = TRUE)),
+    Median = as.numeric(median(FinishPosition, na.rm = TRUE))
+  ), by = Name]
+  
+  results <- results[order(Avg_Finish)]
+  
+  # Round all numeric columns
+  for (col in setdiff(names(results), "Name")) {
+    results[, (col) := round(as.numeric(get(col)), 1)]
+  }
+  
+  if (nrow(results) > max_display_rows) {
+    cat("Note: Showing all", nrow(results), "drivers in finishing analysis\n")
+  }
+  
+  return(results)
+}
 
+# Fixed fantasy points analysis with proper data type handling
+analyze_dk_fantasy_points <- function(sim_results, max_sample_size = 1000000) {
+  setDT(sim_results)
+  
+  n_total_results <- nrow(sim_results)
+  cat("Analyzing DK fantasy points:", n_total_results, "total results\n")
+  
+  # Sample for performance if dataset is very large
+  analysis_data <- sim_results
+  if (n_total_results > max_sample_size) {
+    sample_size <- max_sample_size
+    sample_indices <- sample(n_total_results, sample_size)
+    analysis_data <- sim_results[sample_indices]
+    cat("Using sample of", sample_size, "results for analysis (", 
+        round(sample_size/n_total_results*100, 1), "%)\n")
+  }
+  
+  # Ensure numeric columns are properly typed
+  analysis_data[, DKSalary := as.numeric(DKSalary)]
+  analysis_data[, Starting := as.numeric(Starting)]
+  analysis_data[, DKOP := as.numeric(DKOP)]
+  analysis_data[, DKFantasyPoints := as.numeric(DKFantasyPoints)]
+  
+  # Use explicit type conversion in aggregation
+  results <- analysis_data[, .(
+    DKSalary = as.numeric(first(DKSalary)),
+    Starting = as.numeric(first(Starting)),
+    DKOP = as.numeric(first(DKOP)),
+    Median_Fantasy_Pts = as.numeric(median(DKFantasyPoints, na.rm = TRUE)),
+    FP_90thPct = as.numeric(quantile(DKFantasyPoints, 0.9, na.rm = TRUE))
+  ), by = .(Name)]
+  
+  # Add PPD calculation with proper type handling
+  results[, PPD := as.numeric(Median_Fantasy_Pts / (DKSalary / 1000))]
+  
+  # Convert DKOP to percentage if needed
+  if (max(results$DKOP, na.rm = TRUE) <= 1) {
+    results[, DKOP := as.numeric(DKOP * 100)]
+  }
+  
+  # Round all numeric columns
+  numeric_cols <- c("DKSalary", "Starting", "DKOP", "Median_Fantasy_Pts", "FP_90thPct", "PPD")
+  for (col in numeric_cols) {
+    if (col %in% names(results)) {
+      results[, (col) := round(as.numeric(get(col)), 1)]
+    }
+  }
+  
+  return(results)
+}
+
+# Fixed FD fantasy points analysis
+analyze_fd_fantasy_points <- function(sim_results, max_sample_size = 1000000) {
+  setDT(sim_results)
+  
+  n_total_results <- nrow(sim_results)
+  cat("Analyzing FD fantasy points:", n_total_results, "total results\n")
+  
+  # Sample for performance if dataset is very large
+  analysis_data <- sim_results
+  if (n_total_results > max_sample_size) {
+    sample_size <- max_sample_size
+    sample_indices <- sample(n_total_results, sample_size)
+    analysis_data <- sim_results[sample_indices]
+    cat("Using sample of", sample_size, "results for analysis (", 
+        round(sample_size/n_total_results*100, 1), "%)\n")
+  }
+  
+  # Ensure numeric columns are properly typed
+  analysis_data[, FDSalary := as.numeric(FDSalary)]
+  analysis_data[, Starting := as.numeric(Starting)]
+  analysis_data[, FDOP := as.numeric(FDOP)]
+  analysis_data[, FDFantasyPoints := as.numeric(FDFantasyPoints)]
+  
+  # Use explicit type conversion in aggregation
+  results <- analysis_data[, .(
+    FDSalary = as.numeric(first(FDSalary)),
+    Starting = as.numeric(first(Starting)),
+    FDOP = as.numeric(first(FDOP)),
+    Median_Fantasy_Pts = as.numeric(median(FDFantasyPoints, na.rm = TRUE)),
+    FP_90thPct = as.numeric(quantile(FDFantasyPoints, 0.9, na.rm = TRUE))
+  ), by = .(Name)]
+  
+  # Add PPD calculation with proper type handling
+  results[, PPD := as.numeric(Median_Fantasy_Pts / (FDSalary / 1000))]
+  
+  # Convert FDOP to percentage if needed
+  if (max(results$FDOP, na.rm = TRUE) <= 1) {
+    results[, FDOP := as.numeric(FDOP * 100)]
+  }
+  
+  # Round all numeric columns
+  numeric_cols <- c("FDSalary", "Starting", "FDOP", "Median_Fantasy_Pts", "FP_90thPct", "PPD")
+  for (col in numeric_cols) {
+    if (col %in% names(results)) {
+      results[, (col) := round(as.numeric(get(col)), 1)]
+    }
+  }
+  
+  return(results)
+}
+
+# Fixed FD lap analysis
 analyze_fd_lap_points <- function(sim_results) {
   setDT(sim_results)
   
+  # Ensure numeric columns are properly typed
+  sim_results[, FDSalary := as.numeric(FDSalary)]
+  sim_results[, Starting := as.numeric(Starting)]
+  sim_results[, FDLapPoints := as.numeric(FDLapPoints)]
+  
+  # Use explicit type conversion in aggregation
   results <- sim_results[, .(
-    Starting = first(Starting),
-    FDSalary = first(FDSalary),
-    Avg_Lap = mean(FDLapPoints),
-    Median_Lap = median(FDLapPoints),
-    Max_Lap = max(FDLapPoints),
-    Min_Lap = min(FDLapPoints)
+    Starting = as.numeric(first(Starting)),
+    FDSalary = as.numeric(first(FDSalary)),
+    Avg_Lap = as.numeric(mean(FDLapPoints, na.rm = TRUE)),
+    Median_Lap = as.numeric(median(FDLapPoints, na.rm = TRUE)),
+    Max_Lap = as.numeric(max(FDLapPoints, na.rm = TRUE)),
+    Min_Lap = as.numeric(min(FDLapPoints, na.rm = TRUE))
   ), by = Name]
   
   # Round numeric columns
-  numeric_cols <- c("Starting",
-                    "FDSalary",
-                    "Avg_Lap",
-                    "Median_Lap",
-                    "Max_Lap",
-                    "Min_Lap")
+  numeric_cols <- c("Starting", "FDSalary", "Avg_Lap", "Median_Lap", "Max_Lap", "Min_Lap")
   for (col in numeric_cols) {
-    results[, (col) := round(as.numeric(get(col)), 1)]
+    if (col %in% names(results)) {
+      results[, (col) := round(as.numeric(get(col)), 1)]
+    }
   }
   
   # Sort by Average Lap Points in descending order
@@ -1012,51 +1236,8 @@ analyze_fd_lap_points <- function(sim_results) {
   return(results)
 }
 
-# DraftKings fantasy point projections
-analyze_dk_fantasy_points <- function(sim_results) {
-  setDT(sim_results)
-  
-  results <- sim_results[, .(
-    DKSalary = first(DKSalary),
-    Starting = first(Starting),
-    DKOP = first(DKOP),
-    Median_Fantasy_Pts = round(median(DKFantasyPoints), 1),
-    FP_90thPct = round(quantile(DKFantasyPoints, 0.9), 1)
-  ), by = .(Name)]
-  
-  # Add PPD calculation
-  results[, PPD := round(Median_Fantasy_Pts / (DKSalary / 1000), 1)]
-  
-  # Multiply DKOP by 100 to convert to percentage if it's a proportion
-  if (max(results$DKOP, na.rm = TRUE) <= 1) {
-    results[, DKOP := round(as.numeric(DKOP) * 100, 1)]
-  }
-  
-  return(results)
-}
 
-# FanDuel fantasy point projections
-analyze_fd_fantasy_points <- function(sim_results) {
-  setDT(sim_results)
-  
-  results <- sim_results[, .(
-    FDSalary = first(FDSalary),
-    Starting = first(Starting),
-    FDOP = first(FDOP),
-    Median_Fantasy_Pts = round(median(FDFantasyPoints), 1),
-    FP_90thPct = round(quantile(FDFantasyPoints, 0.9), 1)
-  ), by = .(Name)]
-  
-  # Add PPD calculation
-  results[, PPD := round(Median_Fantasy_Pts / (FDSalary / 1000), 1)]
-  
-  # Multiply FDOP by 100 to convert to percentage if it's a proportion
-  if (max(results$FDOP, na.rm = TRUE) <= 1) {
-    results[, FDOP := round(as.numeric(FDOP) * 100, 1)]
-  }
-  
-  return(results)
-}
+
 
 analyze_simulation_accuracy <- function(sim_results, input_data) {
   # Make sure we're working with data.tables
@@ -1678,6 +1859,7 @@ count_optimal_lineups_efficient <- function(sim_results, platform = "DK") {
   })
 }
 
+# REPLACE your calculate_dk_filtered_pool_stats function with this FIXED version
 calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
     return(list(count = 0, thresholds = NULL))
@@ -1716,7 +1898,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[GeometricMean <= filters$max_geometric_mean]
   }
   
-  # NEW: Apply cumulative starting position filters
+  # FIXED: Apply cumulative starting position filters
   if (!is.null(filters$min_cumulative_starting) && "CumulativeStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -1724,7 +1906,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # NEW: Apply geometric mean starting position filters
+  # FIXED: Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && "GeometricMeanStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
@@ -1750,7 +1932,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   threshold_columns <- c(
     "Top1Count", "Top2Count", "Top3Count", "Top5Count",
     "CumulativeOwnership", "GeometricMean",
-    "CumulativeStarting", "GeometricMeanStarting"  # NEW
+    "CumulativeStarting", "GeometricMeanStarting"  # FIXED: Added these
   )
   
   for (col in threshold_columns) {
@@ -1785,7 +1967,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   return(list(count = nrow(filtered_lineups), thresholds = thresholds))
 }
 
-
+# REPLACE your calculate_fd_filtered_pool_stats function with this FIXED version
 calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
     return(list(count = 0, thresholds = NULL))
@@ -1824,7 +2006,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean <= filters$max_geometric_mean]
   }
   
-  # NEW: Apply cumulative starting position filters
+  # FIXED: Apply cumulative starting position filters
   if (!is.null(filters$min_cumulative_starting) && "CumulativeStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -1832,7 +2014,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # NEW: Apply geometric mean starting position filters
+  # FIXED: Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && "GeometricMeanStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
@@ -1858,7 +2040,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   threshold_columns <- c(
     "Top1Count", "Top2Count", "Top3Count", "Top5Count",
     "CumulativeOwnership", "GeometricMean",
-    "CumulativeStarting", "GeometricMeanStarting"  # NEW
+    "CumulativeStarting", "GeometricMeanStarting"  # FIXED: Added these
   )
   
   for (col in threshold_columns) {
@@ -2198,6 +2380,7 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
   return(as.data.frame(selected_lineups))
 }
 
+# REPLACE your calculate_dk_driver_exposure function with this FIXED version
 calculate_dk_driver_exposure <- function(optimal_lineups,
                                          fantasy_analysis,
                                          random_lineups = NULL,
@@ -2284,7 +2467,7 @@ calculate_dk_driver_exposure <- function(optimal_lineups,
       filtered_lineups <- filtered_lineups[CumulativeOwnership <= current_filters$max_cumulative_ownership]
     }
     
-    # NEW: Apply geometric mean filters
+    # Apply geometric mean filters
     if (!is.null(current_filters$min_geometric_mean) &&
         current_filters$min_geometric_mean > 0) {
       filtered_lineups <- filtered_lineups[GeometricMean >= current_filters$min_geometric_mean]
@@ -2293,6 +2476,24 @@ calculate_dk_driver_exposure <- function(optimal_lineups,
     if (!is.null(current_filters$max_geometric_mean) &&
         current_filters$max_geometric_mean > 0) {
       filtered_lineups <- filtered_lineups[GeometricMean <= current_filters$max_geometric_mean]
+    }
+    
+    # FIXED: Apply starting position filters
+    if (!is.null(current_filters$min_cumulative_starting) &&
+        current_filters$min_cumulative_starting > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeStarting >= current_filters$min_cumulative_starting]
+    }
+    if (!is.null(current_filters$max_cumulative_starting) &&
+        current_filters$max_cumulative_starting > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeStarting <= current_filters$max_cumulative_starting]
+    }
+    if (!is.null(current_filters$min_geometric_starting) &&
+        current_filters$min_geometric_starting > 0) {
+      filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= current_filters$min_geometric_starting]
+    }
+    if (!is.null(current_filters$max_geometric_starting) &&
+        current_filters$max_geometric_starting > 0) {
+      filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= current_filters$max_geometric_starting]
     }
     
     if (!is.null(current_filters$excluded_drivers) &&
@@ -2387,6 +2588,8 @@ calculate_dk_driver_exposure <- function(optimal_lineups,
   return(as.data.frame(metrics_data))
 }
 
+
+# REPLACE your calculate_fd_driver_exposure function with this FIXED version
 calculate_fd_driver_exposure <- function(optimal_lineups,
                                          fantasy_analysis,
                                          random_lineups = NULL,
@@ -2484,6 +2687,24 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
       filtered_lineups <- filtered_lineups[GeometricMean <= current_filters$max_geometric_mean]
     }
     
+    # FIXED: Apply starting position filters
+    if (!is.null(current_filters$min_cumulative_starting) &&
+        current_filters$min_cumulative_starting > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeStarting >= current_filters$min_cumulative_starting]
+    }
+    if (!is.null(current_filters$max_cumulative_starting) &&
+        current_filters$max_cumulative_starting > 0) {
+      filtered_lineups <- filtered_lineups[CumulativeStarting <= current_filters$max_cumulative_starting]
+    }
+    if (!is.null(current_filters$min_geometric_starting) &&
+        current_filters$min_geometric_starting > 0) {
+      filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= current_filters$min_geometric_starting]
+    }
+    if (!is.null(current_filters$max_geometric_starting) &&
+        current_filters$max_geometric_starting > 0) {
+      filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= current_filters$max_geometric_starting]
+    }
+    
     if (!is.null(current_filters$excluded_drivers) &&
         length(current_filters$excluded_drivers) > 0) {
       to_exclude <- logical(nrow(filtered_lineups))
@@ -2575,7 +2796,6 @@ calculate_fd_driver_exposure <- function(optimal_lineups,
   
   return(as.data.frame(metrics_data))
 }
-
 
 # Define UI
 # UI Definition
@@ -3043,7 +3263,9 @@ server <- function(input, output, session) {
     dk_optimal_lineups_full = NULL,
     fd_optimal_lineups_display = NULL,
     fd_optimal_lineups_full = NULL,
-    updating_sliders = FALSE 
+    updating_sliders = FALSE,
+    sliders_initialized = list(dk = FALSE, fd = FALSE),  # NEW: Track initialization
+    user_modified_sliders = list(dk = FALSE, fd = FALSE)  # NEW: Track user changes
   )
   
   # Configure memory settings when server starts
@@ -3095,9 +3317,7 @@ server <- function(input, output, session) {
       cleanup_memory(verbose = FALSE)
     }
   })
-  
-  
-  
+  # REPLACE your existing DraftKings filter observer with this FIXED version
   observeEvent({
     list(
       input$dk_min_top1_count,
@@ -3111,26 +3331,48 @@ server <- function(input, output, session) {
       input$dk_excluded_drivers
     )
   }, {
-    # Only update if we're not in the middle of a programmatic slider update
-    # and we have the necessary data
-    if (!rv$updating_sliders && 
+    # Only process if:
+    # 1. Not currently updating sliders programmatically
+    # 2. Sliders have been initialized 
+    # 3. We have the necessary data
+    if (!isTRUE(rv$updating_sliders) && 
+        isTRUE(rv$sliders_initialized$dk) &&
         !is.null(rv$dk_optimal_lineups) && 
         !is.null(rv$dk_driver_exposure)) {
+      
+      # Mark that user has modified sliders
+      rv$user_modified_sliders$dk <- TRUE
       
       # Get existing driver mapping from the current exposure data
       existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters
+      # Calculate updated driver exposure with new filters - FIXED: Added ALL filters
+      current_filters <- list(
+        min_top1_count = input$dk_min_top1_count,
+        min_top2_count = input$dk_min_top2_count,
+        min_top3_count = input$dk_min_top3_count,
+        min_top5_count = input$dk_min_top5_count,
+        min_cumulative_ownership = input$dk_ownership_range[1],
+        max_cumulative_ownership = input$dk_ownership_range[2],
+        min_geometric_mean = input$dk_geometric_range[1],
+        max_geometric_mean = input$dk_geometric_range[2],
+        min_cumulative_starting = input$dk_starting_range[1],      # FIXED: These were missing!
+        max_cumulative_starting = input$dk_starting_range[2],      # FIXED: These were missing!
+        min_geometric_starting = input$dk_starting_geo_range[1],   # FIXED: These were missing!
+        max_geometric_starting = input$dk_starting_geo_range[2],   # FIXED: These were missing!
+        excluded_drivers = input$dk_excluded_drivers
+      )
+      
       rv$dk_driver_exposure <- calculate_dk_driver_exposure(
         rv$dk_optimal_lineups,
         existing_mapping,
         rv$dk_random_lineups,
-        dk_filters()
+        current_filters
       )
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
   
-  # FanDuel filter observer - with protection against circular updates
+  # REPLACE your existing FanDuel filter observer with this FIXED version
   observeEvent({
     list(
       input$fd_min_top1_count,
@@ -3144,25 +3386,47 @@ server <- function(input, output, session) {
       input$fd_excluded_drivers
     )
   }, {
-    # Only update if we're not in the middle of a programmatic slider update
-    # and we have the necessary data
-    if (!rv$updating_sliders && 
+    # Only process if:
+    # 1. Not currently updating sliders programmatically
+    # 2. Sliders have been initialized 
+    # 3. We have the necessary data
+    if (!isTRUE(rv$updating_sliders) && 
+        isTRUE(rv$sliders_initialized$fd) &&
         !is.null(rv$fd_optimal_lineups) && 
         !is.null(rv$fd_driver_exposure)) {
+      
+      # Mark that user has modified sliders
+      rv$user_modified_sliders$fd <- TRUE
       
       # Get existing driver mapping from the current exposure data
       existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters
+      # Calculate updated driver exposure with new filters - FIXED: Added ALL filters
+      current_filters <- list(
+        min_top1_count = input$fd_min_top1_count,
+        min_top2_count = input$fd_min_top2_count,
+        min_top3_count = input$fd_min_top3_count,
+        min_top5_count = input$fd_min_top5_count,
+        min_cumulative_ownership = input$fd_ownership_range[1],
+        max_cumulative_ownership = input$fd_ownership_range[2],
+        min_geometric_mean = input$fd_geometric_range[1],
+        max_geometric_mean = input$fd_geometric_range[2],
+        min_cumulative_starting = input$fd_starting_range[1],      # FIXED: These were missing!
+        max_cumulative_starting = input$fd_starting_range[2],      # FIXED: These were missing!
+        min_geometric_starting = input$fd_starting_geo_range[1],   # FIXED: These were missing!
+        max_geometric_starting = input$fd_starting_geo_range[2],   # FIXED: These were missing!
+        excluded_drivers = input$fd_excluded_drivers
+      )
+      
       rv$fd_driver_exposure <- calculate_fd_driver_exposure(
         rv$fd_optimal_lineups,
         existing_mapping,
         rv$fd_random_lineups,
-        fd_filters()
+        current_filters
       )
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
-  
+
   # Cleanup when simulation data changes
   observeEvent(rv$simulation_results, {
     # Clean up previous analysis results when new simulation starts
@@ -3351,7 +3615,11 @@ server <- function(input, output, session) {
   observeEvent(input$run_sim, {
     req(rv$processed_data)
     
+    cat("=== STARTING NEW SIMULATION ===\n")
+    cat("Simulation parameters:", input$n_sims, "simulations\n")
+    
     # Clear previous results and force garbage collection
+    cat("Clearing previous results...\n")
     rv$simulation_results <- NULL
     rv$finishing_analysis <- NULL
     rv$dk_dominator_analysis <- NULL
@@ -3367,32 +3635,32 @@ server <- function(input, output, session) {
     rv$fd_random_lineups <- NULL
     
     # Force garbage collection before running new simulation
-    gc(verbose = FALSE, full = TRUE)
+    cat("Running garbage collection...\n")
+    for (i in 1:3) {
+      gc(verbose = FALSE, full = TRUE)
+      Sys.sleep(0.1)
+    }
     
-    # Show progress dialog
+    # Show progress dialog with more detailed steps
     withProgress(message = 'Running simulations...', value = 0, {
-      # Run the simulations
-      setProgress(0.1, detail = "Initializing simulation...")
+      # Update progress
+      setProgress(0.05, detail = "Initializing simulation...")
       
+      # Run the simulations with console output
       simulation_results <- run_efficient_simulation(rv$processed_data, n_sims = input$n_sims)
       
       # Store results - KEEP SimID! (Don't remove it here)
+      setProgress(0.6, detail = "Storing simulation results...")
       rv$simulation_results <- simulation_results$results
-      
-      # DON'T remove SimID here - we need it for optimal lineups!
-      # Only remove truly temporary analysis columns if they exist
-      temp_columns_to_remove <- c("DKDominatorRank", "FDDominatorRank")
-      for (col in temp_columns_to_remove) {
-        if (col %in% names(rv$simulation_results)) {
-          rv$simulation_results[[col]] <- NULL
-        }
-      }
       
       # Update platform availability
       rv$has_draftkings <- "DKFantasyPoints" %in% names(rv$simulation_results)
       rv$has_fanduel <- "FDFantasyPoints" %in% names(rv$simulation_results)
       
-      # Force garbage collection
+      cat("Platform detection: DraftKings =", rv$has_draftkings, ", FanDuel =", rv$has_fanduel, "\n")
+      
+      # Force garbage collection after simulation
+      setProgress(0.65, detail = "Memory cleanup...")
       gc(verbose = FALSE, full = TRUE)
       
       # Process finish position analysis
@@ -3400,47 +3668,84 @@ server <- function(input, output, session) {
       rv$finishing_analysis <- analyze_finishing_positions(rv$simulation_results)
       
       # Process dominator points analysis for each platform
-      setProgress(0.8, detail = "Analyzing dominator points...")
       if (rv$has_draftkings) {
+        setProgress(0.75, detail = "Analyzing DraftKings dominator points...")
         rv$dk_dominator_analysis <- analyze_dk_dominator_points(rv$simulation_results)
       }
       
       if (rv$has_fanduel) {
+        setProgress(0.8, detail = "Analyzing FanDuel dominator points...")
         rv$fd_dominator_analysis <- analyze_fd_dominator_points(rv$simulation_results)
+        setProgress(0.85, detail = "Analyzing FanDuel lap points...")
         rv$fd_lap_analysis <- analyze_fd_lap_points(rv$simulation_results)
       }
       
       # Process fantasy points analysis for each platform
-      setProgress(0.9, detail = "Analyzing fantasy points...")
       if (rv$has_draftkings) {
+        setProgress(0.9, detail = "Analyzing DraftKings fantasy points...")
         rv$dk_fantasy_analysis <- analyze_dk_fantasy_points(rv$simulation_results)
       }
       
       if (rv$has_fanduel) {
+        setProgress(0.95, detail = "Analyzing FanDuel fantasy points...")
         rv$fd_fantasy_analysis <- analyze_fd_fantasy_points(rv$simulation_results)
       }
       
       # Mark simulation as complete
+      setProgress(0.98, detail = "Finalizing...")
       rv$simulation_complete <- TRUE
       
-      cat("Simulation completed successfully with", nrow(rv$simulation_results), "total results\n")
-      # REMOVED: cat("SimID column preserved for optimal lineup calculation\n")
+      # Final cleanup
+      setProgress(1.0, detail = "Complete!")
+      gc(verbose = FALSE, full = TRUE)
       
-      # Switch to finish analysis tab
-      updateTabItems(session, "sidebar_menu", selected = "upload")
-      
-      # Show success message
-      showModal(
-        modalDialog(
-          title = "Success",
-          "Simulation completed successfully! Review the accuracy analysis and projections or move to optimal lineup creation.",
-          easyClose = TRUE
+      cat("=== SIMULATION ANALYSIS COMPLETE ===\n")
+      cat("Ready for optimal lineup calculation\n")
+      cat("=====================================\n")
+    })
+    
+    # Switch to upload tab to show accuracy analysis
+    updateTabItems(session, "sidebar_menu", selected = "upload")
+    
+    # Show success message with performance info
+    n_total_results <- nrow(rv$simulation_results)
+    n_drivers <- length(unique(rv$simulation_results$Name))
+    
+    showModal(
+      modalDialog(
+        title = "Simulation Complete!",
+        HTML(sprintf(
+          "<h4>Simulation Results:</h4>
+        <ul>
+        <li><strong>Total Results:</strong> %s</li>
+        <li><strong>Drivers:</strong> %d</li>
+        <li><strong>Simulations:</strong> %s</li>
+        <li><strong>Platforms:</strong> %s</li>
+        </ul>
+        <p>✅ Review the accuracy analysis and projections</p>
+        <p>✅ Then move to optimal lineup creation</p>
+        <hr>
+        <small><em>Note: Large datasets (50k+ sims) use sampling for analysis performance while maintaining accuracy.</em></small>",
+          format(n_total_results, big.mark = ","),
+          n_drivers,
+          format(input$n_sims, big.mark = ","),
+          paste(c(
+            if(rv$has_draftkings) "DraftKings" else NULL,
+            if(rv$has_fanduel) "FanDuel" else NULL
+          ), collapse = " & ")
+        )),
+        easyClose = TRUE,
+        footer = tagList(
+          modalButton("Continue"),
+          actionButton("go_to_finish_analysis", "View Results", class = "btn-primary")
         )
       )
-      
-      # Final cleanup
-      gc(verbose = FALSE, full = TRUE)
-    })
+    )
+  })
+  
+  observeEvent(input$go_to_finish_analysis, {
+    removeModal()
+    updateTabItems(session, "sidebar_menu", selected = "finish_analysis")
   })
   
   
@@ -4006,8 +4311,26 @@ server <- function(input, output, session) {
   output$position_box <- renderPlotly({
     req(rv$simulation_results)
     
+    n_total_results <- nrow(rv$simulation_results)
+    n_drivers <- length(unique(rv$simulation_results$Name))
+    n_sims <- n_total_results / n_drivers
+    
+    cat("Creating position boxplot:", n_drivers, "drivers,", n_sims, "simulations\n")
+    
+    # Sample data if too large for responsive plotting
+    plot_data <- rv$simulation_results
+    max_plot_points <- 50000  # Maximum points for responsive plotting
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for plotting (", 
+          round(sample_size/n_total_results*100, 1), "%)\n")
+    }
+    
     # Get all unique drivers and starting positions
-    drivers_info <- unique(rv$simulation_results[, c("Name", "Starting")])
+    drivers_info <- unique(plot_data[, c("Name", "Starting")])
     
     # Order by starting position
     drivers_info <- drivers_info[order(drivers_info$Starting), ]
@@ -4016,7 +4339,7 @@ server <- function(input, output, session) {
     ordered_drivers <- drivers_info$Name
     
     # Plot with all drivers, ordered by starting position
-    p <- ggplot(rv$simulation_results,
+    p <- ggplot(plot_data,
                 aes(
                   x = factor(Name, levels = ordered_drivers),
                   y = FinishPosition,
@@ -4025,7 +4348,8 @@ server <- function(input, output, session) {
       geom_boxplot(
         alpha = 0.7,
         outlier.color = "red",
-        outlier.size = 2
+        outlier.size = 1,
+        outlier.alpha = 0.5
       ) +
       coord_flip() +
       theme_minimal() +
@@ -4040,7 +4364,12 @@ server <- function(input, output, session) {
         ),
         legend.position = "none"  # Hide legend to reduce clutter
       ) +
-      labs(x = "Driver", y = "Finish Position", title = NULL)
+      labs(x = "Driver", y = "Finish Position", 
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           })
     
     ggplotly(p, height = 1000) %>%
       layout(
@@ -4155,8 +4484,22 @@ server <- function(input, output, session) {
       return(plotly_empty() %>% layout(title = "No DK dominator data available"))
     }
     
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating DK dominator distribution plot:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 50000
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for DK dominator plot\n")
+    }
+    
     # Calculate median DKDominatorPoints for each driver
-    driver_medians <- rv$simulation_results %>%
+    driver_medians <- plot_data %>%
       group_by(Name) %>%
       summarize(median_points = median(DKDominatorPoints, na.rm = TRUE), .groups = 'drop') %>%
       filter(median_points > 0)
@@ -4166,25 +4509,31 @@ server <- function(input, output, session) {
     }
     
     # Filter original data to only include drivers with median > 0
-    plot_data <- rv$simulation_results %>%
+    plot_data_filtered <- plot_data %>%
       filter(Name %in% driver_medians$Name)
     
     # Create box and whisker plot
-    p <- ggplot(plot_data,
+    p <- ggplot(plot_data_filtered,
                 aes(
                   x = reorder(Name, DKDominatorPoints, median),
                   y = DKDominatorPoints
                 )) +
-      geom_boxplot(outlier.shape = NA, fill = "lightblue") +
+      geom_boxplot(outlier.shape = NA, fill = "lightblue", alpha = 0.7) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Driver", y = "Dominator Points") +
+      labs(x = "Driver", y = "Dominator Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           }) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),
             legend.position = "none")
     
     ggplotly(p, height = 1000)
   })
   
+  # Optimized FD dominator distribution plot
   output$fd_dominator_dist <- renderPlotly({
     req(rv$simulation_results)
     
@@ -4193,8 +4542,22 @@ server <- function(input, output, session) {
       return(plotly_empty() %>% layout(title = "No FD dominator data available"))
     }
     
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating FD dominator distribution plot:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 50000
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for FD dominator plot\n")
+    }
+    
     # Calculate median FDDominatorPoints for each driver
-    driver_medians <- rv$simulation_results %>%
+    driver_medians <- plot_data %>%
       group_by(Name) %>%
       summarize(median_points = median(FDDominatorPoints, na.rm = TRUE), .groups = 'drop') %>%
       filter(median_points > 0)
@@ -4204,32 +4567,50 @@ server <- function(input, output, session) {
     }
     
     # Filter original data to only include drivers with median > 0
-    plot_data <- rv$simulation_results %>%
+    plot_data_filtered <- plot_data %>%
       filter(Name %in% driver_medians$Name)
     
     # Create box and whisker plot
-    p <- ggplot(plot_data,
+    p <- ggplot(plot_data_filtered,
                 aes(
                   x = reorder(Name, FDDominatorPoints, median),
                   y = FDDominatorPoints
                 )) +
-      geom_boxplot(outlier.shape = NA, fill = "lightgreen") +
+      geom_boxplot(outlier.shape = NA, fill = "lightgreen", alpha = 0.7) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Driver", y = "Dominator Points") +
+      labs(x = "Driver", y = "Dominator Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           }) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),
             legend.position = "none")
     
     ggplotly(p, height = 800)
   })
   
-  # DraftKings Points by Position
   output$dk_points_by_position <- renderPlotly({
     req(rv$simulation_results)
     
-    p <- ggplot(rv$simulation_results,
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating DK points by position plot:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 25000  # Smaller sample for position plots
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for DK points by position plot\n")
+    }
+    
+    p <- ggplot(plot_data,
                 aes(x = factor(FinishPosition), y = DKDominatorPoints)) +
-      geom_boxplot(fill = "lightblue", color = "darkblue") +
+      geom_boxplot(fill = "lightblue", color = "darkblue", alpha = 0.7, outlier.alpha = 0.3) +
       geom_smooth(
         method = "lm",
         color = "red",
@@ -4237,18 +4618,36 @@ server <- function(input, output, session) {
         aes(group = 1)
       ) +
       theme_minimal() +
-      labs(x = "Finish Position", y = "Dominator Points")
+      labs(x = "Finish Position", y = "Dominator Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           })
     
     ggplotly(p, height = 700)
   })
   
-  # FanDuel Points by Position
   output$fd_points_by_position <- renderPlotly({
     req(rv$simulation_results)
     
-    p <- ggplot(rv$simulation_results,
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating FD points by position plot:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 25000  # Smaller sample for position plots
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for FD points by position plot\n")
+    }
+    
+    p <- ggplot(plot_data,
                 aes(x = factor(FinishPosition), y = FDDominatorPoints)) +
-      geom_boxplot(fill = "lightblue", color = "darkblue") +
+      geom_boxplot(fill = "lightblue", color = "darkblue", alpha = 0.7, outlier.alpha = 0.3) +
       geom_smooth(
         method = "lm",
         color = "red",
@@ -4256,22 +4655,46 @@ server <- function(input, output, session) {
         aes(group = 1)
       ) +
       theme_minimal() +
-      labs(x = "Finish Position", y = "Dominator Points")
+      labs(x = "Finish Position", y = "Dominator Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           })
     
     ggplotly(p, height = 700)
   })
   
-  # FanDuel Lap Points by Position
   output$fd_lap_points_by_position <- renderPlotly({
     req(rv$simulation_results)
     
-    p <- ggplot(rv$simulation_results, aes(x = factor(FinishPosition), y = FDLapPoints)) +
-      geom_boxplot(fill = "lightgreen", color = "darkgreen") +
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating FD lap points by position plot:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 25000
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for FD lap points plot\n")
+    }
+    
+    p <- ggplot(plot_data, aes(x = factor(FinishPosition), y = FDLapPoints)) +
+      geom_boxplot(fill = "lightgreen", color = "darkgreen", alpha = 0.7, outlier.alpha = 0.3) +
       theme_minimal() +
-      labs(x = "Finish Position", y = "Lap Points")
+      labs(x = "Finish Position", y = "Lap Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           })
     
     ggplotly(p)
   })
+
   
   # DraftKings Fantasy Projections
   output$dk_fantasy_projections <- renderDT({
@@ -4405,12 +4828,25 @@ server <- function(input, output, session) {
              hovermode = "closest")
   })
   
-  # DraftKings Fantasy Points Distribution
   output$dk_fantasy_points_dist <- renderPlotly({
     req(rv$simulation_results)
     
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating DK fantasy points distribution:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 50000
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for DK fantasy points plot\n")
+    }
+    
     # Get unique driver salary info
-    driver_salaries <- rv$simulation_results %>%
+    driver_salaries <- plot_data %>%
       distinct(Name, DKSalary)
     
     # Order driver names by ascending DKSalary
@@ -4418,52 +4854,77 @@ server <- function(input, output, session) {
       arrange(DKSalary) %>%
       pull(Name)
     
-    plot_data <- rv$simulation_results %>%
+    plot_data_filtered <- plot_data %>%
       filter(Name %in% ordered_names)
     
-    p <- ggplot(plot_data, aes(
+    p <- ggplot(plot_data_filtered, aes(
       x = factor(Name, levels = ordered_names),
       y = DKFantasyPoints,
       fill = Name
     )) +
-      geom_boxplot(outlier.alpha = 0.25) +
+      geom_boxplot(outlier.alpha = 0.25, alpha = 0.7) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Driver", y = "Fantasy Points") +
+      labs(x = "Driver", y = "Fantasy Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           }) +
       theme(legend.position = "none")  # Hide legend to avoid clutter
     
     ggplotly(p, height = 700, tooltip = c("x", "y"))
   })
   
-  # FanDuel Fantasy Points Distribution
+  # Optimized FD fantasy points distribution
   output$fd_fantasy_points_dist <- renderPlotly({
     req(rv$simulation_results)
     
+    n_total_results <- nrow(rv$simulation_results)
+    cat("Creating FD fantasy points distribution:", n_total_results, "total results\n")
+    
+    # Sample data for plotting if too large
+    max_plot_points <- 50000
+    plot_data <- rv$simulation_results
+    
+    if (n_total_results > max_plot_points) {
+      sample_size <- max_plot_points
+      sample_indices <- sample(n_total_results, sample_size)
+      plot_data <- rv$simulation_results[sample_indices]
+      cat("Sampling", sample_size, "results for FD fantasy points plot\n")
+    }
+    
     # Get unique driver salary info
-    driver_salaries <- rv$simulation_results %>%
+    driver_salaries <- plot_data %>%
       distinct(Name, FDSalary)
     
-    # Order driver names by ascending DKSalary
+    # Order driver names by ascending FDSalary
     ordered_names <- driver_salaries %>%
       arrange(FDSalary) %>%
       pull(Name)
     
-    plot_data <- rv$simulation_results %>%
+    plot_data_filtered <- plot_data %>%
       filter(Name %in% ordered_names)
     
-    p <- ggplot(plot_data, aes(
+    p <- ggplot(plot_data_filtered, aes(
       x = factor(Name, levels = ordered_names),
       y = FDFantasyPoints,
       fill = Name
     )) +
-      geom_boxplot(outlier.alpha = 0.25) +
+      geom_boxplot(outlier.alpha = 0.25, alpha = 0.7) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Driver", y = "Fantasy Points") +
+      labs(x = "Driver", y = "Fantasy Points",
+           title = if(n_total_results > max_plot_points) {
+             paste("Sample of", sample_size, "results")
+           } else {
+             NULL
+           }) +
       theme(legend.position = "none")  # Hide legend to avoid clutter
     
     ggplotly(p, height = 700, tooltip = c("x", "y"))
   })
+  
   
   
   # Calculate DraftKings optimal lineup
@@ -5025,8 +5486,7 @@ server <- function(input, output, session) {
     
     dt
   })
-  
-  # DraftKings filtered pool stats
+
   output$dk_filtered_pool_size <- renderText({
     req(rv$dk_optimal_lineups)
     
@@ -5039,6 +5499,10 @@ server <- function(input, output, session) {
       max_cumulative_ownership = input$dk_ownership_range[2],
       min_geometric_mean = input$dk_geometric_range[1],
       max_geometric_mean = input$dk_geometric_range[2],
+      min_cumulative_starting = input$dk_starting_range[1],        # FIXED: Added
+      max_cumulative_starting = input$dk_starting_range[2],        # FIXED: Added
+      min_geometric_starting = input$dk_starting_geo_range[1],     # FIXED: Added
+      max_geometric_starting = input$dk_starting_geo_range[2],     # FIXED: Added
       excluded_drivers = input$dk_excluded_drivers
     )
     
@@ -5046,7 +5510,7 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  
+  # REPLACE the fd_filtered_pool_size output with this FIXED version
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
@@ -5059,6 +5523,10 @@ server <- function(input, output, session) {
       max_cumulative_ownership = input$fd_ownership_range[2],
       min_geometric_mean = input$fd_geometric_range[1],
       max_geometric_mean = input$fd_geometric_range[2],
+      min_cumulative_starting = input$fd_starting_range[1],        # FIXED: Added
+      max_cumulative_starting = input$fd_starting_range[2],        # FIXED: Added
+      min_geometric_starting = input$fd_starting_geo_range[1],     # FIXED: Added
+      max_geometric_starting = input$fd_starting_geo_range[2],     # FIXED: Added
       excluded_drivers = input$fd_excluded_drivers
     )
     
@@ -5324,179 +5792,8 @@ server <- function(input, output, session) {
     })
   })
   
-  observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-      
-      # Set flag to prevent filter observers from firing
-      rv$updating_sliders <- TRUE
-      
-      # Update Top Count inputs to default to 0 (no minimum requirement)
-      updateNumericInput(session, "dk_min_top1_count", value = 0)
-      updateNumericInput(session, "dk_min_top2_count", value = 0)
-      updateNumericInput(session, "dk_min_top3_count", value = 0)
-      updateNumericInput(session, "dk_min_top5_count", value = 0)
-      
-      # Update ownership slider based on actual data range
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "dk_ownership_range",
-            min = min_own,           # Set min limit to actual minimum
-            max = max_own,           # Set max limit to actual maximum  
-            value = c(min_own, max_own),  # Set initial values to full range
-            step = 1
-          )
-        }
-      }
-      
-      # Update geometric mean slider based on actual data range
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "dk_geometric_range",
-            min = min_geo,           # Set min limit to actual minimum
-            max = max_geo,           # Set max limit to actual maximum
-            value = c(min_geo, max_geo),  # Set initial values to full range
-            step = 0.1
-          )
-        }
-      }
-      
-      if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-        starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-        starting_values <- starting_values[!is.na(starting_values)]
-        
-        if (length(starting_values) > 0) {
-          min_start <- floor(min(starting_values))
-          max_start <- ceiling(max(starting_values))
-          
-          updateSliderInput(session, "dk_starting_range",
-                            min = min_start, max = max_start, value = c(min_start, max_start), step = 1)
-        }
-      }
-      
-      if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-        geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-        geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-        
-        if (length(geo_starting_values) > 0) {
-          min_geo_start <- floor(min(geo_starting_values) * 10) / 10  # Round to 1 decimal
-          max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-          
-          updateSliderInput(session, "dk_starting_geo_range",
-                            min = min_geo_start, max = max_geo_start, 
-                            value = c(min_geo_start, max_geo_start), step = 0.1)
-        }
-      }
-      
-      # Reset flag after a brief delay
-      invalidateLater(500, session)
-      rv$updating_sliders <- FALSE
-    }
-  }, once = TRUE)
-  
-  # Also update the FanDuel initialization similarly:
-  observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
-      
-      # Set flag to prevent filter observers from firing
-      rv$updating_sliders <- TRUE
-      
-      # Update Top Count inputs to default to 0 (no minimum requirement)
-      updateNumericInput(session, "fd_min_top1_count", value = 0)
-      updateNumericInput(session, "fd_min_top2_count", value = 0)
-      updateNumericInput(session, "fd_min_top3_count", value = 0)
-      updateNumericInput(session, "fd_min_top5_count", value = 0)
-      
-      # Update ownership slider based on actual data range
-      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "fd_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own),
-            step = 1
-          )
-        }
-      }
-      
-      # Update geometric mean slider based on actual data range
-      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-        geometric_values <- rv$fd_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "fd_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo),
-            step = 0.1
-          )
-        }
-      }
-      
-      if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-        starting_values <- rv$fd_optimal_lineups$CumulativeStarting
-        starting_values <- starting_values[!is.na(starting_values)]
-        
-        if (length(starting_values) > 0) {
-          min_start <- floor(min(starting_values))
-          max_start <- ceiling(max(starting_values))
-          
-          updateSliderInput(session, "fd_starting_range",
-                            min = min_start, max = max_start, value = c(min_start, max_start), step = 1)
-        }
-      }
-      
-      if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-        geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
-        geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-        
-        if (length(geo_starting_values) > 0) {
-          min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-          max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-          
-          updateSliderInput(session, "fd_starting_geo_range",
-                            min = min_geo_start, max = max_geo_start, 
-                            value = c(min_geo_start, max_geo_start), step = 0.1)
-        }
-      }
-      
-      # Reset flag after a brief delay
-      invalidateLater(500, session)
-      rv$updating_sliders <- FALSE
-    }
-  }, once = TRUE)
-  
-  
-  # Update UI elements when visiting lineup builder tab
+
+  # REPLACE your existing tab observer (around line 3800) with this FIXED version
   observe({
     if(input$sidebar_menu == "lineup_builder") {
       
@@ -5519,58 +5816,61 @@ server <- function(input, output, session) {
           )
         }
         
-        # Update sliders based on actual data ranges
-        if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
+        # ONLY update sliders if they haven't been user-modified
+        if (!isTRUE(rv$user_modified_sliders$dk)) {
+          # Update sliders based on actual data ranges
+          if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+            ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
+            ownership_values <- ownership_values[!is.na(ownership_values)]
             
-            updateSliderInput(session, "dk_ownership_range",
-                              min = min_own, max = max_own, value = c(min_own, max_own))
+            if (length(ownership_values) > 0) {
+              min_own <- floor(min(ownership_values))
+              max_own <- ceiling(max(ownership_values))
+              
+              updateSliderInput(session, "dk_ownership_range",
+                                min = min_own, max = max_own, value = c(min_own, max_own))
+            }
           }
-        }
-        
-        if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
           
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
+          if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+            geometric_values <- rv$dk_optimal_lineups$GeometricMean
+            geometric_values <- geometric_values[!is.na(geometric_values)]
             
-            updateSliderInput(session, "dk_geometric_range",
-                              min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            if (length(geometric_values) > 0) {
+              min_geo <- floor(min(geometric_values))
+              max_geo <- ceiling(max(geometric_values))
+              
+              updateSliderInput(session, "dk_geometric_range",
+                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            }
           }
-        }
-        
-        # NEW: Update starting position sliders
-        if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-          starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-          starting_values <- starting_values[!is.na(starting_values)]
           
-          if (length(starting_values) > 0) {
-            min_start <- floor(min(starting_values))
-            max_start <- ceiling(max(starting_values))
+          # NEW: Update starting position sliders
+          if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
+            starting_values <- rv$dk_optimal_lineups$CumulativeStarting
+            starting_values <- starting_values[!is.na(starting_values)]
             
-            updateSliderInput(session, "dk_starting_range",
-                              min = min_start, max = max_start, value = c(min_start, max_start))
+            if (length(starting_values) > 0) {
+              min_start <- floor(min(starting_values))
+              max_start <- ceiling(max(starting_values))
+              
+              updateSliderInput(session, "dk_starting_range",
+                                min = min_start, max = max_start, value = c(min_start, max_start))
+            }
           }
-        }
-        
-        if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-          geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-          geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
           
-          if (length(geo_starting_values) > 0) {
-            min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-            max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+          if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
+            geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
+            geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
             
-            updateSliderInput(session, "dk_starting_geo_range",
-                              min = min_geo_start, max = max_geo_start, 
-                              value = c(min_geo_start, max_geo_start))
+            if (length(geo_starting_values) > 0) {
+              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+              
+              updateSliderInput(session, "dk_starting_geo_range",
+                                min = min_geo_start, max = max_geo_start, 
+                                value = c(min_geo_start, max_geo_start))
+            }
           }
         }
       }
@@ -5594,217 +5894,174 @@ server <- function(input, output, session) {
           )
         }
         
-        # Update sliders based on actual data ranges
-        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+        # ONLY update sliders if they haven't been user-modified
+        if (!isTRUE(rv$user_modified_sliders$fd)) {
+          # Update sliders based on actual data ranges
+          if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+            ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+            ownership_values <- ownership_values[!is.na(ownership_values)]
+            
+            if (length(ownership_values) > 0) {
+              min_own <- floor(min(ownership_values))
+              max_own <- ceiling(max(ownership_values))
+              
+              updateSliderInput(session, "fd_ownership_range",
+                                min = min_own, max = max_own, value = c(min_own, max_own))
+            }
+          }
+          
+          if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+            geometric_values <- rv$fd_optimal_lineups$GeometricMean
+            geometric_values <- geometric_values[!is.na(geometric_values)]
+            
+            if (length(geometric_values) > 0) {
+              min_geo <- floor(min(geometric_values))
+              max_geo <- ceiling(max(geometric_values))
+              
+              updateSliderInput(session, "fd_geometric_range",
+                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            }
+          }
+          
+          # NEW: Update starting position sliders for FanDuel
+          if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
+            starting_values <- rv$fd_optimal_lineups$CumulativeStarting
+            starting_values <- starting_values[!is.na(starting_values)]
+            
+            if (length(starting_values) > 0) {
+              min_start <- floor(min(starting_values))
+              max_start <- ceiling(max(starting_values))
+              
+              updateSliderInput(session, "fd_starting_range",
+                                min = min_start, max = max_start, value = c(min_start, max_start))
+            }
+          }
+          
+          if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
+            geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
+            geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
+            
+            if (length(geo_starting_values) > 0) {
+              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+              
+              updateSliderInput(session, "fd_starting_geo_range",
+                                min = min_geo_start, max = max_geo_start, 
+                                value = c(min_geo_start, max_geo_start))
+            }
+          }
+        }
+      }
+    }
+  })
+
+  
+  # REPLACE your existing DraftKings slider initialization with this FIXED version
+  observeEvent(rv$dk_optimal_lineups, {
+    if (!is.null(rv$dk_optimal_lineups) && 
+        nrow(rv$dk_optimal_lineups) > 0 && 
+        !isTRUE(rv$sliders_initialized$dk)) {
+      
+      cat("Initializing DraftKings sliders...\n")
+      
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
+      
+      # Use isolate to prevent any reactive dependencies during initialization
+      isolate({
+        # Update Top Count inputs to default to 0
+        updateNumericInput(session, "dk_min_top1_count", value = 0)
+        updateNumericInput(session, "dk_min_top2_count", value = 0)
+        updateNumericInput(session, "dk_min_top3_count", value = 0)
+        updateNumericInput(session, "dk_min_top5_count", value = 0)
+        
+        # Update ownership slider based on actual data range - ONLY if not user-modified
+        if (!isTRUE(rv$user_modified_sliders$dk) && "CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
           ownership_values <- ownership_values[!is.na(ownership_values)]
           
           if (length(ownership_values) > 0) {
             min_own <- floor(min(ownership_values))
             max_own <- ceiling(max(ownership_values))
             
-            updateSliderInput(session, "fd_ownership_range",
-                              min = min_own, max = max_own, value = c(min_own, max_own))
+            cat("DK Ownership range:", min_own, "to", max_own, "\n")
+            
+            updateSliderInput(
+              session,
+              "dk_ownership_range",
+              min = min_own,
+              max = max_own,
+              value = c(min_own, max_own),
+              step = 1
+            )
           }
         }
         
-        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          geometric_values <- rv$fd_optimal_lineups$GeometricMean
+        # Update geometric mean slider based on actual data range - ONLY if not user-modified
+        if (!isTRUE(rv$user_modified_sliders$dk) && "GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+          geometric_values <- rv$dk_optimal_lineups$GeometricMean
           geometric_values <- geometric_values[!is.na(geometric_values)]
           
           if (length(geometric_values) > 0) {
             min_geo <- floor(min(geometric_values))
             max_geo <- ceiling(max(geometric_values))
             
-            updateSliderInput(session, "fd_geometric_range",
-                              min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            cat("DK Geometric range:", min_geo, "to", max_geo, "\n")
+            
+            updateSliderInput(
+              session,
+              "dk_geometric_range",
+              min = min_geo,
+              max = max_geo,
+              value = c(min_geo, max_geo),
+              step = 0.1
+            )
           }
         }
         
-        # NEW: Update starting position sliders for FanDuel
-        if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-          starting_values <- rv$fd_optimal_lineups$CumulativeStarting
+        # Update starting position sliders - ONLY if not user-modified
+        if (!isTRUE(rv$user_modified_sliders$dk) && "CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
+          starting_values <- rv$dk_optimal_lineups$CumulativeStarting
           starting_values <- starting_values[!is.na(starting_values)]
           
           if (length(starting_values) > 0) {
             min_start <- floor(min(starting_values))
             max_start <- ceiling(max(starting_values))
             
-            updateSliderInput(session, "fd_starting_range",
-                              min = min_start, max = max_start, value = c(min_start, max_start))
+            updateSliderInput(session, "dk_starting_range",
+                              min = min_start, max = max_start, 
+                              value = c(min_start, max_start), step = 1)
           }
         }
         
-        if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-          geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
+        if (!isTRUE(rv$user_modified_sliders$dk) && "GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
+          geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
           geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
           
           if (length(geo_starting_values) > 0) {
             min_geo_start <- floor(min(geo_starting_values) * 10) / 10
             max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
             
-            updateSliderInput(session, "fd_starting_geo_range",
+            updateSliderInput(session, "dk_starting_geo_range",
                               min = min_geo_start, max = max_geo_start, 
-                              value = c(min_geo_start, max_geo_start))
+                              value = c(min_geo_start, max_geo_start), step = 0.1)
           }
         }
-      }
-    }
-  })
-  
-  
-  observeEvent(rv$dk_optimal_lineups, {
-
-
-    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-      rv$updating_sliders <- TRUE
+      })
       
-      # Update Top Count inputs to default to 0
-      updateNumericInput(session, "dk_min_top1_count", value = 0)
-      updateNumericInput(session, "dk_min_top2_count", value = 0)
-      updateNumericInput(session, "dk_min_top3_count", value = 0)
-      updateNumericInput(session, "dk_min_top5_count", value = 0)
-      
-      # Update ownership slider based on actual data range
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          
-          updateSliderInput(
-            session,
-            "dk_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own),
-            step = 1
-          )
+      # FIXED: Use a longer delay to ensure all updates complete before resetting flags
+      observe({
+        invalidateLater(1000, session)  # Wait 1 second instead of immediate
+        if (isTRUE(rv$updating_sliders)) {  # Only reset if still updating
+          rv$sliders_initialized$dk <- TRUE
+          rv$updating_sliders <- FALSE
+          # Don't reset user_modified_sliders here - let it stay TRUE if user changed something
+          cat("DraftKings sliders initialization complete\n")
         }
-      }
-      
-      # Update geometric mean ownership slider
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          
-          updateSliderInput(
-            session,
-            "dk_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo),
-            step = 0.1
-          )
-        }
-      }
-      
-      # NEW: Update starting position sliders
-      if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-        starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-        starting_values <- starting_values[!is.na(starting_values)]
-        
-        if (length(starting_values) > 0) {
-          min_start <- floor(min(starting_values))
-          max_start <- ceiling(max(starting_values))
-   
-          updateSliderInput(
-            session,
-            "dk_starting_range",
-            min = min_start,
-            max = max_start,
-            value = c(min_start, max_start),
-            step = 1
-          )
-        }
-      }
-      
-      if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-        geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-        geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-        
-        if (length(geo_starting_values) > 0) {
-          min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-          max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-          
-          updateSliderInput(
-            session,
-            "dk_starting_geo_range",
-            min = min_geo_start,
-            max = max_geo_start,
-            value = c(min_geo_start, max_geo_start),
-            step = 0.1
-          )
-        }
-      }
-      
-      # Reset flag after a brief delay
-      invalidateLater(500, session)
-      rv$updating_sliders <- FALSE
-      cat("Finished updating sliders\n")
+      })
     }
   }, once = TRUE)
 
-  
-   
-  # FanDuel slider initialization - only when data first becomes available  
-  observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
-      
-      # Set flag to prevent filter observers from firing
-      rv$updating_sliders <- TRUE
-      
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "fd_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
-        }
-      }
-      
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-        geometric_values <- rv$fd_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "fd_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
-        }
-      }
-      
-      # Reset flag after a brief delay
-      invalidateLater(500, session)
-      rv$updating_sliders <- FALSE
-    }
-  }, once = TRUE)
   
   # Generate random FanDuel lineups
   observeEvent(input$generate_fd_lineups, {
@@ -6737,6 +6994,25 @@ server <- function(input, output, session) {
       write.csv(enhanced_results, file, row.names = FALSE)
     }
   )
+  
+  
+  observe({
+    invalidateLater(240000, session)  # Every 4 minutes
+    
+    # Only run cleanup if we have simulation data and it's been a while
+    if (!is.null(rv$simulation_results) && nrow(rv$simulation_results) > 10000) {
+      cleanup_memory(verbose = FALSE)
+      
+      # Log memory status periodically for large datasets
+      if (nrow(rv$simulation_results) > 100000) {
+        mem_info <- gc(verbose = FALSE)
+        total_used <- sum(mem_info[,2])
+        if (total_used > 1000) {  # Only log if using > 1GB
+          cat("Periodic memory check - Total used:", round(total_used, 0), "MB\n")
+        }
+      }
+    }
+  })
   
   
 }
