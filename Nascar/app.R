@@ -13,7 +13,7 @@ library(shinycssloaders)
 library(shinyjs)
 library(foreach)
 
-# Set up custom CSS for black and orange theme
+
 custom_css <- "
   /* Override dashboard header colors */
   .skin-blue .main-header {
@@ -21,7 +21,7 @@ custom_css <- "
   }
   .skin-blue .main-header .logo {
     background-color: #000000;
-    color: #ff6600;
+    color: #FFD700; /* Changed from #FFD700 to #FFD700 */
   }
   .skin-blue .main-header .logo:hover {
     background-color: #000000;
@@ -35,35 +35,71 @@ custom_css <- "
     background-color: #222222;
   }
   .skin-blue .sidebar a {
-    color: #ff6600;
+    color: #FFD700; /* Changed from #FFD700 to #FFD700 */
   }
   .skin-blue .sidebar-menu > li.active > a,
   .skin-blue .sidebar-menu > li:hover > a {
     color: #ffffff;
     background: #333333;
-    border-left-color: #ff6600;
+    border-left-color: #FFD700; /* Changed from #FFD700 to #FFD700 */
   }
 
   /* Customize box headers */
   .box.box-primary .box-header {
     background-color: #333333;
-    color: #ff6600;
+    color: #FFD700; /* Changed from #FFD700 to #FFD700 */
   }
 
   /* Style buttons */
   .btn-primary {
-    background-color: #ff6600;
-    border-color: #e65c00;
-    color: #ffffff;
+    background-color: #FFD700; /* Changed from #FFD700 to #FFD700 */
+    border-color: #DAA520; /* Changed from #e65c00 to #DAA520 (darker gold) */
+    color: #000000; /* Changed text color to black for better contrast on gold */
   }
   .btn-primary:hover, .btn-primary:focus {
-    background-color: #e65c00;
-    border-color: #cc5200;
+    background-color: #DAA520; /* Changed from #e65c00 to #DAA520 */
+    border-color: #B8860B; /* Changed from #cc5200 to #B8860B (darkgoldenrod) */
+    color: #000000; /* Keep text black for contrast */
   }
 
   /* Style tabs */
   .nav-tabs-custom > .nav-tabs > li.active {
-    border-top-color: #ff6600;
+    border-top-color: #FFD700; /* Changed from #FFD700 to #FFD700 */
+  }
+  
+  /* Additional styles for gold accents */
+  .pagination > .active > a, 
+  .pagination > .active > span, 
+  .pagination > .active > a:hover, 
+  .pagination > .active > span:hover, 
+  .pagination > .active > a:focus, 
+  .pagination > .active > span:focus {
+    background-color: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for sliders and other inputs */
+  .irs-bar,
+  .irs-bar-edge,
+  .irs-single,
+  .irs-from,
+  .irs-to {
+    background: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for checkboxes and radio buttons */
+  input[type='checkbox']:checked, 
+  input[type='radio']:checked {
+    background-color: #FFD700;
+    border-color: #DAA520;
+  }
+  
+  /* Style loader spinners */
+  .shiny-spinner .load-container .loader {
+    border-top-color: #FFD700;
   }
 "
 
@@ -2555,7 +2591,11 @@ ui <- dashboardPage(
   # Dashboard sidebar
   dashboardSidebar(
     useShinyjs(),
-    div(style = "text-align: center; padding: 10px;"),
+    div(
+      style = "text-align: center; padding: 10px; margin-bottom: 5px;",
+      tags$img(src = "logo.jpg", height = "200px", width = "auto", 
+               style = "border: 2px solid #FFD700; border-radius: 10px;")
+    ),
     br(),
     sidebarMenu(
       id = "sidebar_menu",
@@ -2630,14 +2670,14 @@ ui <- dashboardPage(
           box(
             width = 12,
             title = "Simulated Finishing Results",
-            DTOutput("driver_stats") %>% withSpinner(color = "#ff6600")
+            DTOutput("driver_stats") %>% withSpinner(color = "#FFD700")
           )
         ), 
         fluidRow(
           box(
             width = 12,
             title = "Finish Position Boxplot",
-            plotlyOutput("position_box", height = "1000px") %>% withSpinner(color = "#ff6600")
+            plotlyOutput("position_box", height = "1000px") %>% withSpinner(color = "#FFD700")
           )
         )
       ),
@@ -2950,7 +2990,7 @@ ui <- dashboardPage(
                 style = "text-align: right; margin-bottom: 10px;",
                 downloadButton('download_dk_h2h_complete', 'Download Complete H2H Results')
               ),
-              DTOutput("dk_h2h_top10") %>% withSpinner(color = "#ff6600")
+              DTOutput("dk_h2h_top10") %>% withSpinner(color = "#FFD700")
             )
           ), 
           fluidRow(
@@ -2964,7 +3004,7 @@ ui <- dashboardPage(
                   'Download Complete Single Entry Results'
                 )
               ),
-              DTOutput("dk_group_top25") %>% withSpinner(color = "#ff6600")
+              DTOutput("dk_group_top25") %>% withSpinner(color = "#FFD700")
             )
           )
         )
@@ -3411,7 +3451,7 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "Simulation Accuracy Analysis",
-          DTOutput("accuracy_analysis") %>% withSpinner(color = "#ff6600"),
+          DTOutput("accuracy_analysis") %>% withSpinner(color = "#FFD700"),
           downloadButton('downloadAccuracy', 'Download Accuracy Analysis')
         )
       ))
@@ -3421,7 +3461,7 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "Input Data",
-          DTOutput("data_preview") %>% withSpinner(color = "#ff6600")
+          DTOutput("data_preview") %>% withSpinner(color = "#FFD700")
         )
       ), uiOutput("available_platforms"))
     }
@@ -3587,7 +3627,7 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "DraftKings Dominator Points Analysis",
-              DTOutput("dk_dominator_stats") %>% withSpinner(color = "#ff6600")
+              DTOutput("dk_dominator_stats") %>% withSpinner(color = "#FFD700")
             )
           ),
           
@@ -3595,14 +3635,14 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "DraftKings Dominator Points Distribution",
-              plotlyOutput("dk_dominator_dist", height = "1000px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("dk_dominator_dist", height = "1000px") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "DraftKings Dominator Points by Position",
-              plotlyOutput("dk_points_by_position", height = "700px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("dk_points_by_position", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           )
         ),
@@ -3612,28 +3652,28 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "FanDuel Dominator Points Analysis",
-              DTOutput("fd_dominator_stats") %>% withSpinner(color = "#ff6600")
+              DTOutput("fd_dominator_stats") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "FanDuel Dominator Points Distribution",
-              plotlyOutput("fd_dominator_dist", height = "800px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("fd_dominator_dist", height = "800px") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "FanDuel Dominator Points by Position",
-              plotlyOutput("fd_points_by_position", height = "700px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("fd_points_by_position", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "FanDuel Lap Points by Position",
-              plotlyOutput("fd_lap_points_by_position") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("fd_lap_points_by_position") %>% withSpinner(color = "#FFD700")
             )
           )
         )
@@ -3644,19 +3684,19 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "DraftKings Dominator Points Analysis",
-          DTOutput("dk_dominator_stats") %>% withSpinner(color = "#ff6600")
+          DTOutput("dk_dominator_stats") %>% withSpinner(color = "#FFD700")
         )
       ), fluidRow(
         box(
           width = 12,
           title = "DraftKings Dominator Points Distribution",
-          plotlyOutput("dk_dominator_dist", height = "1000px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("dk_dominator_dist", height = "1000px") %>% withSpinner(color = "#FFD700")
         )
       ), fluidRow(
         box(
           width = 12,
           title = "DraftKings Dominator Points by Position",
-          plotlyOutput("dk_points_by_position", height = "700px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("dk_points_by_position", height = "700px") %>% withSpinner(color = "#FFD700")
         )
       ))
     } else {
@@ -3688,7 +3728,7 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "DraftKings Fantasy Point Projections",
-              DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#ff6600"),
+              DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#FFD700"),
               downloadButton(
                 'download_dk_fantasy_projections',
                 'Download Projections'
@@ -3699,14 +3739,14 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "DraftKings Fantasy Points vs Salary",
-              plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "DraftKings Fantasy Points Distribution",
-              plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           )
         ),
@@ -3716,7 +3756,7 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "FanDuel Fantasy Point Projections",
-              DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#ff6600"),
+              DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#FFD700"),
               downloadButton(
                 'download_fd_fantasy_projections',
                 'Download Projections'
@@ -3727,14 +3767,14 @@ server <- function(input, output, session) {
             box(
               width = 12,
               title = "FanDuel Fantasy Points vs Salary",
-              plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
             )
           ),
           fluidRow(
             box(
               width = 12,
               title = "FanDuel Fantasy Points Distribution",
-              plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff6600")
+              plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           )
         )
@@ -3745,7 +3785,7 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "DraftKings Fantasy Point Projections",
-          DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#ff6600"),
+          DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#FFD700"),
           downloadButton(
             'download_dk_fantasy_projections',
             'Download Projections'
@@ -3755,13 +3795,13 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "DraftKings Fantasy Points vs Salary",
-          plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
         )
       ), fluidRow(
         box(
           width = 12,
           title = "DraftKings Fantasy Points Distribution",
-          plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
         )
       ))
     } else if (rv$has_fanduel) {
@@ -3770,7 +3810,7 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "FanDuel Fantasy Point Projections",
-          DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#ff6600"),
+          DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#FFD700"),
           downloadButton(
             'download_fd_fantasy_projections',
             'Download Projections'
@@ -3780,13 +3820,13 @@ server <- function(input, output, session) {
         box(
           width = 12,
           title = "FanDuel Fantasy Points vs Salary",
-          plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
         )
       ), fluidRow(
         box(
           width = 12,
           title = "FanDuel Fantasy Points Distribution",
-          plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff6600")
+          plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
         )
       ))
     } else {
@@ -3882,11 +3922,11 @@ server <- function(input, output, session) {
         ),
         fluidRow(
           box(width = 12, title = "DraftKings Driver Exposure Analysis",
-              DTOutput("dk_driver_exposure_table") %>% withSpinner(color = "#ff6600"))
+              DTOutput("dk_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
         fluidRow(
           box(width = 12, title = "Generated DraftKings Lineups",
-              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#ff6600"))
+              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       ),
       # FanDuel lineup builder UI
@@ -3952,11 +3992,11 @@ server <- function(input, output, session) {
         ),
         fluidRow(
           box(width = 12, title = "FanDuel Driver Exposure Analysis",
-              DTOutput("fd_driver_exposure_table") %>% withSpinner(color = "#ff6600"))
+              DTOutput("fd_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
         fluidRow(
           box(width = 12, title = "Generated FanDuel Lineups",
-              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#ff6600"))
+              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       )
     )
@@ -5614,16 +5654,9 @@ server <- function(input, output, session) {
   
   
   observeEvent(rv$dk_optimal_lineups, {
-    cat("*** DK OPTIMAL LINEUPS OBSERVER TRIGGERED ***\n")
-    cat("rv$dk_optimal_lineups is null:", is.null(rv$dk_optimal_lineups), "\n")
-    
-    if (!is.null(rv$dk_optimal_lineups)) {
-      cat("Number of rows:", nrow(rv$dk_optimal_lineups), "\n")
-      cat("Available columns:", paste(names(rv$dk_optimal_lineups), collapse = ", "), "\n")
-    }
-    
+
+
     if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-      cat("Setting updating_sliders to TRUE\n")
       rv$updating_sliders <- TRUE
       
       # Update Top Count inputs to default to 0
@@ -5641,8 +5674,6 @@ server <- function(input, output, session) {
           min_own <- floor(min(ownership_values))
           max_own <- ceiling(max(ownership_values))
           
-          cat("Ownership values range:", min(ownership_values), "to", max(ownership_values), "\n")
-          cat("Setting ownership slider to min:", min_own, "max:", max_own, "\n")
           
           updateSliderInput(
             session,
@@ -5652,7 +5683,6 @@ server <- function(input, output, session) {
             value = c(min_own, max_own),
             step = 1
           )
-          cat("Ownership slider update command sent\n")
         }
       }
       
@@ -5665,8 +5695,6 @@ server <- function(input, output, session) {
           min_geo <- floor(min(geometric_values))
           max_geo <- ceiling(max(geometric_values))
           
-          cat("Geometric Mean values range:", min(geometric_values), "to", max(geometric_values), "\n")
-          cat("Setting geometric slider to min:", min_geo, "max:", max_geo, "\n")
           
           updateSliderInput(
             session,
@@ -5676,7 +5704,6 @@ server <- function(input, output, session) {
             value = c(min_geo, max_geo),
             step = 0.1
           )
-          cat("Geometric slider update command sent\n")
         }
       }
       
@@ -5688,10 +5715,7 @@ server <- function(input, output, session) {
         if (length(starting_values) > 0) {
           min_start <- floor(min(starting_values))
           max_start <- ceiling(max(starting_values))
-          
-          cat("Starting values range:", min(starting_values), "to", max(starting_values), "\n")
-          cat("Setting starting slider to min:", min_start, "max:", max_start, "\n")
-          
+   
           updateSliderInput(
             session,
             "dk_starting_range",
@@ -5700,7 +5724,6 @@ server <- function(input, output, session) {
             value = c(min_start, max_start),
             step = 1
           )
-          cat("Starting slider update command sent\n")
         }
       }
       
@@ -5712,9 +5735,6 @@ server <- function(input, output, session) {
           min_geo_start <- floor(min(geo_starting_values) * 10) / 10
           max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
           
-          cat("Geometric Starting values range:", min(geo_starting_values), "to", max(geo_starting_values), "\n")
-          cat("Setting geometric starting slider to min:", min_geo_start, "max:", max_geo_start, "\n")
-          
           updateSliderInput(
             session,
             "dk_starting_geo_range",
@@ -5723,7 +5743,6 @@ server <- function(input, output, session) {
             value = c(min_geo_start, max_geo_start),
             step = 0.1
           )
-          cat("Geometric starting slider update command sent\n")
         }
       }
       
