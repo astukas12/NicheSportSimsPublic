@@ -1,5 +1,5 @@
-# NASCAR Data Explorer
-# Simplified version with just the data explorer functionality
+# NASCAR Data Explorer with Integrated Profile Builder
+# Enhanced version with profile generation functionality
 
 library(shiny)
 library(shinydashboard)
@@ -7,17 +7,171 @@ library(DT)
 library(dplyr)
 library(readr)
 library(readxl)
+library(writexl)
 library(shinycssloaders)
 library(shinyWidgets)
 library(shinyjs)
 library(openxlsx)
 
-#--------------------- Data Loading Functions ---------------------#
+#--------------------- Profile Generation Functions ---------------------#
 
-# Load main NASCAR database
+# Create dominator profiles for race data
+create_race_profile <- function(race_data, race_info) {
+  profile <- race_data %>%
+    mutate(
+      # DK Points: FL worth 0.45, LL worth 0.25  
+      DKDomPoints = (fast_laps * 0.45) + (lead_laps * 0.25),
+      
+      # FD Points: Only LL worth 0.1
+      FDDomPoints = lead_laps * 0.1
+    ) %>%
+    # Only keep drivers who scored dominator points
+    filter(DKDomPoints > 0 | FDDomPoints > 0) %>%
+    select(
+      RaceID = race_id,
+      RaceName = race_name, 
+      Season = race_season,
+      TrackName = track_name,
+      Driver = Full_Name,
+      Team = team_name,
+      StartPos = start_ps,
+      FinPos = ps,
+      LeadLaps = lead_laps,
+      FastLaps = fast_laps,
+      DKDomPoints,
+      FDDomPoints
+    ) %>%
+    arrange(desc(FDDomPoints), desc(DKDomPoints))
+  
+  return(profile)
+}
+
+# Calculate target track behavioral profile
+calculate_target_track_profile <- function(nascar_data, track_name, series_id) {
+  track_historical <- nascar_data %>%
+    filter(
+      track_name == !!track_name, 
+      series_id == !!series_id,
+      !is.na(LapsLed), !is.na(fast_laps), !is.na(start_ps), !is.na(ps)
+    )
+  
+  # Filter by race_type_id if column exists
+  if ("race_type_id" %in% names(track_historical)) {
+    track_historical <- track_historical %>% filter(race_type_id == 1)
+  }
+  
+  if (nrow(track_historical) == 0) return(NULL)
+  
+  # Group by race and calculate correlations for each race
+  race_profiles <- track_historical %>%
+    group_by(race_season, race_id) %>%
+    summarise(
+      ll_start_cor = cor(start_ps, LapsLed, use = "complete.obs"),
+      ll_finish_cor = cor(ps, LapsLed, use = "complete.obs"),
+      fl_start_cor = cor(start_ps, fast_laps, use = "complete.obs"),
+      fl_finish_cor = cor(ps, fast_laps, use = "complete.obs"),
+      ll_concentration = sum(head(sort(LapsLed, decreasing = TRUE), 3), na.rm = TRUE) / sum(LapsLed, na.rm = TRUE),
+      fl_concentration = sum(head(sort(fast_laps, decreasing = TRUE), 3), na.rm = TRUE) / sum(fast_laps, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(ll_start_cor), !is.na(ll_finish_cor))
+  
+  if (nrow(race_profiles) == 0) return(NULL)
+  
+  # Calculate average behavioral patterns
+  profile <- race_profiles %>%
+    summarise(
+      races_analyzed = n(),
+      avg_ll_start_correlation = mean(ll_start_cor, na.rm = TRUE),
+      avg_ll_finish_correlation = mean(ll_finish_cor, na.rm = TRUE),
+      avg_fl_start_correlation = mean(fl_start_cor, na.rm = TRUE),
+      avg_fl_finish_correlation = mean(fl_finish_cor, na.rm = TRUE),
+      avg_ll_concentration = mean(ll_concentration, na.rm = TRUE),
+      avg_fl_concentration = mean(fl_concentration, na.rm = TRUE)
+    )
+  
+  return(profile)
+}
+
+# Calculate behavioral similarity between historical race and target track
+calculate_behavioral_similarity <- function(race_data, target_profile) {
+  if (is.null(target_profile) || nrow(race_data) == 0) return(0)
+  
+  # Calculate this race's behavioral metrics
+  hist_ll_start_cor <- cor(race_data$start_ps, race_data$LapsLed, use = "complete.obs")
+  hist_ll_finish_cor <- cor(race_data$ps, race_data$LapsLed, use = "complete.obs")
+  hist_fl_start_cor <- cor(race_data$start_ps, race_data$fast_laps, use = "complete.obs")
+  hist_fl_finish_cor <- cor(race_data$ps, race_data$fast_laps, use = "complete.obs")
+  
+  # Calculate concentration (top-3 dominance)
+  hist_ll_concentration <- sum(head(sort(race_data$LapsLed, decreasing = TRUE), 3), na.rm = TRUE) / sum(race_data$LapsLed, na.rm = TRUE)
+  hist_fl_concentration <- sum(head(sort(race_data$fast_laps, decreasing = TRUE), 3), na.rm = TRUE) / sum(race_data$fast_laps, na.rm = TRUE)
+  
+  # Calculate similarity scores (closer = higher score)
+  ll_start_sim <- ifelse(!is.na(hist_ll_start_cor), 1 - abs(hist_ll_start_cor - target_profile$avg_ll_start_correlation), 0)
+  ll_finish_sim <- ifelse(!is.na(hist_ll_finish_cor), 1 - abs(hist_ll_finish_cor - target_profile$avg_ll_finish_correlation), 0)
+  fl_start_sim <- ifelse(!is.na(hist_fl_start_cor), 1 - abs(hist_fl_start_cor - target_profile$avg_fl_start_correlation), 0)
+  fl_finish_sim <- ifelse(!is.na(hist_fl_finish_cor), 1 - abs(hist_fl_finish_cor - target_profile$avg_fl_finish_correlation), 0)
+  ll_conc_sim <- ifelse(!is.na(hist_ll_concentration), 1 - abs(hist_ll_concentration - target_profile$avg_ll_concentration), 0)
+  fl_conc_sim <- ifelse(!is.na(hist_fl_concentration), 1 - abs(hist_fl_concentration - target_profile$avg_fl_concentration), 0)
+  
+  # Weighted behavioral score
+  behavioral_score <- (ll_start_sim * 0.15) + 
+    (ll_finish_sim * 0.10) + 
+    (fl_start_sim * 0.10) + 
+    (fl_finish_sim * 0.05) + 
+    (ll_conc_sim * 0.05) + 
+    (fl_conc_sim * 0.05)
+  
+  return(list(
+    behavioral_score = behavioral_score,
+    ll_start_cor = hist_ll_start_cor,
+    ll_finish_cor = hist_ll_finish_cor,
+    fl_start_cor = hist_fl_start_cor,
+    fl_finish_cor = hist_fl_finish_cor,
+    ll_concentration = hist_ll_concentration,
+    fl_concentration = hist_fl_concentration
+  ))
+}
+
+# Load main NASCAR database and filter by race_type_id from RaceIDs file
 load_nascar_database <- function() {
   if (file.exists("NascarDatabase.csv")) {
-    return(read_csv("NascarDatabase.csv"))
+    data <- read_csv("NascarDatabase.csv")
+    
+    # Load RaceIDs to get the race_type_id filter
+    if (file.exists("RaceIDs.xlsx")) {
+      race_ids <- read_excel("RaceIDs.xlsx")
+      
+      # Get only regular races (race_type_id = 1) from RaceIDs
+      if ("race_type_id" %in% names(race_ids)) {
+        regular_race_ids <- race_ids %>% 
+          filter(race_type_id == 1) %>% 
+          pull(race_id)
+        
+        # Filter main data to only include regular races
+        data <- data %>% filter(race_id %in% regular_race_ids)
+      }
+    }
+    
+    return(data)
+  } else {
+    return(NULL)
+  }
+}
+
+# Load race list (non-historical races, regular races only if column exists)
+load_race_list <- function() {
+  if (file.exists("RaceIDs.xlsx")) {
+    race_data <- read_excel("RaceIDs.xlsx")
+    # Filter out races marked as historical AND only include regular races (race_type_id = 1)
+    filtered_data <- race_data %>% filter(Historical == "N")
+    # Filter by race_type_id = 1 if column exists
+    if ("race_type_id" %in% names(filtered_data)) {
+      return(filtered_data %>% filter(race_type_id == 1))
+    } else {
+      return(filtered_data)
+    }
   } else {
     return(NULL)
   }
@@ -37,51 +191,57 @@ ui <- dashboardPage(
     width = 300,
     sidebarMenu(
       id = "sidebar",
-      menuItem("Data Explorer", tabName = "data_explorer", icon = icon("table"))
+      menuItem("Data Explorer", tabName = "data_explorer", icon = icon("table")),
+      menuItem("Profile Builder", tabName = "profile_builder", icon = icon("chart-line"))
     )
   ),
   
   dashboardBody(
     useShinyjs(),
     
-    # Custom CSS - Black and Red Theme
+    # Custom CSS - Black and Gold Theme
     tags$head(
       tags$style(HTML("
-        /* Main theme colors */
+        /* Override dashboard header colors */
+        .skin-blue .main-header {
+          background-color: #000000 !important;
+        }
+        .skin-blue .main-header .logo {
+          background-color: #000000 !important;
+          color: #FFD700 !important; 
+        }
+        .skin-blue .main-header .logo:hover {
+          background-color: #000000 !important;
+        }
+        .skin-blue .main-header .navbar {
+          background-color: #000000 !important;
+        }
+        
+        /* Override dashboard sidebar colors */
+        .skin-blue .left-side, .skin-blue .main-sidebar, .skin-blue .wrapper {
+          background-color: #222222 !important;
+        }
+        .skin-blue .sidebar a {
+          color: #FFD700 !important; 
+        }
+        .skin-blue .sidebar-menu > li.active > a, 
+        .skin-blue .sidebar-menu > li:hover > a {
+          color: #ffffff !important;
+          background: #333333 !important;
+          border-left-color: #FFD700 !important;
+        }
+        
+        /* Main content area */
         .content-wrapper, .right-side { 
           background-color: #1a1a1a !important; 
           color: #ffffff !important;
         }
         
-        /* Sidebar styling */
-        .main-sidebar { 
-          background-color: #000000 !important; 
+        /* Customize box headers */
+        .box.box-primary .box-header {
+          background-color: #333333 !important;
+          color: #FFD700 !important;
         }
-        .sidebar-menu > li > a {
-          color: #ffffff !important;
-          border-left: 3px solid transparent;
-        }
-        .sidebar-menu > li.active > a,
-        .sidebar-menu > li:hover > a {
-          background-color: #dc143c !important;
-          border-left: 3px solid #ff4444 !important;
-          color: #ffffff !important;
-        }
-        
-        /* Header styling */
-        .main-header .navbar {
-          background-color: #000000 !important;
-        }
-        .main-header .logo {
-          background-color: #dc143c !important;
-          color: #ffffff !important;
-          border-bottom: none !important;
-        }
-        .main-header .logo:hover {
-          background-color: #b91c3c !important;
-        }
-        
-        /* Box styling */
         .box { 
           background-color: #2d2d2d !important;
           border: 1px solid #444444 !important;
@@ -90,34 +250,66 @@ ui <- dashboardPage(
           color: #ffffff !important;
         }
         .box:hover { 
-          box-shadow: 0 3px 6px rgba(220, 20, 60, 0.3) !important; 
+          box-shadow: 0 3px 6px rgba(255, 215, 0, 0.3) !important; 
         }
         .box-header {
           background-color: #333333 !important;
-          color: #ffffff !important;
+          color: #FFD700 !important;
           border-bottom: 1px solid #555555 !important;
         }
         .box-header .box-title {
-          color: #ffffff !important;
+          color: #FFD700 !important;
         }
         .box-primary {
-          border-top-color: #dc143c !important;
+          border-top-color: #FFD700 !important;
         }
         .box-info {
-          border-top-color: #ff4444 !important;
+          border-top-color: #FFD700 !important;
         }
         .box-success {
-          border-top-color: #dc143c !important;
+          border-top-color: #FFD700 !important;
         }
         .box-warning {
-          border-top-color: #ff6666 !important;
+          border-top-color: #DAA520 !important;
+        }
+        
+        /* Style buttons */
+        .btn-primary {
+          background-color: #FFD700 !important;
+          border-color: #DAA520 !important;
+          color: #000000 !important;
+        }
+        .btn-primary:hover, .btn-primary:focus {
+          background-color: #DAA520 !important;
+          border-color: #B8860B !important;
+          color: #000000 !important;
+        }
+        .btn-success {
+          background-color: #FFD700 !important;
+          border-color: #DAA520 !important;
+          color: #000000 !important;
+        }
+        .btn-success:hover {
+          background-color: #DAA520 !important;
+          border-color: #B8860B !important;
+          color: #000000 !important;
+        }
+        .btn-warning {
+          background-color: #DAA520 !important;
+          border-color: #B8860B !important;
+          color: #000000 !important;
+        }
+        .btn-warning:hover {
+          background-color: #B8860B !important;
+          border-color: #8B7355 !important;
+          color: #000000 !important;
         }
         
         /* DataTable styling */
         .dataTable th { 
           background-color: #333333 !important;
-          color: #ffffff !important;
-          border-bottom: 2px solid #dc143c !important;
+          color: #FFD700 !important;
+          border-bottom: 2px solid #FFD700 !important;
         }
         .dataTable td {
           background-color: #2d2d2d !important;
@@ -135,16 +327,16 @@ ui <- dashboardPage(
         }
         .dataTables_paginate .paginate_button {
           background-color: #333333 !important;
-          color: #ffffff !important;
+          color: #FFD700 !important;
           border: 1px solid #555555 !important;
         }
         .dataTables_paginate .paginate_button:hover {
-          background-color: #dc143c !important;
-          color: #ffffff !important;
+          background-color: #FFD700 !important;
+          color: #000000 !important;
         }
         .dataTables_paginate .paginate_button.current {
-          background-color: #dc143c !important;
-          color: #ffffff !important;
+          background-color: #FFD700 !important;
+          color: #000000 !important;
         }
         
         /* Form controls styling */
@@ -154,8 +346,8 @@ ui <- dashboardPage(
           color: #ffffff !important;
         }
         .form-control:focus {
-          border-color: #dc143c !important;
-          box-shadow: 0 0 0 0.2rem rgba(220, 20, 60, 0.25) !important;
+          border-color: #FFD700 !important;
+          box-shadow: 0 0 0 0.2rem rgba(255, 215, 0, 0.25) !important;
         }
         .selectize-control.single .selectize-input,
         .selectize-control.multi .selectize-input {
@@ -172,36 +364,43 @@ ui <- dashboardPage(
           color: #ffffff !important;
         }
         .selectize-dropdown-content .option:hover {
-          background-color: #dc143c !important;
-          color: #ffffff !important;
+          background-color: #FFD700 !important;
+          color: #000000 !important;
         }
         
-        /* Button styling */
-        .btn-primary {
-          background-color: #dc143c !important;
-          border-color: #dc143c !important;
-          color: #ffffff !important;
+        /* Style tabs */
+        .nav-tabs-custom > .nav-tabs > li.active {
+          border-top-color: #FFD700 !important;
         }
-        .btn-primary:hover {
-          background-color: #b91c3c !important;
-          border-color: #b91c3c !important;
+        
+        /* Additional styles for gold accents */
+        .pagination > .active > a, 
+        .pagination > .active > span, 
+        .pagination > .active > a:hover, 
+        .pagination > .active > span:hover, 
+        .pagination > .active > a:focus, 
+        .pagination > .active > span:focus {
+          background-color: #FFD700 !important;
+          border-color: #DAA520 !important;
+          color: #000000 !important;
         }
-        .btn-success {
-          background-color: #dc143c !important;
-          border-color: #dc143c !important;
+        
+        /* Style for sliders and other inputs */
+        .irs-bar,
+        .irs-bar-edge,
+        .irs-single,
+        .irs-from,
+        .irs-to {
+          background: #FFD700 !important;
+          border-color: #DAA520 !important;
+          color: #000000 !important;
         }
-        .btn-success:hover {
-          background-color: #b91c3c !important;
-          border-color: #b91c3c !important;
-        }
-        .btn-warning {
-          background-color: #ff4444 !important;
-          border-color: #ff4444 !important;
-          color: #ffffff !important;
-        }
-        .btn-warning:hover {
-          background-color: #ff6666 !important;
-          border-color: #ff6666 !important;
+        
+        /* Style for checkboxes and radio buttons */
+        input[type='checkbox']:checked, 
+        input[type='radio']:checked {
+          background-color: #FFD700 !important;
+          border-color: #DAA520 !important;
         }
         
         /* Labels */
@@ -209,11 +408,14 @@ ui <- dashboardPage(
           color: #ffffff !important;
         }
         
-        /* Loading spinner */
+        /* Style loader spinners */
+        .shiny-spinner .load-container .loader {
+          border-top-color: #FFD700 !important;
+        }
         .loading-spinner { 
           display: inline-block; width: 20px; height: 20px; 
           border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; 
-          border-top-color: #dc143c; animation: spin 1s ease-in-out infinite; 
+          border-top-color: #FFD700; animation: spin 1s ease-in-out infinite; 
         }
         @keyframes spin { to { transform: rotate(360deg); } }
       "))
@@ -272,6 +474,74 @@ ui <- dashboardPage(
                   withSpinner(DT::dataTableOutput("main_explorer_table"))
                 )
               )
+      ),
+      
+      # Profile Builder Tab
+      tabItem(tabName = "profile_builder",
+              fluidRow(
+                box(
+                  title = "Race Profile Configuration", status = "primary", solidHeader = TRUE, width = 12,
+                  fluidRow(
+                    column(3,
+                           selectizeInput("target_series", "Series:",
+                                          choices = c("Cup Series" = 1, "Xfinity Series" = 2, "Truck Series" = 3),
+                                          selected = NULL,
+                                          options = list(placeholder = "Select Series"))
+                    ),
+                    column(3,
+                           selectizeInput("target_track", "Track(s):",
+                                          choices = NULL,
+                                          multiple = TRUE,
+                                          options = list(placeholder = "Select Track(s)"))
+                    ),
+                    column(3,
+                           numericInput("season_start", "Season Range Start:", 
+                                        value = 2019, min = 2000, max = 2024, step = 1)
+                    ),
+                    column(3,
+                           numericInput("season_end", "Season Range End:", 
+                                        value = 2024, min = 2000, max = 2024, step = 1)
+                    )
+                  ),
+                  fluidRow(
+                    column(12,
+                           div(style = "margin-top: 15px; text-align: center;",
+                               actionButton("generate_dominator_profiles", "Generate Dominator Profiles", 
+                                            class = "btn-primary", style = "padding: 10px 30px; font-size: 16px;"))
+                    )
+                  )
+                )
+              ),
+              
+              fluidRow(
+                box(
+                  title = "Generated Dominator Profiles", status = "success", solidHeader = TRUE, width = 12,
+                  fluidRow(
+                    column(12,
+                           div(
+                             downloadButton("download_profiles_xlsx", "Download Excel File", 
+                                            class = "btn-success", style = "margin-bottom: 15px;"),
+                             withSpinner(DT::dataTableOutput("dominator_profiles_table"))
+                           )
+                    )
+                  )
+                )
+              ),
+              
+              fluidRow(
+                column(6,
+                       box(
+                         title = "Profile Summary", status = "info", solidHeader = TRUE, width = 12,
+                         withSpinner(verbatimTextOutput("profile_summary_text"))
+                       )
+                ),
+                column(6,
+                       box(
+                         title = "Race Weights", status = "warning", solidHeader = TRUE, width = 12,
+                         withSpinner(DT::dataTableOutput("race_weights_table"))
+                       )
+                )
+              )
       )
     )
   )
@@ -282,13 +552,18 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
   # Reactive values
   values <- reactiveValues(
-    nascar_data = NULL
+    nascar_data = NULL,
+    race_list = NULL,
+    dominator_profiles = NULL,
+    race_weights = NULL,
+    race_summary = NULL
   )
   
   # Load initial data
   observe({
     withProgress(message = 'Loading NASCAR Database...', {
       values$nascar_data <- load_nascar_database()
+      values$race_list <- load_race_list()
       
       if (!is.null(values$nascar_data)) {
         incProgress(0.3, detail = "Processing seasons...")
@@ -308,6 +583,9 @@ server <- function(input, output, session) {
         updateSelectizeInput(session, "driver_filter", choices = drivers)
         updateSelectizeInput(session, "track_filter", choices = tracks)
         updateSelectizeInput(session, "team_filter", choices = teams)
+        
+        # Initialize profile builder track choices
+        updateSelectizeInput(session, "target_track", choices = tracks)
         
         incProgress(1.0, detail = "Complete!")
       }
@@ -423,7 +701,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # Main explorer table with smooth gradient and black/red theme
+  # Main explorer table with smooth gradient and black/gold theme
   output$main_explorer_table <- DT::renderDataTable({
     req(filtered_data())
     
@@ -475,7 +753,7 @@ server <- function(input, output, session) {
           ),
           initComplete = JS(
             "function(settings, json) {",
-            "$(this.api().table().header()).css({'background-color': '#333333', 'color': '#ffffff'});",
+            "$(this.api().table().header()).css({'background-color': '#333333', 'color': '#FFD700'});",
             "}"
           )
         ),
@@ -501,7 +779,7 @@ server <- function(input, output, session) {
             min_val <- min(col_values)
             max_val <- max(col_values)
             
-            # Create smooth gradient from black (best) to red (worst)
+            # Create smooth gradient from gold (best) to dark (worst)
             dt <- dt %>% formatStyle(
               col,
               backgroundColor = JS(paste0(
@@ -510,16 +788,16 @@ server <- function(input, output, session) {
                 "  var min = ", min_val, ";",
                 "  var max = ", max_val, ";",
                 "  var normalized = (value - min) / (max - min);",
-                "  var red = Math.round(220 + (255 - 220) * normalized);", # From dark red to bright red
-                "  var green = Math.round(20 * (1 - normalized));",        # From some red to no green
-                "  var blue = Math.round(60 * (1 - normalized));",         # From some blue to no blue
+                "  var red = Math.round(255 - (255 - 218) * normalized);",   # From FFD700 to darker
+                "  var green = Math.round(215 - (215 - 165) * normalized);", # Gold to darker gold
+                "  var blue = Math.round(0 + 32 * normalized);",             # From gold to dark
                 "  return 'rgb(' + red + ',' + green + ',' + blue + ')';",
                 "} else {",
                 "  return '#2d2d2d';", # Default dark background
                 "}",
                 "}"
               )),
-              color = "#ffffff",
+              color = "#000000",
               fontWeight = "bold"
             )
           }
@@ -581,6 +859,299 @@ server <- function(input, output, session) {
     
     showNotification("All filters have been reset", type = "message", duration = 2)
   })
+  
+  #--------------------- Profile Builder Logic ---------------------#
+  
+  # Generate dominator profiles
+  observeEvent(input$generate_dominator_profiles, {
+    req(input$target_series, input$target_track, input$season_start, input$season_end, values$nascar_data)
+    
+    if (length(input$target_track) == 0) {
+      showNotification("Please select at least one track", type = "warning")
+      return()
+    }
+    
+    withProgress(message = 'Generating dominator profiles...', {
+      incProgress(0.1, detail = "Filtering race data...")
+      
+      # Filter data for the selected criteria (now supporting multiple tracks)
+      filtered_races <- values$nascar_data %>%
+        filter(
+          series_id == as.numeric(input$target_series),
+          track_name %in% input$target_track,  # Changed to %in% for multiple tracks
+          race_season >= input$season_start,
+          race_season <= input$season_end
+        )
+      
+      # Filter by race_type_id if column exists
+      if ("race_type_id" %in% names(filtered_races)) {
+        filtered_races <- filtered_races %>% filter(race_type_id == 1)
+      }
+      
+      if (nrow(filtered_races) == 0) {
+        showNotification("No races found matching your criteria", type = "warning")
+        return()
+      }
+      
+      incProgress(0.3, detail = "Processing individual races...")
+      
+      # Get unique races
+      unique_races <- filtered_races %>%
+        select(race_id, race_season, race_name, track_name) %>%
+        distinct() %>%
+        arrange(race_season, race_id)
+      
+      # Generate profiles for each race
+      all_profiles <- list()
+      race_weights <- data.frame(RaceID = integer(), RaceName = character(), 
+                                 Season = integer(), Track = character(), Weight = numeric(), stringsAsFactors = FALSE)
+      
+      incProgress(0.5, detail = paste("Processing", nrow(unique_races), "races..."))
+      
+      for(i in 1:nrow(unique_races)) {
+        race_info <- unique_races[i,]
+        race_data <- filtered_races %>% filter(race_id == race_info$race_id)
+        
+        if(nrow(race_data) > 0) {
+          profile <- create_race_profile(race_data, race_info)
+          
+          if(nrow(profile) > 0) {
+            all_profiles[[paste0("Race_", race_info$race_id)]] <- profile
+            
+            # Add to weights table
+            weight_value <- case_when(
+              race_info$race_season == 2024 ~ 0.4,  # Most recent gets highest weight
+              race_info$race_season == 2023 ~ 0.35,
+              race_info$race_season == 2022 ~ 0.25,
+              race_info$race_season == 2021 ~ 0.20,
+              TRUE ~ 0.15  # Older races get lower weight
+            )
+            
+            race_weights <- rbind(race_weights, data.frame(
+              RaceID = race_info$race_id,
+              RaceName = race_info$race_name,
+              Season = race_info$race_season,
+              Track = race_info$track_name,  # Added track name to weights table
+              Weight = weight_value,
+              stringsAsFactors = FALSE
+            ))
+          }
+        }
+        
+        # Update progress
+        incProgress(0.4 / nrow(unique_races), detail = paste("Processed race", i, "of", nrow(unique_races)))
+      }
+      
+      incProgress(0.9, detail = "Combining profiles...")
+      
+      if (length(all_profiles) == 0) {
+        showNotification("No dominator profiles could be generated", type = "warning")
+        return()
+      }
+      
+      # Combine all profiles
+      combined_profiles <- bind_rows(all_profiles)
+      
+      # Create summary statistics
+      race_summary <- combined_profiles %>%
+        group_by(RaceID, RaceName, Season) %>%
+        summarise(
+          Track = first(TrackName),  # Now use TrackName from the profiles data
+          Drivers_With_Dom = n(),
+          Total_DK_Points = sum(DKDomPoints),
+          Total_FD_Points = sum(FDDomPoints),
+          Total_Lead_Laps = sum(LeadLaps),
+          Total_Fast_Laps = sum(FastLaps),
+          Max_DK_Single = max(DKDomPoints),
+          Max_FD_Single = max(FDDomPoints),
+          .groups = 'drop'
+        ) %>%
+        left_join(race_weights, by = c("RaceID", "RaceName", "Season", "Track"))
+      
+      # Store results
+      values$dominator_profiles <- combined_profiles
+      values$race_weights <- race_weights
+      values$race_summary <- race_summary
+      
+      incProgress(1.0, detail = "Complete!")
+      
+      selected_tracks <- paste(input$target_track, collapse = ", ")
+      showNotification(paste("Generated", nrow(combined_profiles), "dominator profiles from", 
+                             length(unique(combined_profiles$RaceID)), "races at:", selected_tracks), 
+                       type = "message", duration = 5)
+    })
+  })
+  
+  # Render dominator profiles table
+  output$dominator_profiles_table <- DT::renderDataTable({
+    req(values$dominator_profiles)
+    
+    display_data <- values$dominator_profiles %>%
+      mutate(
+        DKDomPoints = round(DKDomPoints, 2),
+        FDDomPoints = round(FDDomPoints, 2)
+      ) %>%
+      arrange(Season, RaceID, desc(FDDomPoints))
+    
+    DT::datatable(
+      display_data,
+      options = list(
+        scrollX = TRUE,
+        pageLength = 20,
+        dom = 'frtip',
+        columnDefs = list(
+          list(className = "dt-center", targets = "_all")
+        ),
+        initComplete = JS(
+          "function(settings, json) {",
+          "$(this.api().table().header()).css({'background-color': '#333333', 'color': '#FFD700'});",
+          "}"
+        )
+      ),
+      filter = 'top',
+      rownames = FALSE,
+      class = "display nowrap compact"
+    ) %>%
+      formatStyle(
+        c("DKDomPoints", "FDDomPoints"),
+        backgroundColor = styleColorBar(c(0, max(display_data$DKDomPoints, na.rm = TRUE)), "#FFD700"),
+        backgroundSize = '80% 50%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        color = "#000000",
+        fontWeight = "bold"
+      )
+  })
+  
+  # Render race weights table
+  output$race_weights_table <- DT::renderDataTable({
+    req(values$race_weights)
+    
+    DT::datatable(
+      values$race_weights,
+      options = list(
+        scrollX = TRUE,
+        pageLength = 10,
+        dom = 'frtip',
+        columnDefs = list(
+          list(className = "dt-center", targets = "_all")
+        ),
+        initComplete = JS(
+          "function(settings, json) {",
+          "$(this.api().table().header()).css({'background-color': '#333333', 'color': '#FFD700'});",
+          "}"
+        )
+      ),
+      rownames = FALSE,
+      class = "display nowrap compact"
+    ) %>%
+      formatStyle(
+        "Weight",
+        backgroundColor = styleColorBar(c(0, max(values$race_weights$Weight, na.rm = TRUE)), "#FFD700"),
+        backgroundSize = '80% 50%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        color = "#000000",
+        fontWeight = "bold"
+      )
+  })
+  
+  # Profile summary text
+  output$profile_summary_text <- renderText({
+    req(values$dominator_profiles, values$race_summary)
+    
+    profiles <- values$dominator_profiles
+    summary <- values$race_summary
+    
+    total_races <- length(unique(profiles$RaceID))
+    total_drivers <- nrow(profiles)
+    avg_dk_points <- round(mean(profiles$DKDomPoints, na.rm = TRUE), 2)
+    avg_fd_points <- round(mean(profiles$FDDomPoints, na.rm = TRUE), 2)
+    max_dk_points <- round(max(profiles$DKDomPoints, na.rm = TRUE), 2)
+    max_fd_points <- round(max(profiles$FDDomPoints, na.rm = TRUE), 2)
+    
+    # Track breakdown
+    track_breakdown <- profiles %>%
+      count(RaceName) %>%
+      arrange(desc(n))
+    
+    # Tier breakdown
+    profiles_by_track <- profiles %>%
+      group_by(TrackName) %>%
+      summarise(
+        Total_Profiles = n(),
+        Avg_DK = round(mean(DKDomPoints, na.rm = TRUE), 2),
+        Avg_FD = round(mean(FDDomPoints, na.rm = TRUE), 2),
+        .groups = 'drop'
+      )
+    
+    track_text <- paste(sapply(1:nrow(profiles_by_track), function(i) {
+      track <- profiles_by_track$TrackName[i]
+      count <- profiles_by_track$Total_Profiles[i]
+      avg_dk <- profiles_by_track$Avg_DK[i]
+      avg_fd <- profiles_by_track$Avg_FD[i]
+      paste(track, ":", count, "profiles (Avg DK:", avg_dk, ", Avg FD:", avg_fd, ")")
+    }), collapse = "\n")
+    
+    # Show selected tracks
+    selected_tracks <- paste(input$target_track, collapse = ", ")
+    
+    paste(
+      paste("Profile Generation Summary"),
+      paste("Track(s):", selected_tracks),
+      paste("Series:", case_when(
+        input$target_series == "1" ~ "Cup Series",
+        input$target_series == "2" ~ "Xfinity Series",
+        input$target_series == "3" ~ "Truck Series"
+      )),
+      paste("Season Range:", input$season_start, "-", input$season_end),
+      "",
+      paste("Total Races Analyzed:", total_races),
+      paste("Total Driver Profiles:", total_drivers),
+      "",
+      "Fantasy Points Analysis:",
+      paste("Avg DK Dom Points:", avg_dk_points),
+      paste("Avg FD Dom Points:", avg_fd_points),
+      paste("Max DK Dom Points:", max_dk_points),
+      paste("Max FD Dom Points:", max_fd_points),
+      "",
+      "Dominator Tier Breakdown:",
+      tier_text,
+      sep = "\n"
+    )
+  })
+  
+  # Download profiles Excel handler
+  output$download_profiles_xlsx <- downloadHandler(
+    filename = function() {
+      # Handle multiple tracks in filename
+      if (length(input$target_track) > 1) {
+        track_name <- "Multiple_Tracks"
+      } else {
+        track_name <- gsub("[^A-Za-z0-9]", "_", input$target_track[1])
+      }
+      
+      series_name <- case_when(
+        input$target_series == "1" ~ "Cup",
+        input$target_series == "2" ~ "Xfinity",
+        input$target_series == "3" ~ "Truck"
+      )
+      paste0(track_name, "_", series_name, "_Dominator_Profiles_", 
+             input$season_start, "-", input$season_end, "_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      req(values$dominator_profiles, values$race_weights, values$race_summary)
+      
+      # Create Excel workbook with multiple sheets
+      excel_data <- list(
+        "Dominator_Profiles" = values$dominator_profiles,
+        "Race_Weights" = values$race_weights,
+        "Race_Summary" = values$race_summary
+      )
+      
+      write_xlsx(excel_data, file)
+    }
+  )
 }
 
 # Run the application
