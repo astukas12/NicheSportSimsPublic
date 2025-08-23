@@ -28,7 +28,7 @@ custom_css <- "
   }
   .skin-blue .main-header .logo {
     background-color: #000000;
-    color: #ff0000;
+    color: #FFD700; 
   }
   .skin-blue .main-header .logo:hover {
     background-color: #000000;
@@ -42,35 +42,71 @@ custom_css <- "
     background-color: #222222;
   }
   .skin-blue .sidebar a {
-    color: #ff0000;
+    color: #FFD700; 
   }
   .skin-blue .sidebar-menu > li.active > a, 
   .skin-blue .sidebar-menu > li:hover > a {
     color: #ffffff;
     background: #333333;
-    border-left-color: #ff0000;
+    border-left-color: #FFD700;
   }
   
   /* Customize box headers */
   .box.box-primary .box-header {
     background-color: #333333;
-    color: #ff0000;rv
+    color: #FFD700;
   }
   
   /* Style buttons */
   .btn-primary {
-    background-color: #ff0000;
-    border-color: #cc0000;
-    color: #ffffff;
+    background-color: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
   }
   .btn-primary:hover, .btn-primary:focus {
-    background-color: #cc0000;
-    border-color: #990000;
+    background-color: #DAA520;
+    border-color: #B8860B;
+    color: #000000;
   }
   
   /* Style tabs */
   .nav-tabs-custom > .nav-tabs > li.active {
-    border-top-color: #ff0000;
+    border-top-color: #FFD700;
+  }
+  
+  /* Additional styles for gold accents */
+  .pagination > .active > a, 
+  .pagination > .active > span, 
+  .pagination > .active > a:hover, 
+  .pagination > .active > span:hover, 
+  .pagination > .active > a:focus, 
+  .pagination > .active > span:focus {
+    background-color: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for sliders and other inputs */
+  .irs-bar,
+  .irs-bar-edge,
+  .irs-single,
+  .irs-from,
+  .irs-to {
+    background: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for checkboxes and radio buttons */
+  input[type='checkbox']:checked, 
+  input[type='radio']:checked {
+    background-color: #FFD700;
+    border-color: #DAA520;
+  }
+  
+  /* Style loader spinners */
+  .shiny-spinner .load-container .loader {
+    border-top-color: #FFD700;
   }
 "
 
@@ -2345,6 +2381,11 @@ ui <- dashboardPage(
   # Dashboard sidebar
   dashboardSidebar(
     useShinyjs(),
+    div(
+      style = "text-align: center; padding: 10px; margin-bottom: 5px;",
+      tags$img(src = "logo.jpg", height = "200px", width = "auto", 
+               style = "border: 2px solid #FFD700; border-radius: 10px;")
+    ),
     sidebarMenu(
       id = "sidebar_menu",
       menuItem("Input Check", tabName = "upload", icon = icon("upload")),
@@ -2382,7 +2423,7 @@ ui <- dashboardPage(
               fluidRow(
                 box(width = 12,
                     title = "Outcome Distribution by Fighter",
-                    plotlyOutput("outcome_dist_plot", height = "1100px") %>% withSpinner(color = "#ff0000")
+                    plotlyOutput("outcome_dist_plot", height = "1100px") %>% withSpinner(color = "#FFD700")
                 )
               )
       ),
@@ -2753,7 +2794,7 @@ server <- function(input, output, session) {
         fluidRow(
           box(width = 12,
               title = "Simulation Accuracy Analysis",
-              DTOutput("accuracy_analysis") %>% withSpinner(color = "#ff0000"),
+              DTOutput("accuracy_analysis") %>% withSpinner(color = "#FFD700"),
               downloadButton('downloadAccuracy', 'Download Accuracy Analysis')
           )
         )
@@ -2764,7 +2805,7 @@ server <- function(input, output, session) {
         fluidRow(
           box(width = 12,
               title = "Fighters Data",
-              DTOutput("data_preview") %>% withSpinner(color = "#ff0000")
+              DTOutput("data_preview") %>% withSpinner(color = "#FFD700")
           )
         ),
         uiOutput("available_platforms")
@@ -2931,14 +2972,14 @@ server <- function(input, output, session) {
           fluidRow(
             box(width = 12,
                 title = "DraftKings Fantasy Point Projections",
-                DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#ff0000"),
+                DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#FFD700"),
                 downloadButton('download_dk_fantasy_projections', 'Download Projections')
             )
           ),
           fluidRow(
             box(width = 12,
                 title = "DraftKings Fantasy Points Distribution",
-                plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff0000")
+                plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           )
         ),
@@ -2947,14 +2988,14 @@ server <- function(input, output, session) {
           fluidRow(
             box(width = 12,
                 title = "FanDuel Fantasy Point Projections",
-                DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#ff0000"),
+                DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#FFD700"),
                 downloadButton('download_fd_fantasy_projections', 'Download Projections')
             )
           ),
           fluidRow(
             box(width = 12,
                 title = "FanDuel Fantasy Points Distribution",
-                plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff0000")
+                plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
             )
           )
         )
@@ -2965,20 +3006,20 @@ server <- function(input, output, session) {
         fluidRow(
           box(width = 12,
               title = "DraftKings Fantasy Point Projections",
-              DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#ff0000"),
+              DTOutput("dk_fantasy_projections") %>% withSpinner(color = "#FFD700"),
               downloadButton('download_dk_fantasy_projections', 'Download Projections')
           )
         ),
         fluidRow(
           box(width = 12,
               title = "DraftKings Fantasy Points vs Salary",
-              plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff0000")
+              plotlyOutput("dk_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
           )
         ),
         fluidRow(
           box(width = 12,
               title = "DraftKings Fantasy Points Distribution",
-              plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff0000")
+              plotlyOutput("dk_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
           )
         )
       )
@@ -2988,20 +3029,20 @@ server <- function(input, output, session) {
         fluidRow(
           box(width = 12,
               title = "FanDuel Fantasy Point Projections",
-              DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#ff0000"),
+              DTOutput("fd_fantasy_projections") %>% withSpinner(color = "#FFD700"),
               downloadButton('download_fd_fantasy_projections', 'Download Projections')
           )
         ),
         fluidRow(
           box(width = 12,
               title = "FanDuel Fantasy Points vs Salary",
-              plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#ff0000")
+              plotlyOutput("fd_fantasy_points_salary", height = "800px") %>% withSpinner(color = "#FFD700")
           )
         ),
         fluidRow(
           box(width = 12,
               title = "FanDuel Fantasy Points Distribution",
-              plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#ff0000")
+              plotlyOutput("fd_fantasy_points_dist", height = "700px") %>% withSpinner(color = "#FFD700")
           )
         )
       )
@@ -3140,11 +3181,11 @@ server <- function(input, output, session) {
         ),
         fluidRow(
           box(width = 12, title = "DraftKings Fighter Exposure Analysis",
-              DTOutput("dk_fighter_exposure_table") %>% withSpinner(color = "#ff0000"))
+              DTOutput("dk_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
         fluidRow(
           box(width = 12, title = "Generated DraftKings Lineups",
-              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#ff0000"))
+              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       ),
       
@@ -3176,11 +3217,11 @@ server <- function(input, output, session) {
         ),
         fluidRow(
           box(width = 12, title = "FanDuel Fighter Exposure Analysis",
-              DTOutput("fd_fighter_exposure_table") %>% withSpinner(color = "#ff0000"))
+              DTOutput("fd_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
         fluidRow(
           box(width = 12, title = "Generated FanDuel Lineups",
-              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#ff0000"))
+              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       )
     )
