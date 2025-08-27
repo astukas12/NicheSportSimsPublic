@@ -1209,8 +1209,8 @@ count_dk_golf_optimal_lineups <- function(sim_results) {
       TotalSalary = first(TotalSalary),
       .groups = 'drop'
     ) %>%
-    arrange(desc(Top1Count), desc(Top5Count))
-  # NO slice_head - keep ALL lineups
+    arrange(desc(Top1Count), desc(Top5Count)) %>%
+    slice_head(n = 10000) 
   
   # Split lineup string into player columns
   player_cols <- do.call(rbind, strsplit(lineup_counts$Lineup, "\\|"))
@@ -1334,8 +1334,8 @@ count_fd_golf_optimal_lineups <- function(sim_results) {
       TotalSalary = first(TotalSalary),
       .groups = 'drop'
     ) %>%
-    arrange(desc(Top1Count), desc(Top5Count))
-  # NO slice_head - keep ALL lineups
+    arrange(desc(Top1Count), desc(Top5Count)) %>% 
+     slice_head(n = 10000)
   
   # Split lineup string into player columns
   player_cols <- do.call(rbind, strsplit(lineup_counts$Lineup, "\\|"))
@@ -2344,12 +2344,7 @@ server <- function(input, output, session) {
   output$dk_optimal_lineups_table <- renderDT({
     req(rv$dk_optimal_lineups)
     
-    # Take only the top 500 for display (data is already sorted by Top1Count, Top5Count)
     display_data <- as.data.frame(rv$dk_optimal_lineups)
-    if(nrow(display_data) > 500) {
-      display_data <- display_data[1:500, ]
-      message(sprintf("Displaying top 500 of %d total optimal lineups", nrow(rv$dk_optimal_lineups)))
-    }
     
     # Ensure we have all expected columns
     expected_cols <- c(paste0("Player", 1:DK_ROSTER_SIZE), 
@@ -2364,7 +2359,7 @@ server <- function(input, output, session) {
       display_data,
       caption = htmltools::tags$caption(
         style = "caption-side: top; text-align: center; color: #FFD700; font-weight: bold;",
-        sprintf("Showing Top 500 of %d Total Optimal Lineups", nrow(rv$dk_optimal_lineups))
+        sprintf("Showing Top %d Optimal Lineups", nrow(display_data))
       ),
       options = list(
         pageLength = 25,
@@ -2372,13 +2367,15 @@ server <- function(input, output, session) {
         rownames = FALSE,
         dom = "ftp",
         ordering = TRUE,
+        processing = TRUE,
+        serverSide = FALSE,  # Keep FALSE since we pre-filtered to 10k
         columnDefs = list(list(className = 'dt-center', targets = "_all"))
       ),
       class = 'cell-border stripe compact',
       rownames = FALSE
     )
     
-    # Format columns
+    # Format columns (same as before)
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
     }
@@ -2412,16 +2409,10 @@ server <- function(input, output, session) {
     dt
   })
   
-  # 4. Replace your fd_optimal_lineups_table output to show only top 500:
   output$fd_optimal_lineups_table <- renderDT({
     req(rv$fd_optimal_lineups)
     
-    # Take only the top 500 for display (data is already sorted by Top1Count, Top5Count)
     display_data <- as.data.frame(rv$fd_optimal_lineups)
-    if(nrow(display_data) > 500) {
-      display_data <- display_data[1:500, ]
-      message(sprintf("Displaying top 500 of %d total optimal lineups", nrow(rv$fd_optimal_lineups)))
-    }
     
     # Ensure we have all expected columns
     expected_cols <- c(paste0("Player", 1:FD_ROSTER_SIZE), 
@@ -2436,7 +2427,7 @@ server <- function(input, output, session) {
       display_data,
       caption = htmltools::tags$caption(
         style = "caption-side: top; text-align: center; color: #FFD700; font-weight: bold;",
-        sprintf("Showing Top 500 of %d Total Optimal Lineups", nrow(rv$fd_optimal_lineups))
+        sprintf("Showing Top %d Optimal Lineups", nrow(display_data))
       ),
       options = list(
         pageLength = 25,
@@ -2444,13 +2435,15 @@ server <- function(input, output, session) {
         rownames = FALSE,
         dom = "ftp",
         ordering = TRUE,
+        processing = TRUE,
+        serverSide = FALSE,  # Keep FALSE since we pre-filtered to 10k
         columnDefs = list(list(className = 'dt-center', targets = "_all"))
       ),
       class = 'cell-border stripe compact',
       rownames = FALSE
     )
     
-    # Format columns
+    # Format columns (same as before)
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
     }
@@ -2484,7 +2477,6 @@ server <- function(input, output, session) {
     dt
   })
   
-  # Player stats output
   output$player_stats <- renderDT({
     req(rv$finishing_analysis)
     
@@ -2545,14 +2537,15 @@ server <- function(input, output, session) {
       }
     }
     
-    # Prepare the table with formatting
+    # Prepare the table with server-side processing
     dt <- datatable(
       analysis_data,
       options = list(
         scrollX = TRUE,
-        pageLength = -1,
-        dom = "t",
+        pageLength = 25,  # Reduced from -1 (show all)
+        dom = "ftp",      # Added filtering and pagination
         order = list(list(which(names(analysis_data) == "Avg_Finish"), "asc")),
+        processing = TRUE,
         columnDefs = list(list(
           targets = "_all", className = "dt-center"
         ))
@@ -2573,25 +2566,25 @@ server <- function(input, output, session) {
     dt
   })
   
-  # Create position boxplot
   output$position_box <- renderPlotly({
     req(rv$simulation_results)
     
-    # Get all unique players
-    players_info <- unique(rv$simulation_results[, c("Name")])
-    
-    # Order by average finish position
+    # Get average finish position for all players
     avg_finish <- rv$simulation_results[, .(avg_pos = mean(FinishPosition)), by = Name]
-    players_info <- merge(players_info, avg_finish, by = "Name")
-    players_info <- players_info[order(players_info$avg_pos), ]
     
-    # Get ordered list of player names
-    ordered_players <- players_info$Name
+    # Get top 50 players by best average finish (lowest number = better)
+    top_50_players <- avg_finish[order(avg_pos)][1:min(50, nrow(avg_finish))]$Name
     
-    # Plot with all players, ordered by average finish
-    p <- ggplot(rv$simulation_results,
+    # Filter simulation results to only top 50 players
+    plot_data <- rv$simulation_results[Name %in% top_50_players]
+    
+    # Create ordered factor for consistent plotting
+    plot_data[, Name := factor(Name, levels = top_50_players)]
+    
+    # Plot with top 50 players only
+    p <- ggplot(plot_data,
                 aes(
-                  x = factor(Name, levels = ordered_players),
+                  x = Name,
                   y = FinishPosition,
                   fill = Name
                 )) +
@@ -2608,7 +2601,7 @@ server <- function(input, output, session) {
         plot.margin = margin(t = 10, r = 20, b = 10, l = 20),
         legend.position = "none"
       ) +
-      labs(x = "Player", y = "Finish Position", title = NULL)
+      labs(x = "Player (Top 50 by Avg Finish)", y = "Finish Position", title = NULL)
     
     ggplotly(p, height = 1000) %>%
       layout(
@@ -2744,7 +2737,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # DraftKings Fantasy Projections
   output$dk_fantasy_projections <- renderDT({
     req(rv$dk_fantasy_analysis)
     
@@ -2752,9 +2744,10 @@ server <- function(input, output, session) {
       rv$dk_fantasy_analysis,
       options = list(
         scrollX = TRUE,
-        pageLength = -1,
-        dom = "t",
+        pageLength = 25,  # Reduced from -1
+        dom = "ftp",      # Added filtering and pagination
         order = list(list(3, 'desc')), # Sort by median
+        processing = TRUE,
         columnDefs = list(list(
           targets = "_all", className = 'dt-center'
         ))
@@ -2768,7 +2761,6 @@ server <- function(input, output, session) {
     dt
   })
   
-  # FanDuel Fantasy Projections
   output$fd_fantasy_projections <- renderDT({
     req(rv$fd_fantasy_analysis)
     
@@ -2776,9 +2768,10 @@ server <- function(input, output, session) {
       rv$fd_fantasy_analysis,
       options = list(
         scrollX = TRUE,
-        pageLength = -1,
-        dom = "t",
+        pageLength = 25,  # Reduced from -1
+        dom = "ftp",      # Added filtering and pagination
         order = list(list(3, 'desc')), # Sort by median
+        processing = TRUE,
         columnDefs = list(list(
           targets = "_all", className = 'dt-center'
         ))
@@ -2846,21 +2839,26 @@ server <- function(input, output, session) {
       layout(hoverlabel = list(bgcolor = "white"), hovermode = "closest")
   })
   
-  # DraftKings Fantasy Points Distribution
   output$dk_fantasy_points_dist <- renderPlotly({
     req(rv$simulation_results)
     
-    # Get unique player salary info
-    player_salaries <- rv$simulation_results %>%
-      distinct(Name, DKSalary)
+    # Get average finish position for all players and select top 50
+    avg_finish <- rv$simulation_results %>%
+      group_by(Name) %>%
+      summarise(avg_pos = mean(FinishPosition), .groups = 'drop') %>%
+      arrange(avg_pos) %>%
+      slice_head(n = 50)
     
-    # Order player names by ascending DKSalary
-    ordered_names <- player_salaries %>%
-      arrange(DKSalary) %>%
-      pull(Name)
+    # Get top 50 player names
+    top_50_names <- avg_finish$Name
     
+    # Filter data to top 50 players and order by salary
     plot_data <- rv$simulation_results %>%
-      filter(Name %in% ordered_names)
+      filter(Name %in% top_50_names) %>%
+      arrange(DKSalary)
+    
+    # Create ordered factor
+    ordered_names <- unique(plot_data$Name)
     
     p <- ggplot(plot_data, aes(
       x = factor(Name, levels = ordered_names),
@@ -2870,27 +2868,32 @@ server <- function(input, output, session) {
       geom_boxplot(outlier.alpha = 0.25) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Player", y = "Fantasy Points") +
+      labs(x = "Player (Top 50 by Avg Finish)", y = "Fantasy Points") +
       theme(legend.position = "none")
     
     ggplotly(p, height = 700, tooltip = c("x", "y"))
   })
   
-  # FanDuel Fantasy Points Distribution
   output$fd_fantasy_points_dist <- renderPlotly({
     req(rv$simulation_results)
     
-    # Get unique player salary info
-    player_salaries <- rv$simulation_results %>%
-      distinct(Name, FDSalary)
+    # Get average finish position for all players and select top 50
+    avg_finish <- rv$simulation_results %>%
+      group_by(Name) %>%
+      summarise(avg_pos = mean(FinishPosition), .groups = 'drop') %>%
+      arrange(avg_pos) %>%
+      slice_head(n = 50)
     
-    # Order player names by ascending FDSalary
-    ordered_names <- player_salaries %>%
-      arrange(FDSalary) %>%
-      pull(Name)
+    # Get top 50 player names
+    top_50_names <- avg_finish$Name
     
+    # Filter data to top 50 players and order by salary
     plot_data <- rv$simulation_results %>%
-      filter(Name %in% ordered_names)
+      filter(Name %in% top_50_names) %>%
+      arrange(FDSalary)
+    
+    # Create ordered factor
+    ordered_names <- unique(plot_data$Name)
     
     p <- ggplot(plot_data, aes(
       x = factor(Name, levels = ordered_names),
@@ -2900,7 +2903,7 @@ server <- function(input, output, session) {
       geom_boxplot(outlier.alpha = 0.25) +
       coord_flip() +
       theme_minimal() +
-      labs(x = "Player", y = "Fantasy Points") +
+      labs(x = "Player (Top 50 by Avg Finish)", y = "Fantasy Points") +
       theme(legend.position = "none")
     
     ggplotly(p, height = 700, tooltip = c("x", "y"))
@@ -2979,14 +2982,16 @@ server <- function(input, output, session) {
         pageLength = 25,
         scrollX = TRUE,
         rownames = FALSE,
-        dom = "tp",
+        dom = "ftp",      # Added filtering and pagination
         ordering = TRUE,
+        processing = TRUE,
         columnDefs = list(list(className = 'dt-center', targets = "_all"))
       ),
       class = 'cell-border stripe compact',
       rownames = FALSE
     )
     
+    # Format columns (same as before)
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
     }
@@ -3008,7 +3013,6 @@ server <- function(input, output, session) {
     dt
   })
   
-  # FanDuel random lineups table
   output$fd_random_lineups_table <- renderDT({
     req(rv$fd_random_lineups)
     
@@ -3020,14 +3024,16 @@ server <- function(input, output, session) {
         pageLength = 25,
         scrollX = TRUE,
         rownames = FALSE,
-        dom = "tp",
+        dom = "ftp",      # Added filtering and pagination
         ordering = TRUE,
+        processing = TRUE,
         columnDefs = list(list(className = 'dt-center', targets = "_all"))
       ),
       class = 'cell-border stripe compact',
       rownames = FALSE
     )
     
+    # Format columns (same as before)
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
     }
@@ -3052,98 +3058,100 @@ server <- function(input, output, session) {
 
   
   output$dk_player_exposure_table <- renderDT({
-  req(rv$dk_player_exposure)
-  
-  # Check if it's an error message
-  if("Message" %in% names(rv$dk_player_exposure)) {
-    return(datatable(rv$dk_player_exposure, options = list(dom = "t"), rownames = FALSE))
-  }
-  
-  display_data <- rv$dk_player_exposure
-  has_random_lineups <- !is.null(rv$dk_random_lineups) && nrow(rv$dk_random_lineups) > 0
-  
-  # Remove columns if no random lineups
-  if(!has_random_lineups) {
-    display_data$Exposure <- NULL
-    display_data$Leverage <- NULL
-  }
-  
-  dt <- datatable(
-    display_data,
-    options = list(
-      pageLength = -1,
-      dom = "t",
-      scrollX = TRUE,
-      order = list(list(3, 'desc')),  # Sort by OptimalRate
+    req(rv$dk_player_exposure)
+    
+    # Check if it's an error message
+    if("Message" %in% names(rv$dk_player_exposure)) {
+      return(datatable(rv$dk_player_exposure, options = list(dom = "t"), rownames = FALSE))
+    }
+    
+    display_data <- rv$dk_player_exposure
+    has_random_lineups <- !is.null(rv$dk_random_lineups) && nrow(rv$dk_random_lineups) > 0
+    
+    # Remove columns if no random lineups
+    if(!has_random_lineups) {
+      display_data$Exposure <- NULL
+      display_data$Leverage <- NULL
+    }
+    
+    dt <- datatable(
+      display_data,
+      options = list(
+        pageLength = 25,  # Added pagination
+        dom = "ftp",      # Added filtering and pagination
+        scrollX = TRUE,
+        order = list(list(3, 'desc')),  # Sort by OptimalRate
+        processing = TRUE,
+        rownames = FALSE
+      ),
       rownames = FALSE
-    ),
-    rownames = FALSE
-  )
-  
-  # Format columns
-  if("DKSalary" %in% names(display_data)) {
-    dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, mark = ",", digits = 0)
-  }
-  
-  if("DKOP" %in% names(display_data)) {
-    dt <- dt %>% formatRound('DKOP', digits = 1)
-  }
-  
-  # Format numeric columns
-  numeric_cols <- intersect(c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'), names(display_data))
-  if(length(numeric_cols) > 0) {
-    dt <- dt %>% formatRound(numeric_cols, digits = 1)
-  }
-  
-  return(dt)
-})
+    )
+    
+    # Format columns (same as before)
+    if("DKSalary" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    if("DKOP" %in% names(display_data)) {
+      dt <- dt %>% formatRound('DKOP', digits = 1)
+    }
+    
+    # Format numeric columns
+    numeric_cols <- intersect(c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'), names(display_data))
+    if(length(numeric_cols) > 0) {
+      dt <- dt %>% formatRound(numeric_cols, digits = 1)
+    }
+    
+    return(dt)
+  })
 
-# Replace your fd_player_exposure_table output with this:
-output$fd_player_exposure_table <- renderDT({
-  req(rv$fd_player_exposure)
-  
-  # Check if it's an error message
-  if("Message" %in% names(rv$fd_player_exposure)) {
-    return(datatable(rv$fd_player_exposure, options = list(dom = "t"), rownames = FALSE))
-  }
-  
-  display_data <- rv$fd_player_exposure
-  
-  # Remove columns if no random lineups
-  if(is.null(rv$fd_random_lineups) || nrow(rv$fd_random_lineups) == 0) {
-    display_data$Exposure <- NULL
-    display_data$Leverage <- NULL
-  }
-  
-  dt <- datatable(
-    display_data,
-    options = list(
-      pageLength = -1,
-      dom = "t",
-      scrollX = TRUE,
-      order = list(list(3, 'desc')),  # Sort by OptimalRate
+  output$fd_player_exposure_table <- renderDT({
+    req(rv$fd_player_exposure)
+    
+    # Check if it's an error message
+    if("Message" %in% names(rv$fd_player_exposure)) {
+      return(datatable(rv$fd_player_exposure, options = list(dom = "t"), rownames = FALSE))
+    }
+    
+    display_data <- rv$fd_player_exposure
+    has_random_lineups <- !is.null(rv$fd_random_lineups) && nrow(rv$fd_random_lineups) > 0
+    
+    # Remove columns if no random lineups
+    if(!has_random_lineups) {
+      display_data$Exposure <- NULL
+      display_data$Leverage <- NULL
+    }
+    
+    dt <- datatable(
+      display_data,
+      options = list(
+        pageLength = 25,  # Added pagination
+        dom = "ftp",      # Added filtering and pagination
+        scrollX = TRUE,
+        order = list(list(3, 'desc')),  # Sort by OptimalRate
+        processing = TRUE,
+        rownames = FALSE
+      ),
       rownames = FALSE
-    ),
-    rownames = FALSE
-  )
-  
-  # Format columns
-  if("FDSalary" %in% names(display_data)) {
-    dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, mark = ",", digits = 0)
-  }
-  
-  if("FDOP" %in% names(display_data)) {
-    dt <- dt %>% formatRound('FDOP', digits = 1)
-  }
-  
-  # Format numeric columns
-  numeric_cols <- intersect(c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'), names(display_data))
-  if(length(numeric_cols) > 0) {
-    dt <- dt %>% formatRound(numeric_cols, digits = 1)
-  }
-  
-  return(dt)
-})
+    )
+    
+    # Format columns (same as before)
+    if("FDSalary" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    if("FDOP" %in% names(display_data)) {
+      dt <- dt %>% formatRound('FDOP', digits = 1)
+    }
+    
+    # Format numeric columns
+    numeric_cols <- intersect(c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'), names(display_data))
+    if(length(numeric_cols) > 0) {
+      dt <- dt %>% formatRound(numeric_cols, digits = 1)
+    }
+    
+    return(dt)
+  })
 
 output$download_dk_optimal_lineups <- downloadHandler(
   filename = function() {
