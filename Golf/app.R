@@ -109,19 +109,36 @@ FD_ROSTER_SIZE <- 6
 DK_SALARY_CAP <- 50000
 FD_SALARY_CAP <- 60000
 
-# Read input file function
+
+
 read_golf_input_file <- function(file_path) {
   tryCatch({
-    # Read required sheets
+    # Get all sheet names first
+    sheet_names <- readxl::excel_sheets(file_path)
+    
+    # Always try to read Player sheet
     sheets <- list(
-      Player = read_excel(file_path, sheet = "Player"),
-      DKPts = read_excel(file_path, sheet = "DKPts"),
-      FDPts = read_excel(file_path, sheet = "FDPts")
+      Player = read_excel(file_path, sheet = "Player")
     )
     
-    # Identify available platforms
+    # Try to read DraftKings points (required)
+    if ("DKPts" %in% sheet_names) {
+      sheets$DKPts <- read_excel(file_path, sheet = "DKPts")
+    } else {
+      stop("DKPts sheet is required but not found")
+    }
+    
+    # Try to read FanDuel points (optional)
+    if ("FDPts" %in% sheet_names) {
+      sheets$FDPts <- read_excel(file_path, sheet = "FDPts")
+    } else {
+      sheets$FDPts <- NULL
+      message("FDPts sheet not found - running DraftKings only")
+    }
+    
+    # Identify available platforms based on columns
     has_dk <- "DKSalary" %in% colnames(sheets$Player)
-    has_fd <- "FDSalary" %in% colnames(sheets$Player)
+    has_fd <- "FDSalary" %in% colnames(sheets$Player) && !is.null(sheets$FDPts)
     
     # Create platform info
     platform_info <- list(has_draftkings = has_dk, has_fanduel = has_fd)
@@ -132,18 +149,17 @@ read_golf_input_file <- function(file_path) {
   })
 }
 
-# Process input data efficiently
 process_golf_input_data <- function(input_data) {
   # Extract data components
   player_data <- input_data$sheets$Player
   dk_pts_data <- input_data$sheets$DKPts
-  fd_pts_data <- input_data$sheets$FDPts
+  fd_pts_data <- input_data$sheets$FDPts  # This could be NULL now
   
   # Process player data
   processed_players <- as.data.table(player_data)
   
-  # Convert relevant numeric columns efficiently
-  numeric_cols <- c("W", "T5", "T10", "T20", "DKSalary", "FDSalary", "DKOP", "FDOP")
+  # Convert relevant numeric columns efficiently - updated with new columns
+  numeric_cols <- c("W", "T5", "T10", "T20", "T30", "T40", "Cut", "DKSalary", "FDSalary", "DKOP", "FDOP")
   
   for (col in numeric_cols) {
     if (col %in% names(processed_players)) {
@@ -171,7 +187,7 @@ process_golf_input_data <- function(input_data) {
     setkey(fd_dt, Rank)
     fd_dt
   } else {
-    data.table()
+    data.table()  # Empty table if no FD data
   }
   
   # Return processed data
@@ -193,72 +209,115 @@ cleanup_memory <- function(verbose = FALSE) {
   }
 }
 
-# Fast pre-computation of player distributions with caching
-precompute_golf_distributions <- function(players_dt) {
+precompute_golf_distributions <- function(players_dt, cut_line = 65, no_cut = FALSE) {
   n_players <- nrow(players_dt)
   
-  # Extract probability columns once
-  prob_matrix <- as.matrix(players_dt[, .(W, T5, T10, T20)])
+  # Extract probability columns - now with T30, T40, Cut
+  if (no_cut) {
+    # No cut tournament - use all columns except Cut
+    prob_cols <- c("W", "T5", "T10", "T20", "T30", "T40")
+  } else {
+    # Tournament with cut - include Cut column
+    prob_cols <- c("W", "T5", "T10", "T20", "T30", "T40", "Cut")
+  }
+  
+  # Check which columns actually exist
+  available_cols <- intersect(prob_cols, names(players_dt))
+  prob_matrix <- as.matrix(players_dt[, ..available_cols])
   
   # Handle NAs efficiently
   prob_matrix[is.na(prob_matrix)] <- 0
   
-  # Pre-compute marginal probabilities for all players using vectorized operations
-  marginal_probs <- matrix(0, nrow = n_players, ncol = 5)
+  # Pre-compute marginal probabilities for all players
+  if (no_cut) {
+    # No cut: 6 categories + remaining
+    marginal_probs <- matrix(0, nrow = n_players, ncol = 7)
+    position_ranges <- list(
+      c(1),                    # Win
+      c(2:5),                  # T5 (2nd-5th) 
+      c(6:10),                 # T10 (6th-10th)
+      c(11:20),                # T20 (11th-20th)
+      c(21:30),                # T30 (21st-30th)
+      c(31:40),                # T40 (31st-40th)
+      c(41:n_players)          # Remaining positions
+    )
+  } else {
+    # With cut: 6 categories + remaining cut-makers + missed cut
+    marginal_probs <- matrix(0, nrow = n_players, ncol = 8)
+    position_ranges <- list(
+      c(1),                    # Win
+      c(2:5),                  # T5 (2nd-5th)
+      c(6:10),                 # T10 (6th-10th) 
+      c(11:20),                # T20 (11th-20th)
+      c(21:30),                # T30 (21st-30th)
+      c(31:40),                # T40 (31st-40th)
+      c(41:cut_line),          # Remaining cut-makers
+      c((cut_line+1):n_players) # Missed cut
+    )
+  }
   
-  # Vectorized probability calculations
+  # Calculate marginal probabilities
   for (i in 1:n_players) {
-    cum_probs <- c(prob_matrix[i, ], 1.0)
+    if (no_cut) {
+      # No cut calculation
+      cum_probs <- c(prob_matrix[i, ], 1.0)
+      marg_probs <- diff(c(0, cum_probs))
+    } else {
+      # With cut calculation
+      cut_prob <- if ("Cut" %in% available_cols) prob_matrix[i, "Cut"] else 0.8
+      finish_probs <- prob_matrix[i, setdiff(available_cols, "Cut")]
+      
+      # Scale finish probabilities by cut probability
+      scaled_finish_probs <- finish_probs * cut_prob
+      cum_finish_probs <- c(scaled_finish_probs, cut_prob)  # Last element is total cut probability
+      
+      # Calculate marginals for cut-makers + missed cut
+      finish_marg <- diff(c(0, cum_finish_probs))
+      missed_cut_prob <- 1 - cut_prob
+      
+      marg_probs <- c(finish_marg, missed_cut_prob)
+    }
     
-    # Calculate marginal probabilities
-    marg_probs <- diff(c(0, cum_probs))
+    # Handle edge cases and normalize
     marg_probs[marg_probs < 0] <- 0
-    
-    # Normalize efficiently
     sum_probs <- sum(marg_probs)
     if (sum_probs > 0) {
       marg_probs <- marg_probs / sum_probs
     } else {
-      marg_probs <- rep(0.2, 5)  # Equal probability if all zeros
+      marg_probs <- rep(1/length(marg_probs), length(marg_probs))
     }
     
     marginal_probs[i, ] <- marg_probs
   }
   
-  # Pre-define position ranges for fast lookup
-  position_ranges <- list(
-    c(1),                    # Win
-    c(2, 3, 4, 5),          # T5 (2nd-5th)
-    c(6, 7, 8, 9, 10),      # T10 (6th-10th)
-    c(11:20),               # T20 (11th-20th)
-    c(21:n_players)         # Remaining positions
-  )
-  
   return(list(
     marginal_probs = marginal_probs,
     position_ranges = position_ranges,
-    n_players = n_players
+    n_players = n_players,
+    cut_line = cut_line,
+    no_cut = no_cut
   ))
 }
 
-# Highly optimized vectorized simulation
 simulate_golf_positions_vectorized <- function(player_distributions, n_sims) {
   n_players <- player_distributions$n_players
   marginal_probs <- player_distributions$marginal_probs
   position_ranges <- player_distributions$position_ranges
+  cut_line <- player_distributions$cut_line
+  no_cut <- player_distributions$no_cut
   
   # Pre-allocate result matrix
   all_positions <- matrix(0, nrow = n_players, ncol = n_sims)
   
-  # Generate all random numbers at once for better performance
+  # Generate all random numbers at once
   random_matrix <- matrix(runif(n_players * n_sims), nrow = n_players, ncol = n_sims)
-  noise_matrix <- matrix(runif(n_players * n_sims, 0, 0.05), nrow = n_players, ncol = n_sims) # Reduced noise
+  noise_matrix <- matrix(runif(n_players * n_sims, 0, 0.02), nrow = n_players, ncol = n_sims)
   
   # Pre-compute cumulative probabilities for all players
   cumulative_probs <- t(apply(marginal_probs, 1, cumsum))
   
-  # Vectorized simulation with batch processing
-  batch_size <- min(1000, n_sims)
+  # Process simulations in batches
+  batch_size <- min(500, n_sims)
   n_batches <- ceiling(n_sims / batch_size)
   
   for (batch in 1:n_batches) {
@@ -267,36 +326,79 @@ simulate_golf_positions_vectorized <- function(player_distributions, n_sims) {
     batch_cols <- start_col:end_col
     
     for (sim in batch_cols) {
-      performance_scores <- numeric(n_players)
-      
-      # Vectorized sampling for all players in this simulation
-      for (i in 1:n_players) {
-        random_val <- random_matrix[i, sim]
+      if (no_cut) {
+        # No cut - direct position assignment
+        performance_scores <- numeric(n_players)
         
-        # Fast binary search for position range
-        pos_range_idx <- findInterval(random_val, c(0, cumulative_probs[i, ])) 
-        pos_range_idx <- max(1, min(pos_range_idx, 5))
-        
-        pos_range <- position_ranges[[pos_range_idx]]
-        
-        # Sample within range efficiently
-        if (length(pos_range) > 1) {
-          range_idx <- ceiling((random_val * 10000) %% length(pos_range)) + 1
-          range_idx <- max(1, min(range_idx, length(pos_range)))
-          sampled_pos <- pos_range[range_idx]
-        } else {
-          sampled_pos <- pos_range[1]
+        for (i in 1:n_players) {
+          random_val <- random_matrix[i, sim]
+          pos_range_idx <- findInterval(random_val, c(0, cumulative_probs[i, ])) 
+          pos_range_idx <- max(1, min(pos_range_idx, length(position_ranges)))
+          
+          pos_range <- position_ranges[[pos_range_idx]]
+          if (length(pos_range) > 1) {
+            sampled_pos <- sample(pos_range, 1)
+          } else {
+            sampled_pos <- pos_range[1]
+          }
+          
+          performance_scores[i] <- sampled_pos + noise_matrix[i, sim]
         }
         
-        performance_scores[i] <- sampled_pos + noise_matrix[i, sim]
+        all_positions[, sim] <- rank(performance_scores, ties.method = "random")
+        
+      } else {
+        # Two-phase simulation: Cut determination then position assignment
+        cut_makers <- logical(n_players)
+        cut_maker_scores <- numeric(n_players)
+        missed_cut_scores <- numeric(n_players)
+        
+        # Phase 1: Determine cut makers
+        for (i in 1:n_players) {
+          random_val <- random_matrix[i, sim]
+          pos_range_idx <- findInterval(random_val, c(0, cumulative_probs[i, ]))
+          pos_range_idx <- max(1, min(pos_range_idx, ncol(cumulative_probs)))
+          
+          # Last category is missed cut
+          if (pos_range_idx == ncol(cumulative_probs)) {
+            cut_makers[i] <- FALSE
+            # For missed cut players, use their other probabilities for ordering
+            other_score <- sum(marginal_probs[i, 1:(ncol(marginal_probs)-1)]) + noise_matrix[i, sim]
+            missed_cut_scores[i] <- other_score
+          } else {
+            cut_makers[i] <- TRUE
+            pos_range <- position_ranges[[pos_range_idx]]
+            if (length(pos_range) > 1) {
+              sampled_pos <- sample(pos_range, 1)
+            } else {
+              sampled_pos <- pos_range[1]
+            }
+            cut_maker_scores[i] <- sampled_pos + noise_matrix[i, sim]
+          }
+        }
+        
+        # Phase 2: Assign final positions
+        n_cut_makers <- sum(cut_makers)
+        final_positions <- numeric(n_players)
+        
+        # Cut makers get positions 1 through n_cut_makers
+        if (n_cut_makers > 0) {
+          cut_maker_ranks <- rank(cut_maker_scores[cut_makers], ties.method = "random")
+          final_positions[cut_makers] <- cut_maker_ranks
+        }
+        
+        # Missed cut players get remaining positions, ordered by their scores
+        if (n_cut_makers < n_players) {
+          missed_cut_ranks <- rank(-missed_cut_scores[!cut_makers], ties.method = "random")  # Higher score = better = lower final position number
+          final_positions[!cut_makers] <- missed_cut_ranks + n_cut_makers
+        }
+        
+        all_positions[, sim] <- final_positions
       }
-      
-      # Fast ranking
-      all_positions[, sim] <- rank(performance_scores, ties.method = "random")
     }
     
-    # Progress indicator for large simulations
-    if (n_sims > 5000 && batch %% max(1, n_batches %/% 10) == 0) {
+    # Progress indicator
+    if (n_sims > 2000 && batch %% max(1, n_batches %/% 10) == 0) {
       cat(sprintf("Simulation progress: %.1f%%\n", (batch / n_batches) * 100))
     }
   }
@@ -341,22 +443,23 @@ get_points_fast <- function(positions, points_cache) {
   return(points_cache[valid_positions])
 }
 
-# Highly optimized golf simulation with parallel processing and caching
-run_golf_simulation <- function(input_data, n_sims = 1000) {
+run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut = FALSE) {
   players_dt <- as.data.table(input_data$players)
   n_players <- nrow(players_dt)
   
-  # Platform detection
+  # Platform detection - updated to handle missing FD
   has_dk <- "DKSalary" %in% names(players_dt) && nrow(input_data$dk_points) > 0
   has_fd <- "FDSalary" %in% names(players_dt) && nrow(input_data$fd_points) > 0
   
-  cat("Starting optimized golf simulation with", format(n_sims, big.mark = ","), "iterations\n")
-  cat("Players:", n_players, "| DK:", has_dk, "| FD:", has_fd, "\n")
+  cat("Starting golf simulation with", format(n_sims, big.mark = ","), "iterations\n")
+  cat("Players:", n_players, "| DK:", has_dk, "| FD:", has_fd)
+  if (!no_cut) cat("| Cut line:", cut_line, "+ ties")
+  cat("\n")
   
-  # Pre-compute everything once
+  # Pre-compute everything once - now with cut configuration
   start_time <- Sys.time()
   cat("Pre-computing player distributions...\n")
-  player_distributions <- precompute_golf_distributions(players_dt)
+  player_distributions <- precompute_golf_distributions(players_dt, cut_line, no_cut)
   
   # Create fast points caches
   dk_points_cache <- NULL
@@ -372,16 +475,14 @@ run_golf_simulation <- function(input_data, n_sims = 1000) {
     fd_points_cache <- create_points_cache(input_data$fd_points)
   }
   
-  # Extract static data once for better memory efficiency
-  static_data <- list(
-    names = players_dt$Name
-  )
+  # Extract static data once (updated to handle missing FD)
+  static_data <- list(names = players_dt$Name)
   
   if (has_dk) {
     static_data$dk <- list(
       salary = players_dt$DKSalary,
       op = players_dt$DKOP,
-      name = players_dt$DKName
+      name = if("DKName" %in% names(players_dt)) players_dt$DKName else players_dt$Name
     )
   }
   
@@ -389,21 +490,21 @@ run_golf_simulation <- function(input_data, n_sims = 1000) {
     static_data$fd <- list(
       salary = players_dt$FDSalary,
       op = players_dt$FDOP,
-      name = players_dt$FDName
+      name = if("FDName" %in% names(players_dt)) players_dt$FDName else players_dt$Name
     )
   }
   
   precomp_time <- difftime(Sys.time(), start_time, units = "secs")
   cat(sprintf("Pre-computation completed in %.2f seconds\n", as.numeric(precomp_time)))
   
-  # Generate all finish positions at once
+  # Generate all finish positions at once - now with new simulation logic
   cat("Generating finish positions...\n")
   sim_start <- Sys.time()
   all_finish_positions <- simulate_golf_positions_vectorized(player_distributions, n_sims)
   sim_time <- difftime(Sys.time(), sim_start, units = "secs")
   cat(sprintf("Position simulation completed in %.2f seconds\n", as.numeric(sim_time)))
   
-  # Batch process fantasy points calculation for better performance
+  # Batch process fantasy points calculation
   cat("Calculating fantasy points in batches...\n")
   points_start <- Sys.time()
   
@@ -488,27 +589,42 @@ run_golf_simulation <- function(input_data, n_sims = 1000) {
   ))
 }
 
-# Analysis Functions
-analyze_golf_finishing_positions <- function(sim_results) {
+analyze_golf_finishing_positions <- function(sim_results, cut_line = 65, no_cut = FALSE) {
   setDT(sim_results)
   
+  # Base analysis
   results <- sim_results[, .(
     Win_Rate = mean(FinishPosition == 1, na.rm = TRUE) * 100,
     T5_Rate = mean(FinishPosition <= 5, na.rm = TRUE) * 100,
     T10_Rate = mean(FinishPosition <= 10, na.rm = TRUE) * 100,
     T20_Rate = mean(FinishPosition <= 20, na.rm = TRUE) * 100,
+    T30_Rate = mean(FinishPosition <= 30, na.rm = TRUE) * 100,
+    T40_Rate = mean(FinishPosition <= 40, na.rm = TRUE) * 100,
     Avg_Finish = mean(FinishPosition, na.rm = TRUE),
     Median = median(FinishPosition, na.rm = TRUE)
   ), by = Name]
   
+  # Add cut analysis if applicable
+  if (!no_cut) {
+    cut_analysis <- sim_results[, .(
+      Cut_Rate = mean(FinishPosition <= cut_line, na.rm = TRUE) * 100,
+      MissedCut_Rate = mean(FinishPosition > cut_line, na.rm = TRUE) * 100
+    ), by = Name]
+    
+    results <- merge(results, cut_analysis, by = "Name")
+  }
+  
   results <- results[order(Avg_Finish)]
   
-  for (col in setdiff(names(results), "Name")) {
+  # Round all numeric columns
+  numeric_cols <- setdiff(names(results), "Name")
+  for (col in numeric_cols) {
     results[, (col) := round(get(col), 1)]
   }
   
   return(results)
 }
+
 
 # DraftKings fantasy point projections for golf
 analyze_dk_golf_fantasy_points <- function(sim_results) {
@@ -1723,6 +1839,18 @@ ui <- dashboardPage(
     ),
     br(),
     fileInput("excel_file", "Upload Excel File", accept = c(".xlsx")),
+    
+    # Tournament Configuration Section
+    div(
+      style = "background-color: #333; padding: 10px; margin: 10px 0; border-radius: 5px;",
+      h4("Tournament Settings", style = "color: #FFD700; margin-top: 0;"),
+      checkboxInput("no_cut", "No Cut Tournament", value = FALSE),
+      conditionalPanel(
+        condition = "!input.no_cut",
+        numericInput("cut_line", "Cut Line (+ ties):", value = 65, min = 50, max = 85, step = 5)
+      )
+    ),
+    
     numericInput(
       "n_sims",
       "Number of Simulations:",
@@ -1938,6 +2066,8 @@ server <- function(input, output, session) {
         
         # Update the data preview
         output$data_preview <- renderDT({
+          req(rv$input_data$sheets$Player)
+          
           # Create a filtered version of the data for display
           display_data <- rv$input_data$sheets$Player
           
@@ -1958,18 +2088,18 @@ server <- function(input, output, session) {
               dom = "t",
               ordering = TRUE,
               columnDefs = list(
-                list(className = 'dt-center', targets = "_all")
+                list(className = "dt-center", targets = "_all")
               ),
               scrollCollapse = TRUE,
               fixedColumns = TRUE
             ),
-            class = 'cell-border stripe display compact',
+            class = "cell-border stripe display compact",
             rownames = FALSE,
             width = "100%",
             height = "auto"
           )
           
-          # Formatting for various columns
+          # Format ownership columns
           if ("DKOP" %in% colnames(display_data)) {
             dt <- dt %>% formatRound("DKOP", digits = 2)
           }
@@ -1978,11 +2108,11 @@ server <- function(input, output, session) {
             dt <- dt %>% formatRound("FDOP", digits = 2)
           }
           
-          # Format probability columns to 2 decimal places
-          numeric_cols <- c("W", "T5", "T10", "T20")
-          for (col in numeric_cols) {
+          # Format probability columns to 2 decimal places - now includes T30, T40, Cut
+          probability_cols <- c("W", "T5", "T10", "T20", "T30", "T40", "Cut")
+          for (col in probability_cols) {
             if (col %in% colnames(display_data)) {
-              dt <- dt %>% formatRound(col, digits = 2)
+              dt <- dt %>% formatRound(col, digits = 3)
             }
           }
           
@@ -2012,7 +2142,6 @@ server <- function(input, output, session) {
     })
   })
   
-  # Run simulation
   observeEvent(input$run_sim, {
     req(rv$processed_data)
     
@@ -2022,12 +2151,21 @@ server <- function(input, output, session) {
     rv$dk_fantasy_analysis <- NULL
     rv$fd_fantasy_analysis <- NULL
     
+    # Get cut configuration from inputs
+    cut_line <- if(!is.null(input$cut_line)) input$cut_line else 65
+    no_cut <- if(!is.null(input$no_cut)) input$no_cut else FALSE
+    
     # Show progress dialog
-    withProgress(message = 'Running simulations...', value = 0, {
-      # Run the simulations
+    withProgress(message = "Running simulations...", value = 0, {
+      # Show a specific modal
       setProgress(0.1, detail = "Initializing simulation...")
       
-      simulation_results <- run_golf_simulation(rv$processed_data, n_sims = input$n_sims)
+      simulation_results <- run_golf_simulation(
+        rv$processed_data, 
+        n_sims = input$n_sims,
+        cut_line = cut_line,
+        no_cut = no_cut
+      )
       
       # Store results
       rv$simulation_results <- simulation_results$results
@@ -2036,11 +2174,15 @@ server <- function(input, output, session) {
       rv$has_draftkings <- "DKFantasyPoints" %in% names(rv$simulation_results)
       rv$has_fanduel <- "FDFantasyPoints" %in% names(rv$simulation_results)
       
-      # Process finish position analysis
+      # Process finish position analysis with cut configuration
       setProgress(0.7, detail = "Analyzing finishing positions...")
-      rv$finishing_analysis <- analyze_golf_finishing_positions(rv$simulation_results)
+      rv$finishing_analysis <- analyze_golf_finishing_positions(
+        rv$simulation_results, 
+        cut_line = cut_line, 
+        no_cut = no_cut
+      )
       
-      # Process fantasy points analysis for each platform
+      # Process fantasy points analysis for each platform (unchanged)
       setProgress(0.9, detail = "Analyzing fantasy points...")
       if (rv$has_draftkings) {
         rv$dk_fantasy_analysis <- analyze_dk_golf_fantasy_points(rv$simulation_results)
@@ -2366,10 +2508,8 @@ server <- function(input, output, session) {
       
       # Join data with available columns
       if (length(join_cols) > 1) {
-        # Filter to only include columns that exist
         join_cols <- intersect(join_cols, names(players_data))
         
-        # Join with available columns
         analysis_data <- merge(analysis_data,
                                players_data[, ..join_cols],
                                by = "Name",
@@ -2386,16 +2526,16 @@ server <- function(input, output, session) {
           col_order <- c(col_order, "FDSalary")
         }
         
-        # Add remaining columns
-        col_order <- c(
-          col_order,
-          "Avg_Finish",
-          "Median",
-          "Win_Rate",
-          "T5_Rate",
-          "T10_Rate",
-          "T20_Rate"
-        )
+        # Add stats columns in logical order
+        stats_cols <- c("Avg_Finish", "Median", "Win_Rate", "T5_Rate", "T10_Rate", 
+                        "T20_Rate", "T30_Rate", "T40_Rate")
+        
+        # Add cut columns if they exist
+        if ("Cut_Rate" %in% names(analysis_data)) {
+          stats_cols <- c(stats_cols, "Cut_Rate", "MissedCut_Rate")
+        }
+        
+        col_order <- c(col_order, intersect(stats_cols, names(analysis_data)))
         
         # Ensure all columns exist
         col_order <- intersect(col_order, names(analysis_data))
@@ -2412,22 +2552,22 @@ server <- function(input, output, session) {
         scrollX = TRUE,
         pageLength = -1,
         dom = "t",
-        order = list(list(4, 'asc')), # Sort by Avg_Finish
+        order = list(list(which(names(analysis_data) == "Avg_Finish"), "asc")),
         columnDefs = list(list(
-          targets = "_all", className = 'dt-center'
+          targets = "_all", className = "dt-center"
         ))
       ),
       rownames = FALSE,
-      class = 'cell-border stripe'
+      class = "cell-border stripe"
     )
     
     # Format Salary columns
     if ("DKSalary" %in% names(analysis_data)) {
-      dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+      dt <- dt %>% formatCurrency("DKSalary", currency = "$", interval = 3, mark = ",", digits = 0)
     }
     
     if ("FDSalary" %in% names(analysis_data)) {
-      dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+      dt <- dt %>% formatCurrency("FDSalary", currency = "$", interval = 3, mark = ",", digits = 0)
     }
     
     dt
@@ -3205,10 +3345,7 @@ output$download_fd_random_lineups <- downloadHandler(
 )
 
 
-  
-  # COMPLETE FIXED OBSERVER FUNCTIONS - Replace your existing observers with these:
-  
-  # 1. DraftKings optimization button handler
+
   observeEvent(input$run_dk_optimization, {
     req(rv$simulation_results, rv$has_draftkings)
     
