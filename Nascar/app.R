@@ -266,7 +266,7 @@ process_input_data <- function(input_data) {
   } else
     data.table()
   
-
+  
   # Return processed data
   list(
     drivers = processed_drivers,
@@ -526,6 +526,7 @@ calculate_match_score <- function(sim_start, sim_finish, profile_start, profile_
   return(score)
 }
 
+
 assign_dominator_points_from_profiles <- function(race_results, race_weights, race_profiles, dom_tier_limits, platform = "DK") {
   setDT(race_results)
   setDT(race_weights)
@@ -548,74 +549,62 @@ assign_dominator_points_from_profiles <- function(race_results, race_weights, ra
   race_profiles_subset <- race_profiles[RaceID == selected_race]
   if (nrow(race_profiles_subset) == 0) return(race_results)
   
-  # Sort profiles by dominator points descending
+  # Sort profiles by dominator points descending (assign highest points first)
   if (platform == "DK") {
     setorder(race_profiles_subset, -DKDomPoints)
   } else {
     setorder(race_profiles_subset, -FDDomPoints)
   }
   
-  # Pre-compute tier limits lookup
-  tier_limits <- setNames(dom_tier_limits[[max_col]], dom_tier_limits$DomTier)
-  
   # Handle missing DomTier
   if (!"DomTier" %in% names(race_results)) {
     race_results[, DomTier := 1]
   }
   
-  # Pre-compute all match scores using distance-based approach
-  n_drivers <- nrow(race_results)
-  n_profiles <- nrow(race_profiles_subset)
+  # Pre-compute tier limits lookup
+  tier_limits <- setNames(dom_tier_limits[[max_col]], dom_tier_limits$DomTier)
   
-  # Vectorized distance calculation
-  driver_starts_rep <- rep(race_results$Starting, n_profiles)
-  driver_finishes_rep <- rep(race_results$FinishPosition, n_profiles)
-  driver_tiers_rep <- rep(race_results$DomTier, n_profiles)
+  # Track assigned drivers
+  assigned_drivers <- logical(nrow(race_results))
   
-  profile_starts_rep <- rep(race_profiles_subset$StartPos, each = n_drivers)
-  profile_finishes_rep <- rep(race_profiles_subset$FinPos, each = n_drivers)
-  profile_points_rep <- rep(race_profiles_subset[[dom_col]], each = n_drivers)
-  
-  # Calculate position distance (euclidean distance between start/finish coordinates)
-  finish_diffs <- abs(driver_finishes_rep - profile_finishes_rep)
-  start_diffs <- abs(driver_starts_rep - profile_starts_rep)
-  position_distance <- sqrt((finish_diffs^2) + (start_diffs^2))
-  
-  # Add tier bonus (lower tier = better driver = lower score)
-  tier_bonuses <- (driver_tiers_rep - 1) * pmax(1, profile_points_rep / 5)
-  
-  # Final match scores (lower = better match)
-  all_scores <- position_distance + tier_bonuses
-  score_matrix <- matrix(all_scores, nrow = n_drivers, ncol = n_profiles)
-  
-  # Assignment loop with tier eligibility filtering
-  assigned_drivers <- logical(n_drivers)
-  
-  for (i in seq_len(n_profiles)) {
+  # Assignment loop
+  for (i in seq_len(nrow(race_profiles_subset))) {
     profile_points <- race_profiles_subset[[dom_col]][i]
+    profile_start <- race_profiles_subset$StartPos[i]
+    profile_finish <- race_profiles_subset$FinPos[i]
     
-    # Find available drivers
-    available_idx <- which(!assigned_drivers)
-    if (length(available_idx) == 0) break
+    # Skip if no points to assign
+    if (is.na(profile_points) || profile_points == 0) next
     
-    # Filter by tier eligibility (vectorized)
-    driver_tiers <- race_results$DomTier[available_idx]
-    tier_maxes <- tier_limits[as.character(driver_tiers)]
-    tier_eligible <- !is.na(tier_maxes) & tier_maxes >= profile_points
+    # Find drivers whose tier allows this point value AND who haven't been assigned yet
+    eligible_drivers_mask <- !assigned_drivers & 
+      !is.na(tier_limits[as.character(race_results$DomTier)]) &
+      tier_limits[as.character(race_results$DomTier)] >= profile_points
     
-    eligible_idx <- available_idx[tier_eligible]
-    if (length(eligible_idx) == 0) next  # Skip if no eligible drivers
+    eligible_indices <- which(eligible_drivers_mask)
     
-    # Find best match among tier-eligible drivers
-    best_idx <- eligible_idx[which.min(score_matrix[eligible_idx, i])]
-    
-    # Assign points
-    race_results[best_idx, (result_col) := profile_points]
-    assigned_drivers[best_idx] <- TRUE
+    if (length(eligible_indices) > 0) {
+      # Calculate position distances for all eligible drivers
+      driver_starts <- race_results$Starting[eligible_indices]
+      driver_finishes <- race_results$FinishPosition[eligible_indices]
+      
+      finish_diffs <- abs(driver_finishes - profile_finish)
+      start_diffs <- abs(driver_starts - profile_start)
+      distances <- sqrt(finish_diffs^2 + start_diffs^2)
+      
+      # Find closest match
+      best_match_idx <- eligible_indices[which.min(distances)]
+      
+      # Assign points and mark as assigned
+      race_results[best_match_idx, (result_col) := profile_points]
+      assigned_drivers[best_match_idx] <- TRUE
+    }
+    # If no eligible drivers, the points go unassigned (silent skip)
   }
   
   return(race_results)
 }
+
 
 assign_fd_lap_points <- function(race_results, fd_laps_data) {
   setDT(race_results)
@@ -770,7 +759,8 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
   # Extract static data once
   static_data <- list(
     names = drivers_dt$Name,
-    starting = drivers_dt$Starting
+    starting = drivers_dt$Starting,
+    dom_tier = drivers_dt$DomTier
   )
   
   if (has_dk) {
@@ -796,7 +786,7 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
   start_time <- Sys.time()
   all_finish_positions <- simulate_finish_positions_vectorized(driver_distributions, n_sims)
   step1_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-  cat("✓ Finish positions completed in", round(step1_time, 1), "seconds\n")
+  cat("Finish positions completed in", round(step1_time, 1), "seconds\n")
   
   # Vectorized fantasy point calculation - KEEP SimID!
   cat("[STEP 2/3] Calculating fantasy points...\n")
@@ -825,7 +815,8 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
       SimID = sim,  # KEEP THIS!
       Name = static_data$names,
       Starting = static_data$starting,
-      FinishPosition = all_finish_positions[, sim]
+      FinishPosition = all_finish_positions[, sim],
+      DomTier = static_data$dom_tier
     )
     
     if (has_dk) {
@@ -888,14 +879,14 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
   }
   
   step2_time <- as.numeric(difftime(Sys.time(), step2_start, units = "secs"))
-  cat("✓ Fantasy points completed in", round(step2_time, 1), "seconds\n")
+  cat("Fantasy points completed in", round(step2_time, 1), "seconds\n")
   
   # Combine results
   cat("[STEP 3/3] Combining results...\n")
   step3_start <- Sys.time()
   combined_results <- rbindlist(results_list)
   step3_time <- as.numeric(difftime(Sys.time(), step3_start, units = "secs"))
-  cat("✓ Results combined in", round(step3_time, 1), "seconds\n")
+  cat("Results combined in", round(step3_time, 1), "seconds\n")
   
   total_time <- step1_time + step2_time + step3_time
   cat("=== SIMULATION COMPLETE ===\n")
@@ -1967,7 +1958,6 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   return(list(count = nrow(filtered_lineups), thresholds = thresholds))
 }
 
-# REPLACE your calculate_fd_filtered_pool_stats function with this FIXED version
 calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
     return(list(count = 0, thresholds = NULL))
@@ -2006,7 +1996,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean <= filters$max_geometric_mean]
   }
   
-  # FIXED: Apply cumulative starting position filters
+  # Apply starting position filters
   if (!is.null(filters$min_cumulative_starting) && "CumulativeStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -2014,7 +2004,7 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # FIXED: Apply geometric mean starting position filters
+  # Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && "GeometricMeanStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
@@ -2035,46 +2025,8 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     return(list(count = 0, thresholds = NULL))
   }
   
-  # Calculate thresholds for display
-  thresholds <- list()
-  threshold_columns <- c(
-    "Top1Count", "Top2Count", "Top3Count", "Top5Count",
-    "CumulativeOwnership", "GeometricMean",
-    "CumulativeStarting", "GeometricMeanStarting"  # FIXED: Added these
-  )
-  
-  for (col in threshold_columns) {
-    if (col %in% names(filtered_lineups)) {
-      min_val <- min(filtered_lineups[[col]], na.rm = TRUE)
-      max_val <- max(filtered_lineups[[col]], na.rm = TRUE)
-      
-      if (col == "CumulativeOwnership") {
-        min_name <- "min_cumulative_ownership"
-        max_name <- "max_cumulative_ownership"
-      } else if (col == "GeometricMean") {
-        min_name <- "min_geometric_mean"
-        max_name <- "max_geometric_mean"
-      } else if (col == "CumulativeStarting") {
-        min_name <- "min_cumulative_starting"
-        max_name <- "max_cumulative_starting"
-      } else if (col == "GeometricMeanStarting") {
-        min_name <- "min_geometric_starting"
-        max_name <- "max_geometric_starting"
-      } else {
-        col_name <- gsub("Count", "", col)
-        min_name <- paste0("min_", tolower(col_name))
-        max_name <- paste0("max_", tolower(col_name))
-      }
-      
-      thresholds[[min_name]] <- min_val
-      thresholds[[max_name]] <- max_val
-    }
-  }
-  
-  return(list(count = nrow(filtered_lineups), thresholds = thresholds))
+  return(list(count = nrow(filtered_lineups), thresholds = NULL))
 }
-
-
 
 
 
@@ -3079,119 +3031,71 @@ ui <- dashboardPage(
                 ),
                 conditionalPanel(
                   condition = "output.has_fd_lineups == 'true'",
-                  h4("FanDuel Lineup Filters"),
                   fluidRow(
-                    column(
-                      6,
-                      numericInput(
-                        "fd_cash_min_top1",
-                        "Min Top 1 Count:",
-                        value = 0,
-                        min = 0
-                      )
-                    ),
-                    column(
-                      6,
-                      numericInput(
-                        "fd_cash_min_top2",
-                        "Min Top 2 Count:",
-                        value = 0,
-                        min = 0
-                      )
-                    )
-                  ),
-                  fluidRow(
-                    column(
-                      6,
-                      numericInput(
-                        "fd_cash_min_top3",
-                        "Min Top 3 Count:",
-                        value = 0,
-                        min = 0
-                      )
-                    ),
-                    column(
-                      6,
-                      numericInput(
-                        "fd_cash_min_top5",
-                        "Min Top 5 Count:",
-                        value = 0,
-                        min = 0
-                      )
-                    )
-                  ),
-                  fluidRow(
-                    column(
-                      6,
-                      sliderInput(
-                        "fd_ownership_range",
-                        "Cumulative Ownership Range:",
-                        min = 0,
-                        max = 500,
-                        value = c(0, 500),
-                        step = 5
-                      )
-                    ), 
-                    column(
-                      6,
-                      sliderInput(
-                        "fd_geometric_range",
-                        "Geometric Mean Range:",
-                        min = 0,
-                        max = 100,
-                        value = c(0, 100),
-                        step = 0.5
-                      )
-                    )
-                  ),
-                  fluidRow(
-                    column(
-                      6,
-                      selectizeInput(
-                        "fd_cash_excluded_drivers", 
-                        "Exclude Drivers:",
-                        choices = NULL,
-                        multiple = TRUE,
-                        options = list(
-                          plugins = list('remove_button'),
-                          placeholder = 'Click to select drivers to exclude'
-                        )
-                      )
-                    ),
-                    column(
-                      6,
-                      numericInput(
-                        "fd_num_random_lineups", 
-                        "Number of Lineups to Generate:", 
-                        value = 20, 
-                        min = 1, 
-                        max = 150
-                      )
-                    )
-                  ),
-                  fluidRow(
-                    column(
-                      6, 
-                      div(
-                        class = "well well-sm",
-                        h4("Filtered Pool Statistics:"),
-                        textOutput("fd_filtered_pool_size")
-                      )
-                    ), 
-                    column(
-                      6,
-                      div(
-                        style = "margin-top: 20px;",
-                        actionButton(
-                          "generate_fd_lineups",
-                          "Randomize FanDuel Lineups",
-                          class = "btn-primary btn-lg",
-                          style = "width: 100%;"
+                    box(width = 12, title = "FanDuel Lineup Filters",
+                        fluidRow(
+                          column(3, numericInput("fd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
+                          column(3, numericInput("fd_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
+                          column(3, numericInput("fd_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
+                          column(3, numericInput("fd_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
                         ),
-                        br(),
-                        br(),
-                      )
+                        fluidRow(
+                          column(6,
+                                 sliderInput("fd_ownership_range", "Cumulative Ownership Range:",
+                                             min = 0, max = 500, value = c(0, 500), step = 5)
+                          ),
+                          column(6,
+                                 sliderInput("fd_geometric_range", "Geometric Mean Ownership Range:",
+                                             min = 0, max = 100, value = c(0, 100), step = 0.5)
+                          )
+                        ),
+                        # FIXED: Added missing starting position filters for FanDuel (same as DraftKings)
+                        fluidRow(
+                          column(6,
+                                 sliderInput("fd_starting_range", "Cumulative Starting Position Range:",
+                                             min = 5, max = 200, value = c(5, 200), step = 1)
+                          ),
+                          column(6,
+                                 sliderInput("fd_starting_geo_range", "Geometric Mean Starting Position Range:",
+                                             min = 1, max = 40, value = c(1, 40), step = 0.1)
+                          )
+                        ),
+                        fluidRow(
+                          column(6,
+                                 selectizeInput("fd_excluded_drivers", "Exclude Drivers:",
+                                                choices = NULL, multiple = TRUE,
+                                                options = list(plugins = list('remove_button'),
+                                                               placeholder = 'Click to select drivers to exclude'))
+                          ),
+                          column(6,
+                                 numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", 
+                                              value = 20, min = 1, max = 150)
+                          )
+                        ),
+                        fluidRow(
+                          column(6,
+                                 div(class = "well well-sm",
+                                     h4("Filtered Pool Statistics:"),
+                                     textOutput("fd_filtered_pool_size"))  # This should now work
+                          ),
+                          column(6,
+                                 div(style = "margin-top: 20px;",
+                                     actionButton("generate_fd_lineups", "Randomize FanDuel Lineups", 
+                                                  class = "btn-primary btn-lg", style = "width: 100%;"),
+                                     br(), br(),
+                                     downloadButton("download_fd_random_lineups", "Download Selected Lineups", 
+                                                    style = "width: 100%;"))
+                          )
+                        )
                     )
+                  ),
+                  fluidRow(
+                    box(width = 12, title = "FanDuel Driver Exposure Analysis",
+                        DTOutput("fd_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
+                  ),
+                  fluidRow(
+                    box(width = 12, title = "Generated FanDuel Lineups",
+                        DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
                   )
                 )
               )
@@ -3299,10 +3203,10 @@ server <- function(input, output, session) {
       max_cumulative_ownership = input$fd_ownership_range[2],
       min_geometric_mean = input$fd_geometric_range[1],
       max_geometric_mean = input$fd_geometric_range[2],
-      min_cumulative_starting = input$fd_starting_range[1],    # NEW
-      max_cumulative_starting = input$fd_starting_range[2],    # NEW
-      min_geometric_starting = input$fd_starting_geo_range[1], # NEW
-      max_geometric_starting = input$fd_starting_geo_range[2], # NEW
+      min_cumulative_starting = input$fd_starting_range[1],
+      max_cumulative_starting = input$fd_starting_range[2],
+      min_geometric_starting = input$fd_starting_geo_range[1],
+      max_geometric_starting = input$fd_starting_geo_range[2],
       excluded_drivers = input$fd_excluded_drivers
     )
   })
@@ -3372,7 +3276,6 @@ server <- function(input, output, session) {
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
   
-  # REPLACE your existing FanDuel filter observer with this FIXED version
   observeEvent({
     list(
       input$fd_min_top1_count,
@@ -3386,10 +3289,7 @@ server <- function(input, output, session) {
       input$fd_excluded_drivers
     )
   }, {
-    # Only process if:
-    # 1. Not currently updating sliders programmatically
-    # 2. Sliders have been initialized 
-    # 3. We have the necessary data
+    # Only process if we have the necessary data and sliders are initialized
     if (!isTRUE(rv$updating_sliders) && 
         isTRUE(rv$sliders_initialized$fd) &&
         !is.null(rv$fd_optimal_lineups) && 
@@ -3401,7 +3301,7 @@ server <- function(input, output, session) {
       # Get existing driver mapping from the current exposure data
       existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters - FIXED: Added ALL filters
+      # Calculate updated driver exposure with new filters
       current_filters <- list(
         min_top1_count = input$fd_min_top1_count,
         min_top2_count = input$fd_min_top2_count,
@@ -3411,10 +3311,10 @@ server <- function(input, output, session) {
         max_cumulative_ownership = input$fd_ownership_range[2],
         min_geometric_mean = input$fd_geometric_range[1],
         max_geometric_mean = input$fd_geometric_range[2],
-        min_cumulative_starting = input$fd_starting_range[1],      # FIXED: These were missing!
-        max_cumulative_starting = input$fd_starting_range[2],      # FIXED: These were missing!
-        min_geometric_starting = input$fd_starting_geo_range[1],   # FIXED: These were missing!
-        max_geometric_starting = input$fd_starting_geo_range[2],   # FIXED: These were missing!
+        min_cumulative_starting = input$fd_starting_range[1],
+        max_cumulative_starting = input$fd_starting_range[2],
+        min_geometric_starting = input$fd_starting_geo_range[1],
+        max_geometric_starting = input$fd_starting_geo_range[2],
         excluded_drivers = input$fd_excluded_drivers
       )
       
@@ -3426,7 +3326,7 @@ server <- function(input, output, session) {
       )
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
-
+  
   # Cleanup when simulation data changes
   observeEvent(rv$simulation_results, {
     # Clean up previous analysis results when new simulation starts
@@ -3435,6 +3335,19 @@ server <- function(input, output, session) {
       cleanup_memory(verbose = FALSE)
     }
   }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+  observeEvent(rv$sliders_initialized$fd, {
+    if (isTRUE(rv$sliders_initialized$fd)) {
+      # Force a recalculation of the filtered pool size after a short delay
+      observe({
+        invalidateLater(500, session)  # Wait 500ms for inputs to stabilize
+        if (exists("input") && !is.null(input$fd_ownership_range)) {
+          # Trigger the output to recalculate by invalidating it
+          outputOptions(output, "fd_filtered_pool_size", suspendWhenHidden = FALSE)
+        }
+      })
+    }
+  }, once = TRUE)
   
   
   output$has_draftkings <- reactive({
@@ -3717,17 +3630,13 @@ server <- function(input, output, session) {
         HTML(sprintf(
           "<h4>Simulation Results:</h4>
         <ul>
-        <li><strong>Total Results:</strong> %s</li>
-        <li><strong>Drivers:</strong> %d</li>
         <li><strong>Simulations:</strong> %s</li>
         <li><strong>Platforms:</strong> %s</li>
         </ul>
-        <p>✅ Review the accuracy analysis and projections</p>
-        <p>✅ Then move to optimal lineup creation</p>
+        <p>Review the accuracy analysis and projections</p>
+        <p>Then move to optimal lineup creation</p>
         <hr>
         <small><em>Note: Large datasets (50k+ sims) use sampling for analysis performance while maintaining accuracy.</em></small>",
-          format(n_total_results, big.mark = ","),
-          n_drivers,
           format(input$n_sims, big.mark = ","),
           paste(c(
             if(rv$has_draftkings) "DraftKings" else NULL,
@@ -4694,7 +4603,7 @@ server <- function(input, output, session) {
     
     ggplotly(p)
   })
-
+  
   
   # DraftKings Fantasy Projections
   output$dk_fantasy_projections <- renderDT({
@@ -5093,7 +5002,6 @@ server <- function(input, output, session) {
     }
   })
   
-  
   observeEvent(input$run_fd_optimization, {
     req(rv$simulation_results, rv$has_fanduel)
     
@@ -5241,44 +5149,6 @@ server <- function(input, output, session) {
         selected = character(0)
       )
       
-      # Update ownership slider based on actual data
-      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "fd_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own)
-          )
-        }
-      }
-      
-      # Update geometric mean slider based on actual data
-      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-        geometric_values <- rv$fd_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "fd_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo)
-          )
-        }
-      }
-      
       # Show success message
       showModal(modalDialog(
         title = "Success", 
@@ -5306,7 +5176,6 @@ server <- function(input, output, session) {
     # Final cleanup
     cleanup_memory()
   })
-  
   
   output$dk_optimal_lineups_table <- renderDT({
     req(rv$dk_optimal_lineups_display)
@@ -5486,7 +5355,7 @@ server <- function(input, output, session) {
     
     dt
   })
-
+  
   output$dk_filtered_pool_size <- renderText({
     req(rv$dk_optimal_lineups)
     
@@ -5510,28 +5379,44 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  # REPLACE the fd_filtered_pool_size output with this FIXED version
+  
   output$fd_filtered_pool_size <- renderText({
+    # Add dependencies to ensure this only runs when everything is ready
     req(rv$fd_optimal_lineups)
+    req(rv$sliders_initialized$fd)  # Wait for slider initialization
     
-    filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      min_cumulative_ownership = input$fd_ownership_range[1],
-      max_cumulative_ownership = input$fd_ownership_range[2],
-      min_geometric_mean = input$fd_geometric_range[1],
-      max_geometric_mean = input$fd_geometric_range[2],
-      min_cumulative_starting = input$fd_starting_range[1],        # FIXED: Added
-      max_cumulative_starting = input$fd_starting_range[2],        # FIXED: Added
-      min_geometric_starting = input$fd_starting_geo_range[1],     # FIXED: Added
-      max_geometric_starting = input$fd_starting_geo_range[2],     # FIXED: Added
-      excluded_drivers = input$fd_excluded_drivers
-    )
+    # Also wait for the actual input values to be available
+    req(input$fd_min_top1_count)
+    req(input$fd_ownership_range)
+    req(input$fd_geometric_range) 
+    req(input$fd_starting_range)
+    req(input$fd_starting_geo_range)
     
-    stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-    paste("Number of lineups in filtered pool:", stats$count)
+    tryCatch({
+      # Create filters list
+      filters <- list(
+        min_top1_count = input$fd_min_top1_count %||% 0,
+        min_top2_count = input$fd_min_top2_count %||% 0,
+        min_top3_count = input$fd_min_top3_count %||% 0,
+        min_top5_count = input$fd_min_top5_count %||% 0,
+        min_cumulative_ownership = input$fd_ownership_range[1] %||% 0,
+        max_cumulative_ownership = input$fd_ownership_range[2] %||% 500,
+        min_geometric_mean = input$fd_geometric_range[1] %||% 0,
+        max_geometric_mean = input$fd_geometric_range[2] %||% 100,
+        min_cumulative_starting = input$fd_starting_range[1] %||% 5,
+        max_cumulative_starting = input$fd_starting_range[2] %||% 200,
+        min_geometric_starting = input$fd_starting_geo_range[1] %||% 1,
+        max_geometric_starting = input$fd_starting_geo_range[2] %||% 40,
+        excluded_drivers = input$fd_excluded_drivers %||% character(0)
+      )
+      
+      stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
+      paste("Number of lineups in filtered pool:", stats$count)
+      
+    }, error = function(e) {
+      cat("Error in fd_filtered_pool_size:", e$message, "\n")
+      "Calculating pool size..."
+    })
   })
   
   # Download handlers
@@ -5792,7 +5677,7 @@ server <- function(input, output, session) {
     })
   })
   
-
+  
   # REPLACE your existing tab observer (around line 3800) with this FIXED version
   observe({
     if(input$sidebar_menu == "lineup_builder") {
@@ -5954,9 +5839,9 @@ server <- function(input, output, session) {
       }
     }
   })
-
   
-  # REPLACE your existing DraftKings slider initialization with this FIXED version
+  
+  
   observeEvent(rv$dk_optimal_lineups, {
     if (!is.null(rv$dk_optimal_lineups) && 
         nrow(rv$dk_optimal_lineups) > 0 && 
@@ -6061,7 +5946,116 @@ server <- function(input, output, session) {
       })
     }
   }, once = TRUE)
-
+  
+  observeEvent(rv$fd_optimal_lineups, {
+    if (!is.null(rv$fd_optimal_lineups) && 
+        nrow(rv$fd_optimal_lineups) > 0 && 
+        !isTRUE(rv$sliders_initialized$fd)) {
+      
+      cat("Initializing FanDuel sliders...\n")
+      
+      # Set flag to prevent filter observers from firing
+      rv$updating_sliders <- TRUE
+      
+      # Use isolate to prevent any reactive dependencies during initialization
+      isolate({
+        # Update Top Count inputs to default to 0
+        updateNumericInput(session, "fd_min_top1_count", value = 0)
+        updateNumericInput(session, "fd_min_top2_count", value = 0)
+        updateNumericInput(session, "fd_min_top3_count", value = 0)
+        updateNumericInput(session, "fd_min_top5_count", value = 0)
+        
+        # Update ownership slider based on actual data range
+        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
+          ownership_values <- ownership_values[!is.na(ownership_values)]
+          
+          if (length(ownership_values) > 0) {
+            min_own <- floor(min(ownership_values))
+            max_own <- ceiling(max(ownership_values))
+            
+            cat("FD Ownership range:", min_own, "to", max_own, "\n")
+            
+            updateSliderInput(
+              session,
+              "fd_ownership_range",
+              min = min_own,
+              max = max_own,
+              value = c(min_own, max_own),
+              step = 1
+            )
+          }
+        }
+        
+        # Update geometric mean slider
+        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+          geometric_values <- rv$fd_optimal_lineups$GeometricMean
+          geometric_values <- geometric_values[!is.na(geometric_values)]
+          
+          if (length(geometric_values) > 0) {
+            min_geo <- floor(min(geometric_values))
+            max_geo <- ceiling(max(geometric_values))
+            
+            cat("FD Geometric range:", min_geo, "to", max_geo, "\n")
+            
+            updateSliderInput(
+              session,
+              "fd_geometric_range",
+              min = min_geo,
+              max = max_geo,
+              value = c(min_geo, max_geo),
+              step = 0.1
+            )
+          }
+        }
+        
+        # Update starting position sliders
+        if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
+          starting_values <- rv$fd_optimal_lineups$CumulativeStarting
+          starting_values <- starting_values[!is.na(starting_values)]
+          
+          if (length(starting_values) > 0) {
+            min_start <- floor(min(starting_values))
+            max_start <- ceiling(max(starting_values))
+            
+            updateSliderInput(session, "fd_starting_range",
+                              min = min_start, max = max_start, 
+                              value = c(min_start, max_start), step = 1)
+          }
+        }
+        
+        if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
+          geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
+          geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
+          
+          if (length(geo_starting_values) > 0) {
+            min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+            max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+            
+            updateSliderInput(session, "fd_starting_geo_range",
+                              min = min_geo_start, max = max_geo_start, 
+                              value = c(min_geo_start, max_geo_start), step = 0.1)
+          }
+        }
+      })
+      
+      # FIXED: Use a more reliable way to mark initialization complete
+      observe({
+        invalidateLater(1500, session)  # Wait longer for all updates to complete
+        if (isTRUE(rv$updating_sliders)) {  
+          rv$sliders_initialized$fd <- TRUE
+          rv$updating_sliders <- FALSE
+          cat("FanDuel sliders initialization complete\n")
+          
+          # Force the filtered pool size to recalculate after initialization
+          observe({
+            invalidateLater(200, session)  # Short delay then trigger recalc
+            outputOptions(output, "fd_filtered_pool_size", suspendWhenHidden = FALSE)
+          })
+        }
+      })
+    }
+  }, once = TRUE)
   
   # Generate random FanDuel lineups
   observeEvent(input$generate_fd_lineups, {
@@ -6374,7 +6368,7 @@ server <- function(input, output, session) {
     return(dt)
   })
   
-
+  
   
   output$dk_random_lineups_table <- renderDT({
     req(rv$dk_random_lineups)
@@ -6555,7 +6549,7 @@ server <- function(input, output, session) {
     )
   })
   
-
+  
   output$download_dk_random_lineups <- downloadHandler(
     filename = function() {
       paste("dk_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
@@ -6614,27 +6608,70 @@ server <- function(input, output, session) {
     contentType = "text/csv"
   )
   
-  
-  
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
+    # Use default values if sliders haven't been initialized yet
     filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      min_cumulative_ownership = input$fd_ownership_range[1],
-      max_cumulative_ownership = input$fd_ownership_range[2],
-      min_geometric_mean = input$fd_geometric_range[1],
-      max_geometric_mean = input$fd_geometric_range[2],
-      excluded_drivers = input$fd_excluded_drivers
+      min_top1_count = if(is.null(input$fd_min_top1_count)) 0 else input$fd_min_top1_count,
+      min_top2_count = if(is.null(input$fd_min_top2_count)) 0 else input$fd_min_top2_count,
+      min_top3_count = if(is.null(input$fd_min_top3_count)) 0 else input$fd_min_top3_count,
+      min_top5_count = if(is.null(input$fd_min_top5_count)) 0 else input$fd_min_top5_count,
+      
+      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) {
+        if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+          floor(min(rv$fd_optimal_lineups$CumulativeOwnership, na.rm = TRUE))
+        } else 0
+      } else input$fd_ownership_range[1],
+      
+      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) {
+        if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+          ceiling(max(rv$fd_optimal_lineups$CumulativeOwnership, na.rm = TRUE))
+        } else 500
+      } else input$fd_ownership_range[2],
+      
+      min_geometric_mean = if(is.null(input$fd_geometric_range)) {
+        if("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+          floor(min(rv$fd_optimal_lineups$GeometricMean, na.rm = TRUE))
+        } else 0
+      } else input$fd_geometric_range[1],
+      
+      max_geometric_mean = if(is.null(input$fd_geometric_range)) {
+        if("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+          ceiling(max(rv$fd_optimal_lineups$GeometricMean, na.rm = TRUE))
+        } else 100
+      } else input$fd_geometric_range[2],
+      
+      min_cumulative_starting = if(is.null(input$fd_starting_range)) {
+        if("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
+          floor(min(rv$fd_optimal_lineups$CumulativeStarting, na.rm = TRUE))
+        } else 5
+      } else input$fd_starting_range[1],
+      
+      max_cumulative_starting = if(is.null(input$fd_starting_range)) {
+        if("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
+          ceiling(max(rv$fd_optimal_lineups$CumulativeStarting, na.rm = TRUE))
+        } else 200
+      } else input$fd_starting_range[2],
+      
+      min_geometric_starting = if(is.null(input$fd_starting_geo_range)) {
+        if("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
+          floor(min(rv$fd_optimal_lineups$GeometricMeanStarting, na.rm = TRUE) * 10) / 10
+        } else 1
+      } else input$fd_starting_geo_range[1],
+      
+      max_geometric_starting = if(is.null(input$fd_starting_geo_range)) {
+        if("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
+          ceiling(max(rv$fd_optimal_lineups$GeometricMeanStarting, na.rm = TRUE) * 10) / 10
+        } else 40
+      } else input$fd_starting_geo_range[2],
+      
+      excluded_drivers = if(is.null(input$fd_excluded_drivers)) character(0) else input$fd_excluded_drivers
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
     paste("Number of lineups in filtered pool:", stats$count)
   })
-  
   
   # Clean up on session end
   session$onSessionEnded(function() {
