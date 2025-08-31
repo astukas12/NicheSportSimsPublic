@@ -6,9 +6,102 @@ library(plotly)
 library(data.table)
 library(readxl)
 library(dplyr)
+library(shinycssloaders)
+library(shinyjs)
 
 # Your helper functions
 setDTthreads(2)
+
+
+# Set up custom CSS for app theme with black and gold color scheme
+custom_css <- "
+  /* Override dashboard header colors */
+  .skin-blue .main-header {
++    background-color: #000000;
+  }
+  .skin-blue .main-header .logo {
+    background-color: #000000;
+    color: #FFD700; 
+  }
+  .skin-blue .main-header .logo:hover {
+    background-color: #000000;
+  }
+  .skin-blue .main-header .navbar {
+    background-color: #000000;
+  }
+  
+  /* Override dashboard sidebar colors */
+  .skin-blue .left-side, .skin-blue .main-sidebar, .skin-blue .wrapper {
+    background-color: #222222;
+  }
+  .skin-blue .sidebar a {
+    color: #FFD700; 
+  }
+  .skin-blue .sidebar-menu > li.active > a, 
+  .skin-blue .sidebar-menu > li:hover > a {
+    color: #ffffff;
+    background: #333333;
+    border-left-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+  }
+  
+  /* Customize box headers */
+  .box.box-primary .box-header {
+    background-color: #333333;
+    color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+  }
+  
+  /* Style buttons */
+  .btn-primary {
+    background-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+    border-color: #DAA520; /* Changed from #e65c00 to #DAA520 (darker gold) */
+    color: #000000; /* Changed text color to black for better contrast on gold */
+  }
+  .btn-primary:hover, .btn-primary:focus {
+    background-color: #DAA520; /* Changed from #e65c00 to #DAA520 */
+    border-color: #B8860B; /* Changed from #cc5200 to #B8860B (darkgoldenrod) */
+    color: #000000; /* Keep text black for contrast */
+  }
+  
+  /* Style tabs */
+  .nav-tabs-custom > .nav-tabs > li.active {
+    border-top-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+  }
+  
+  /* Additional styles for gold accents */
+  .pagination > .active > a, 
+  .pagination > .active > span, 
+  .pagination > .active > a:hover, 
+  .pagination > .active > span:hover, 
+  .pagination > .active > a:focus, 
+  .pagination > .active > span:focus {
+    background-color: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for sliders and other inputs */
+  .irs-bar,
+  .irs-bar-edge,
+  .irs-single,
+  .irs-from,
+  .irs-to {
+    background: #FFD700;
+    border-color: #DAA520;
+    color: #000000;
+  }
+  
+  /* Style for checkboxes and radio buttons */
+  input[type='checkbox']:checked, 
+  input[type='radio']:checked {
+    background-color: #FFD700;
+    border-color: #DAA520;
+  }
+  
+  /* Style loader spinners */
+  .shiny-spinner .load-container .loader {
+    border-top-color: #FFD700;
+  }
+"
 
 read_f1_input_file <- function(file_path) {
   if (!file.exists(file_path)) {
@@ -1794,6 +1887,12 @@ ui <- dashboardPage(
   dashboardHeader(title = "F1 Fantasy Simulator"),
   
   dashboardSidebar(
+    useShinyjs(),
+    div(
+      style = "text-align: center; padding: 10px; margin-bottom: 5px;",
+      tags$img(src = "logo.jpg", height = "200px", width = "auto", 
+               style = "border: 2px solid #FFD700; border-radius: 10px;")
+    ),
     sidebarMenu(
       id = "sidebar",
       menuItem("Input Check", tabName = "upload", icon = icon("upload")),
