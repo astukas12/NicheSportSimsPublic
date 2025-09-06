@@ -1,4 +1,4 @@
-# NASCAR Data Explorer with Integrated Profile Builder
+# Golden Ticket Research Center - NASCAR Data Explorer
 # Enhanced version with profile generation functionality
 
 library(shiny)
@@ -183,8 +183,20 @@ ui <- dashboardPage(
   skin = "blue",
   
   dashboardHeader(
-    title = "NASCAR Data Explorer",
-    titleWidth = 300
+    title = div(
+      style = "display: flex; align-items: center; padding: 0px 10px;",
+      # Logo (using a ticket emoji as placeholder - replace with actual logo path)
+      div(
+        style = "font-size: 24px; margin-right: 15px; color: #FFD700;",
+        img(src = "logo.png", height = "40px", style = "margin-right: 10px;")
+      ),
+      # Title text
+      div(
+        style = "color: #FFD700; font-weight: bold; font-size: 18px;",
+        "Golden Ticket Research Center"
+      )
+    ),
+    titleWidth = 350  # Increased width to accommodate logo and longer title
   ),
   
   dashboardSidebar(
@@ -199,7 +211,7 @@ ui <- dashboardPage(
   dashboardBody(
     useShinyjs(),
     
-    # Custom CSS - Black and Gold Theme
+    # Custom CSS - Black and Gold Theme with logo support
     tags$head(
       tags$style(HTML("
         /* Override dashboard header colors */
@@ -214,6 +226,12 @@ ui <- dashboardPage(
           background-color: #000000 !important;
         }
         .skin-blue .main-header .navbar {
+          background-color: #000000 !important;
+        }
+        
+        /* Logo and title styling */
+        .main-header .navbar-custom-menu,
+        .main-header .navbar {
           background-color: #000000 !important;
         }
         
@@ -470,7 +488,7 @@ ui <- dashboardPage(
               
               fluidRow(
                 box(
-                  title = "NASCAR Data Explorer", status = "primary", solidHeader = TRUE, width = 12,
+                  title = "Golden Ticket Data Explorer", status = "primary", solidHeader = TRUE, width = 12,
                   withSpinner(DT::dataTableOutput("main_explorer_table"))
                 )
               )
@@ -561,7 +579,7 @@ server <- function(input, output, session) {
   
   # Load initial data
   observe({
-    withProgress(message = 'Loading NASCAR Database...', {
+    withProgress(message = 'Loading Golden Ticket Database...', {
       values$nascar_data <- load_nascar_database()
       values$race_list <- load_race_list()
       
@@ -709,7 +727,7 @@ server <- function(input, output, session) {
       # Default columns to display
       default_columns <- c("Full_Name", "start_ps", "ps", "ARP", "SpdRk", "fl", "ll", 
                            "DKSP", "FDSP", "DKDomRank", "FDDomRank", "car_number", 
-                           "team_name", "finishing_status", "LapsDown", "race_season", "track_name")
+                           "team_name", "race_season", "track_name", "finishing_status", "LapsDown")
       
       # Filter to only columns that exist in data
       valid_columns <- intersect(default_columns, names(filtered_data()))
@@ -730,10 +748,10 @@ server <- function(input, output, session) {
           .x == "FDSP" ~ "FD Speed Pts",
           .x == "car_number" ~ "Car Number",
           .x == "team_name" ~ "Team",
-          .x == "finishing_status" ~ "Finishing Status",
-          .x == "LapsDown" ~ "Laps Down",
           .x == "race_season" ~ "Season",
           .x == "track_name" ~ "Track",
+          .x == "finishing_status" ~ "Finishing Status",
+          .x == "LapsDown" ~ "Laps Down",
           TRUE ~ .x
         ))
       
@@ -812,7 +830,7 @@ server <- function(input, output, session) {
   # Download CSV handler
   output$download_filtered_csv <- downloadHandler(
     filename = function() {
-      paste("nascar_filtered_data_", Sys.Date(), ".csv", sep = "")
+      paste("golden_ticket_data_", Sys.Date(), ".csv", sep = "")
     },
     content = function(file) {
       req(filtered_data())
@@ -1115,8 +1133,8 @@ server <- function(input, output, session) {
       paste("Max DK Dom Points:", max_dk_points),
       paste("Max FD Dom Points:", max_fd_points),
       "",
-      "Dominator Tier Breakdown:",
-      tier_text,
+      "Track Profile Breakdown:",
+      track_text,
       sep = "\n"
     )
   })
@@ -1136,7 +1154,7 @@ server <- function(input, output, session) {
         input$target_series == "2" ~ "Xfinity",
         input$target_series == "3" ~ "Truck"
       )
-      paste0(track_name, "_", series_name, "_Dominator_Profiles_", 
+      paste0("Golden_Ticket_", track_name, "_", series_name, "_Profiles_", 
              input$season_start, "-", input$season_end, "_", Sys.Date(), ".xlsx")
     },
     content = function(file) {
