@@ -43,13 +43,13 @@ ui <- dashboardPage(
               ),
               fluidRow(
                 box(
-                  title = "Actual Score Distribution by Sim Rank", width = 12, status = "info", solidHeader = TRUE,
+                  title = "Actual Score Distribution by Weighted Rank", width = 12, status = "info", solidHeader = TRUE,
                   plotlyOutput("sim_score_by_rank", height = "400px")
                 )
               ),
               fluidRow(
                 box(
-                  title = "Summary Statistics by Sim Rank", width = 12, status = "primary", solidHeader = TRUE,
+                  title = "Summary Statistics by Weighted Rank Bucket", width = 12, status = "primary", solidHeader = TRUE,
                   DTOutput("rank_bucket_stats")
                 )
               )
@@ -66,7 +66,7 @@ ui <- dashboardPage(
               ),
               fluidRow(
                 box(
-                  title = "Actual Score Distribution by Sim Rank", width = 12, status = "info", solidHeader = TRUE,
+                  title = "Actual Score Distribution by Weighted Rank", width = 12, status = "info", solidHeader = TRUE,
                   plotlyOutput("contest_score_by_rank", height = "400px")
                 )
               ),
@@ -108,11 +108,11 @@ ui <- dashboardPage(
               ),
               fluidRow(
                 box(
-                  title = "Sim Rank Distribution", width = 6, status = "warning", solidHeader = TRUE,
+                  title = "Weighted Rank Distribution", width = 6, status = "warning", solidHeader = TRUE,
                   plotlyOutput("user_sim_rank_dist", height = "300px")
                 ),
                 box(
-                  title = "Performance by Sim Rank", width = 6, status = "danger", solidHeader = TRUE,
+                  title = "Performance by Weighted Rank", width = 6, status = "danger", solidHeader = TRUE,
                   plotlyOutput("user_perf_by_sim", height = "300px") 
                 )
               ),
@@ -168,9 +168,7 @@ server <- function(input, output, session) {
     sim_file <- input$sim_file$datapath
     sim_data <- read.csv(sim_file, stringsAsFactors = FALSE) %>% 
       mutate(
-        # Use Top1Count instead of Top1Count for ranking
-        Rank = min_rank(desc(Top1Count)),
-        # Clean names by removing ID numbers
+        # Clean names by removing ID numbers in parentheses
         Player1 = str_replace(Player1, "\\s*\\(\\d+\\)", ""),
         Player2 = str_replace(Player2, "\\s*\\(\\d+\\)", ""),
         Player3 = str_replace(Player3, "\\s*\\(\\d+\\)", ""),
@@ -214,7 +212,7 @@ server <- function(input, output, session) {
         TotalScore = Player1Score + Player2Score + Player3Score + 
           Player4Score + Player5Score + Player6Score
       ) %>%
-      arrange(desc(TotalScore))
+      arrange(WeightedRank)
     
     # STEP 4: Parse contest lineups into same format
     contest_data <- contest %>% 
@@ -236,7 +234,7 @@ server <- function(input, output, session) {
       # Get current lineup
       current_lineup <- contest_data$Lineup[i]
       
-      # Split at " D " markers
+      # Split at " P " markers
       Player_split <- unlist(str_split(current_lineup, "P\\s+"))
       
       # Remove the first empty element
@@ -263,9 +261,9 @@ server <- function(input, output, session) {
           sep = "|"
         )
       ) %>%
-      select(lineup_key, TotalScore, Top1Count, Rank, Player1, 
-             Player2, Player3, Player4, Player5, Player6,
-             Top1Count, Top2Count, Top3Count, Top5Count)
+      select(lineup_key, TotalScore, WeightedRank, TotalEW, MedianScore, 
+             Score80th, Win6Pct, Win5PlusPct, Top1Count, TotalSalary,
+             Player1, Player2, Player3, Player4, Player5, Player6)
     
     # Add lineup keys for contest lineups
     contest_with_keys <- contest_formatted %>%
@@ -328,24 +326,32 @@ server <- function(input, output, session) {
     req(filtered_sim_data())
     
     filtered_sim_data() %>%
-      arrange(desc(TotalScore)) %>%
+      arrange(WeightedRank) %>%
       mutate(
         In_Contest = ifelse(play_count > 0, "Yes", "No"),
-        TotalScore = round(TotalScore, 2)
+        TotalScore = round(TotalScore, 2),
+        WeightedRank = round(WeightedRank, 2),
+        TotalEW = round(TotalEW, 2),
+        MedianScore = round(MedianScore, 2),
+        Score80th = round(Score80th, 2),
+        Win6Pct = round(Win6Pct, 3),
+        Win5PlusPct = round(Win5PlusPct, 3)
       ) %>%
       select(
-        Rank, 
+        WeightedRank,
         Player1, 
         Player2, 
         Player3, 
         Player4, 
         Player5,
         Player6,
-        TotalScore, 
+        TotalScore,
+        TotalEW,
+        MedianScore,
+        Score80th,
+        Win6Pct,
+        Win5PlusPct,
         Top1Count,
-        Top1Count,
-        Top3Count,
-        Top5Count,
         In_Contest,
         ContestCount = play_count
       ) %>%
@@ -365,76 +371,84 @@ server <- function(input, output, session) {
       ) %>%
       formatStyle(
         'TotalScore',
-        background = styleColorBar(c(0, max(filtered_sim_data()$TotalScore)), '#90caf9'),
+        background = styleColorBar(c(0, max(filtered_sim_data()$TotalScore, na.rm = TRUE)), '#90caf9'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Top1Count',
-        background = styleColorBar(c(0, max(filtered_sim_data()$Top1Count)), '#a5d6a7'),
+        'Win6Pct',
+        background = styleColorBar(c(0, max(filtered_sim_data()$Win6Pct, na.rm = TRUE)), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
         'ContestCount',
-        background = styleColorBar(c(0, max(filtered_sim_data()$play_count)), '#ffcc80'),
+        background = styleColorBar(c(0, max(filtered_sim_data()$play_count, na.rm = TRUE)), '#ffcc80'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       )
   })
   
-  # Actual score distribution by individual Top1Count (horizontal box plot)
+  # Actual score distribution by Weighted Rank buckets (horizontal box plot)
   output$sim_score_by_rank <- renderPlotly({
     req(data_store$sim_with_keys)
     
-    
-    # Filter data to include only Top1Count values with enough data points
+    # Create rank buckets for better visualization
     plot_data <- data_store$sim_with_keys %>%
       mutate(
-        # Convert Top1Count to factor and order by value (descending)
-        Top1Count_factor = factor(Top1Count, levels = sort(unique(Top1Count), decreasing = TRUE))
+        RankBucket = case_when(
+          WeightedRank <= 100 ~ "1-100",
+          WeightedRank <= 500 ~ "101-500",
+          WeightedRank <= 1000 ~ "501-1000",
+          WeightedRank <= 2500 ~ "1001-2500",
+          TRUE ~ "2500+"
+        ),
+        RankBucket = factor(RankBucket, levels = c("1-100", "101-500", "501-1000", "1001-2500", "2500+"))
       )
     
     # Create horizontal box plot
-    plot_ly(plot_data, y = ~Top1Count_factor, x = ~TotalScore, 
+    plot_ly(plot_data, y = ~RankBucket, x = ~TotalScore, 
             type = 'box', orientation = 'h',
             name = 'Score Distribution',
             marker = list(color = '#5e35b1'),
             boxmean = TRUE) %>%
       layout(
-        title = "Actual Score Distribution by Top1Count",
-        yaxis = list(title = "Top1Count", automargin = TRUE),
+        title = "Actual Score Distribution by Weighted Rank Bucket",
+        yaxis = list(title = "Weighted Rank Bucket", automargin = TRUE),
         xaxis = list(title = "Actual Score", automargin = TRUE),
         margin = list(l = 120, r = 50, b = 80, t = 70)
       )
   })
   
-  # Table view for individual Optimal Count stats
+  # Table view for Weighted Rank bucket stats
   output$rank_bucket_stats <- renderDT({
     req(data_store$sim_with_keys)
     
-    # Find the most common Top1Count values (top 20)
-    top_counts <- data_store$sim_with_keys %>%
-      count(Top1Count) %>%
-      arrange(desc(n)) %>%
-      pull(Top1Count)
-    
-    # Create summary table for these values
+    # Create summary table by rank buckets
     data_store$sim_with_keys %>%
-      filter(Top1Count %in% top_counts) %>%
-      group_by(Top1Count) %>%
+      mutate(
+        RankBucket = case_when(
+          WeightedRank <= 100 ~ "1-100",
+          WeightedRank <= 500 ~ "101-500",
+          WeightedRank <= 1000 ~ "501-1000",
+          WeightedRank <= 2500 ~ "1001-2500",
+          TRUE ~ "2500+"
+        ),
+        RankBucket = factor(RankBucket, levels = c("1-100", "101-500", "501-1000", "1001-2500", "2500+"))
+      ) %>%
+      group_by(RankBucket) %>%
       summarize(
         `Lineup Count` = n(),
         `Avg Score` = round(mean(TotalScore, na.rm = TRUE), 2),
-        `Avg Top3 Count` = round(mean(Top3Count, na.rm = TRUE), 2),
-        `Avg Top5 Count` = round(mean(Top5Count, na.rm = TRUE), 2),
+        `Avg TotalEW` = round(mean(TotalEW, na.rm = TRUE), 2),
+        `Avg Win6Pct` = round(mean(Win6Pct, na.rm = TRUE), 3),
+        `Avg Win5PlusPct` = round(mean(Win5PlusPct, na.rm = TRUE), 3),
         `Played in Contest %` = round(mean(play_count > 0, na.rm = TRUE) * 100, 2),
         .groups = "drop"
       ) %>%
-      arrange(desc(Top1Count)) %>%
       datatable(
         options = list(
           dom = 't',
@@ -452,7 +466,7 @@ server <- function(input, output, session) {
       ) %>%
       formatStyle(
         'Avg Score',
-        background = styleColorBar(c(0, max(.$`Avg Score`)), '#90caf9'),
+        background = styleColorBar(c(min(.$`Avg Score`, na.rm = TRUE), max(.$`Avg Score`, na.rm = TRUE)), '#90caf9'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
@@ -466,12 +480,14 @@ server <- function(input, output, session) {
     
     data_store$matches %>%
       mutate(
-        In_Simulation = ifelse(is.na(Top1Count), "No", "Yes"),
-        Sim_Rank = ifelse(is.na(Rank_sim), NA, Rank_sim),
-        Points = round(as.numeric(Points), 2)
+        In_Simulation = ifelse(is.na(WeightedRank), "No", "Yes"),
+        Sim_WeightedRank = ifelse(is.na(WeightedRank), NA, round(WeightedRank, 2)),
+        Points = round(as.numeric(Points), 2),
+        Win6Pct = round(Win6Pct, 3),
+        Win5PlusPct = round(Win5PlusPct, 3)
       ) %>%
       select(
-        Rank = Rank_contest,
+        Rank,
         User = EntryName,
         Player1 = Player1_contest, 
         Player2 = Player2_contest, 
@@ -482,11 +498,10 @@ server <- function(input, output, session) {
         Points, 
         ContestCount = contest_count, 
         In_Simulation,
-        `Sim Rank` = Sim_Rank,
-        Top1Count,
-        Top1Count,
-        Top3Count,
-        Top5Count
+        `Weighted Rank` = Sim_WeightedRank,
+        Win6Pct,
+        Win5PlusPct,
+        Top1Count
       ) %>%
       datatable(
         options = list(
@@ -510,8 +525,8 @@ server <- function(input, output, session) {
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Top1Count',
-        background = styleColorBar(c(0, max(data_store$matches$Top1Count, na.rm = TRUE)), '#a5d6a7'),
+        'Win6Pct',
+        background = styleColorBar(c(0, max(data_store$matches$Win6Pct, na.rm = TRUE)), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
@@ -525,65 +540,53 @@ server <- function(input, output, session) {
       )
   })
   
-  # Score distribution by Top1Count for Contest Lineups (including "Not in Sims")
+  # Score distribution by Weighted Rank buckets for Contest Lineups
   output$contest_score_by_rank <- renderPlotly({
     req(data_store$matches)
     
     # Make a copy of the data to avoid modifying the original
-    plot_data <- data_store$matches
-    
-    # Handle NA values explicitly
-    plot_data <- plot_data %>%
+    plot_data <- data_store$matches %>%
       mutate(
-        # Create a factor for Top1Count (handling NA)
-        Top1Count_label = ifelse(is.na(Top1Count), "Not in Sims", as.character(Top1Count)),
-        # For sorting purposes
-        Top1Count_numeric = ifelse(is.na(Top1Count), -1, as.numeric(Top1Count)),
-        # Ensure Points is numeric
+        # Create rank buckets, handling NA values
+        RankBucket = case_when(
+          is.na(WeightedRank) ~ "Not in Sims",
+          WeightedRank <= 100 ~ "1-100",
+          WeightedRank <= 500 ~ "101-500",
+          WeightedRank <= 1000 ~ "501-1000",
+          WeightedRank <= 2500 ~ "1001-2500",
+          TRUE ~ "2500+"
+        ),
+        RankBucket = factor(RankBucket, levels = c("Not in Sims", "1-100", "101-500", "501-1000", "1001-2500", "2500+")),
         Points = as.numeric(Points)
       )
     
-    # Get level order - "Not in Sims" first, then descending numeric order
-    numeric_levels <- plot_data %>%
-      filter(Top1Count_label != "Not in Sims") %>%
-      pull(Top1Count_numeric) %>%
-      unique() %>%
-      sort(decreasing = TRUE) %>%
-      as.character()
-    
-    level_order <- c("Not in Sims", numeric_levels)
-    
-    # Create ordered factor with explicit levels
-    plot_data$Top1Count_label <- factor(plot_data$Top1Count_label, levels = level_order)
-    
-    # Create horizontal box plot with explicit colors
-    p <- plot_ly(plot_data, y = ~Top1Count_label, x = ~Points, 
-                 type = 'box', orientation = 'h',
-                 name = 'Score Distribution',
-                 marker = list(color = '#5e35b1', opacity = 0.8),
-                 line = list(color = '#3949ab', width = 2),
-                 boxmean = TRUE)
-    
-    p %>% layout(
-      title = "Contest Score Distribution by Top1Count",
-      yaxis = list(
-        title = "Top1Count", 
-        automargin = TRUE,
-        titlefont = list(size = 14),
-        tickfont = list(size = 12)
-      ),
-      xaxis = list(
-        title = "Contest Points", 
-        automargin = TRUE,
-        titlefont = list(size = 14),
-        tickfont = list(size = 12)
-      ),
-      margin = list(l = 120, r = 50, b = 80, t = 80),
-      paper_bgcolor = 'white',
-      plot_bgcolor = 'white',
-      hoverlabel = list(bgcolor = "white"),
-      hovermode = "closest"
-    )
+    # Create horizontal box plot
+    plot_ly(plot_data, y = ~RankBucket, x = ~Points, 
+            type = 'box', orientation = 'h',
+            name = 'Score Distribution',
+            marker = list(color = '#5e35b1', opacity = 0.8),
+            line = list(color = '#3949ab', width = 2),
+            boxmean = TRUE) %>%
+      layout(
+        title = "Contest Score Distribution by Weighted Rank Bucket",
+        yaxis = list(
+          title = "Weighted Rank Bucket", 
+          automargin = TRUE,
+          titlefont = list(size = 14),
+          tickfont = list(size = 12)
+        ),
+        xaxis = list(
+          title = "Contest Points", 
+          automargin = TRUE,
+          titlefont = list(size = 14),
+          tickfont = list(size = 12)
+        ),
+        margin = list(l = 120, r = 50, b = 80, t = 80),
+        paper_bgcolor = 'white',
+        plot_bgcolor = 'white',
+        hoverlabel = list(bgcolor = "white"),
+        hovermode = "closest"
+      )
   })
   
   # Summary statistics by Contest Rank for Contest Lineups
@@ -604,7 +607,7 @@ server <- function(input, output, session) {
     bucket_data <- data_store$matches %>%
       mutate(
         # Convert rank to numeric to ensure proper comparison
-        Rank_num = as.numeric(Rank_contest),
+        Rank_num = as.numeric(Rank),
         ContestRankBucket = case_when(
           Rank_num <= top_1_pct_threshold ~ "Top 1%",
           Rank_num <= top_5_pct_threshold ~ "Top 5%",
@@ -619,19 +622,19 @@ server <- function(input, output, session) {
       group_by(ContestRankBucket) %>%
       summarize(
         `Lineup Count` = n(),
-        `In Simulations %` = round(mean(!is.na(Rank_sim)) * 100, 2),
-        `Avg Optimal Count` = round(mean(Top1Count, na.rm = TRUE), 2),
-        `Avg Top1 Count` = round(mean(Top1Count, na.rm = TRUE), 2),
-        `Avg Top3 Count` = round(mean(Top3Count, na.rm = TRUE), 2),
-        `Avg Top5 Count` = round(mean(Top5Count, na.rm = TRUE), 2),
+        `In Simulations %` = round(mean(!is.na(WeightedRank)) * 100, 2),
+        `Avg Weighted Rank` = round(mean(WeightedRank, na.rm = TRUE), 2),
+        `Avg Win6Pct` = round(mean(Win6Pct, na.rm = TRUE), 3),
+        `Avg Win5PlusPct` = round(mean(Win5PlusPct, na.rm = TRUE), 3),
+        `Avg Top1Count` = round(mean(Top1Count, na.rm = TRUE), 2),
         .groups = "drop"
       )
     
     # Handle empty or zero values to prevent -Inf errors
-    if(nrow(bucket_data) == 0 || all(is.na(bucket_data$`Avg Optimal Count`))) {
-      max_opt_count <- 1
+    if(nrow(bucket_data) == 0 || all(is.na(bucket_data$`Avg Weighted Rank`))) {
+      max_weighted_rank <- 1
     } else {
-      max_opt_count <- max(bucket_data$`Avg Optimal Count`, na.rm = TRUE)
+      max_weighted_rank <- max(bucket_data$`Avg Weighted Rank`, na.rm = TRUE)
     }
     
     bucket_data %>%
@@ -650,29 +653,29 @@ server <- function(input, output, session) {
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Optimal Count',
-        background = styleColorBar(c(0, max_opt_count), '#a5d6a7'),
+        'Avg Weighted Rank',
+        background = styleColorBar(c(1, max_weighted_rank), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Top1 Count',
-        background = styleColorBar(c(0, max(bucket_data$`Avg Top1 Count`, na.rm = TRUE)), '#ffcc80'),
+        'Avg Win6Pct',
+        background = styleColorBar(c(0, max(bucket_data$`Avg Win6Pct`, na.rm = TRUE)), '#ffcc80'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Top3 Count',
-        background = styleColorBar(c(0, max(bucket_data$`Avg Top3 Count`, na.rm = TRUE)), '#90caf9'),
+        'Avg Win5PlusPct',
+        background = styleColorBar(c(0, max(bucket_data$`Avg Win5PlusPct`, na.rm = TRUE)), '#90caf9'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Top5 Count',
-        background = styleColorBar(c(0, max(bucket_data$`Avg Top5 Count`, na.rm = TRUE)), '#ce93d8'),
+        'Avg Top1Count',
+        background = styleColorBar(c(0, max(bucket_data$`Avg Top1Count`, na.rm = TRUE)), '#ce93d8'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
@@ -725,11 +728,11 @@ server <- function(input, output, session) {
     
     # Calculate contest percentile based on this user's entries only
     total_entries <- nrow(user_lineups)
-    contest_size <- max(as.numeric(user_lineups$Rank_contest), na.rm = TRUE)
+    contest_size <- max(as.numeric(user_lineups$Rank), na.rm = TRUE)
     
     user_lineups <- user_lineups %>%
       mutate(
-        Rank_num = as.numeric(Rank_contest),
+        Rank_num = as.numeric(Rank),
         Percentile = round(Rank_num / contest_size * 100, 2),
         Points = as.numeric(Points),
         Is_Top_1pct = Percentile <= 1,
@@ -737,20 +740,22 @@ server <- function(input, output, session) {
         Is_Top_10pct = Percentile <= 10,
         Is_Top_20pct = Percentile <= 20,
         Is_Top_50pct = Percentile <= 50,
-        In_Sims = !is.na(Rank_sim),
-        In_Top_100_Sims = !is.na(Rank_sim) & Rank_sim <= 100,
-        In_Top_500_Sims = !is.na(Rank_sim) & Rank_sim <= 500,
-        In_Top_1000_Sims = !is.na(Rank_sim) & Rank_sim <= 1000,
-        In_Top_2500_Sims = !is.na(Rank_sim) & Rank_sim <= 2500,
-        In_Top_5000_Sims = !is.na(Rank_sim) & Rank_sim <= 5000,
+        In_Sims = !is.na(WeightedRank),
+        In_Top_100_Sims = !is.na(WeightedRank) & WeightedRank <= 100,
+        In_Top_500_Sims = !is.na(WeightedRank) & WeightedRank <= 500,
+        In_Top_1000_Sims = !is.na(WeightedRank) & WeightedRank <= 1000,
+        In_Top_2500_Sims = !is.na(WeightedRank) & WeightedRank <= 2500,
+        In_Top_5000_Sims = !is.na(WeightedRank) & WeightedRank <= 5000,
         Sim_Rank_Bucket = case_when(
-          is.na(Rank_sim) ~ "Not in Sims",
-          Rank_sim <= 100 ~ "Top 100",
-          Rank_sim <= 500 ~ "101-500",
-          Rank_sim <= 1000 ~ "501-1000",
-          Rank_sim <= 2500 ~ "1001-2500",
-          Rank_sim <= 5000 ~ "2501-5000",
-          TRUE ~ "5000+"
+          is.na(WeightedRank) ~ "Not in Sims",
+          WeightedRank <= 10 ~ "Top 10",
+          WeightedRank <= 50 ~ "11-50",
+          WeightedRank <= 100 ~ "51-100",
+          WeightedRank <= 250 ~ "101-250",
+          WeightedRank <= 500 ~ "251-500",
+          WeightedRank <= 1000 ~ "501-1000",
+          WeightedRank <= 2500 ~ "1001-2500",
+          TRUE ~ "2500+"
         )
       )
     
@@ -781,11 +786,10 @@ server <- function(input, output, session) {
         "% In Top 1000 Sims",
         "% In Top 2500 Sims",
         "% In Top 5000 Sims",
-        "Avg Sim Rank (when in sims)",
-        "Avg Optimal Count",
-        "Avg Top1 Count",
-        "Avg Top3 Count",
-        "Avg Top5 Count"
+        "Avg Weighted Rank (when in sims)",
+        "Avg Win6Pct",
+        "Avg Win5PlusPct",
+        "Avg Top1Count"
       ),
       Value = c(
         total_entries,
@@ -801,11 +805,10 @@ server <- function(input, output, session) {
         paste0(round(mean(user_data$In_Top_1000_Sims) * 100, 2), "%"),
         paste0(round(mean(user_data$In_Top_2500_Sims) * 100, 2), "%"),
         paste0(round(mean(user_data$In_Top_5000_Sims) * 100, 2), "%"),
-        round(mean(user_data$Rank_sim[!is.na(user_data$Rank_sim)], na.rm = TRUE), 2),
-        round(mean(user_data$Top1Count, na.rm = TRUE), 2),
-        round(mean(user_data$Top1Count, na.rm = TRUE), 2),
-        round(mean(user_data$Top3Count, na.rm = TRUE), 2),
-        round(mean(user_data$Top5Count, na.rm = TRUE), 2)
+        round(mean(user_data$WeightedRank[!is.na(user_data$WeightedRank)], na.rm = TRUE), 2),
+        round(mean(user_data$Win6Pct, na.rm = TRUE), 3),
+        round(mean(user_data$Win5PlusPct, na.rm = TRUE), 3),
+        round(mean(user_data$Top1Count, na.rm = TRUE), 2)
       )
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE)
@@ -836,16 +839,16 @@ server <- function(input, output, session) {
       summarize(Count = n(), .groups = "drop") %>%
       # Ensure buckets are in correct order
       mutate(Sim_Rank_Bucket = factor(Sim_Rank_Bucket, 
-                                      levels = c("Top 100", "101-500", "501-1000", "1001-2500", "2501-5000", "5000+", "Not in Sims")))
+                                      levels = c("Top 10", "11-50", "51-100", "101-250", "251-500", "501-1000", "1001-2500", "2500+", "Not in Sims")))
     
     # Create a pie chart
     plot_ly(plot_data, labels = ~Sim_Rank_Bucket, values = ~Count, 
             type = 'pie',
-            marker = list(colors = c('#1e88e5', '#43a047', '#e53935', '#f9a825', '#8e24aa', '#5e35b1', '#757575')),
+            marker = list(colors = c('#1e88e5', '#43a047', '#e53935', '#f9a825', '#fb8c00', '#8e24aa', '#5e35b1', '#6d4c41', '#757575')),
             textinfo = 'label+percent',
             hoverinfo = 'label+value+percent') %>%
       layout(
-        title = "Sim Rank Distribution",
+        title = "Weighted Rank Distribution",
         showlegend = TRUE
       )
   })
@@ -857,7 +860,7 @@ server <- function(input, output, session) {
     plot_data <- user_filtered_data() %>%
       # Ensure buckets are in correct order
       mutate(Sim_Rank_Bucket = factor(Sim_Rank_Bucket, 
-                                      levels = c("Top 100", "101-500", "501-1000", "1001-2500", "2501-5000", "5000+", "Not in Sims")))
+                                      levels = c("Top 10", "11-50", "51-100", "101-250", "251-500", "501-1000", "1001-2500", "2500+", "Not in Sims")))
     
     # Create a box plot
     plot_ly(plot_data, y = ~Sim_Rank_Bucket, x = ~Points, 
@@ -865,7 +868,8 @@ server <- function(input, output, session) {
             marker = list(color = '#5e35b1'),
             boxmean = TRUE) %>%
       layout(
-        yaxis = list(title = "Sim Rank Bucket"),
+        title = "Performance by Weighted Rank Bucket",
+        yaxis = list(title = "Weighted Rank Bucket"),
         xaxis = list(title = "Contest Points"),
         margin = list(l = 120, r = 50, b = 80, t = 50)
       )
@@ -877,12 +881,14 @@ server <- function(input, output, session) {
     
     user_filtered_data() %>%
       mutate(
-        In_Simulation = ifelse(is.na(Top1Count), "No", "Yes"),
-        Sim_Rank = ifelse(is.na(Rank_sim), NA, Rank_sim),
-        Points = round(as.numeric(Points), 2)
+        In_Simulation = ifelse(is.na(WeightedRank), "No", "Yes"),
+        Weighted_Rank = ifelse(is.na(WeightedRank), NA, round(WeightedRank, 2)),
+        Points = round(as.numeric(Points), 2),
+        Win6Pct = round(Win6Pct, 3),
+        Win5PlusPct = round(Win5PlusPct, 3)
       ) %>%
       select(
-        Rank = Rank_contest,
+        Rank = Rank,
         Player1 = Player1_contest, 
         Player2 = Player2_contest, 
         Player3 = Player3_contest, 
@@ -892,11 +898,10 @@ server <- function(input, output, session) {
         Points, 
         `Contest Percentile` = Percentile,
         In_Simulation,
-        `Sim Rank` = Sim_Rank,
-        Top1Count,
-        Top1Count,
-        Top3Count,
-        Top5Count
+        `Weighted Rank` = Weighted_Rank,
+        Win6Pct,
+        Win5PlusPct,
+        Top1Count
       ) %>%
       datatable(
         options = list(
@@ -920,22 +925,22 @@ server <- function(input, output, session) {
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Top1Count',
-        background = styleColorBar(c(0, max(user_filtered_data()$Top1Count, na.rm = TRUE)), '#a5d6a7'),
-        backgroundSize = '100% 90%',
-        backgroundRepeat = 'no-repeat',
-        backgroundPosition = 'center'
-      )  %>%
-      formatStyle(
-        'Top3Count',
-        background = styleColorBar(c(0, max(user_filtered_data()$Top3Count, na.rm = TRUE)), '#ce93d8'),
+        'Win6Pct',
+        background = styleColorBar(c(0, max(user_filtered_data()$Win6Pct, na.rm = TRUE)), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Top5Count',
-        background = styleColorBar(c(0, max(user_filtered_data()$Top5Count, na.rm = TRUE)), '#81d4fa'),
+        'Win5PlusPct',
+        background = styleColorBar(c(0, max(user_filtered_data()$Win5PlusPct, na.rm = TRUE)), '#ce93d8'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      ) %>%
+      formatStyle(
+        'Top1Count',
+        background = styleColorBar(c(0, max(user_filtered_data()$Top1Count, na.rm = TRUE)), '#81d4fa'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
@@ -953,13 +958,13 @@ server <- function(input, output, session) {
         Username = str_replace(EntryName, "\\s+\\(.*\\)$", ""),
         # Convert numeric columns
         Points = as.numeric(Points),
-        Rank_num = as.numeric(Rank_contest)
+        Rank_num = as.numeric(Rank)
       ) %>%
       group_by(Username) %>%
       mutate(
         Total_Entries = n(),
         # Compute contest percentiles
-        Contest_Size = max(as.numeric(Rank_contest), na.rm = TRUE),
+        Contest_Size = max(as.numeric(Rank), na.rm = TRUE),
         Percentile = Rank_num / Contest_Size * 100
       ) %>%
       summarize(
@@ -971,16 +976,15 @@ server <- function(input, output, session) {
         `T10%` = round(mean(Percentile <= 10, na.rm = TRUE) * 100, 2),
         `T20%` = round(mean(Percentile <= 20, na.rm = TRUE) * 100, 2),
         # Calculate simulation overlap metrics
-        `Sim Lineups` = sum(!is.na(Rank_sim), na.rm = TRUE),
-        `Sim %` = round(mean(!is.na(Rank_sim), na.rm = TRUE) * 100, 2),
-        `T100 Sims` = sum(!is.na(Rank_sim) & Rank_sim <= 100, na.rm = TRUE),
-        `T2000 Sims` = sum(!is.na(Rank_sim) & Rank_sim <= 2000, na.rm = TRUE),
-        # Calculate average sim rank for sims in database
-        `Avg Sim Rank` = round(mean(Rank_sim, na.rm = TRUE), 2),
-        `Avg Optimal Count` = round(mean(Top1Count, na.rm = TRUE), 2),
-        `Avg Top1 Count` = round(mean(Top1Count, na.rm = TRUE), 2),
-        `Avg Top3 Count` = round(mean(Top3Count, na.rm = TRUE), 2),
-        `Avg Top5 Count` = round(mean(Top5Count, na.rm = TRUE), 2),
+        `Sim Lineups` = sum(!is.na(WeightedRank), na.rm = TRUE),
+        `Sim %` = round(mean(!is.na(WeightedRank), na.rm = TRUE) * 100, 2),
+        `T100 Sims` = sum(!is.na(WeightedRank) & WeightedRank <= 100, na.rm = TRUE),
+        `T2000 Sims` = sum(!is.na(WeightedRank) & WeightedRank <= 2000, na.rm = TRUE),
+        # Calculate average weighted rank for sims in database
+        `Avg Weighted Rank` = round(mean(WeightedRank, na.rm = TRUE), 2),
+        `Avg Win6Pct` = round(mean(Win6Pct, na.rm = TRUE), 3),
+        `Avg Win5PlusPct` = round(mean(Win5PlusPct, na.rm = TRUE), 3),
+        `Avg Top1Count` = round(mean(Top1Count, na.rm = TRUE), 2),
         .groups = "drop"
       )
     
@@ -994,12 +998,12 @@ server <- function(input, output, session) {
       options = list(
         pageLength = 25,
         scrollX = TRUE,
-        dom = 'Blrtip',  # Added 'l' for length menu and 'f' for search/filter
+        dom = 'Blrtip',
         buttons = c('copy', 'csv', 'excel'),
         lengthMenu = list(c(10, 25, 50, 100, -1), c('10', '25', '50', '100', 'All'))
       ),
-      filter = 'top',  # Add filters at the top of each column
-      extensions = c('Buttons', 'Scroller'),  # Add scroller for better performance
+      filter = 'top',
+      extensions = c('Buttons', 'Scroller'),
       rownames = FALSE
     ) %>%
       formatStyle(
@@ -1045,36 +1049,29 @@ server <- function(input, output, session) {
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Sim Rank',
-        background = styleColorBar(c(1000, 1), '#80cbc4'),  # Reversed for ranks (lower is better)
+        'Avg Weighted Rank',
+        background = styleColorBar(c(max(all_users$`Avg Weighted Rank`), 1), '#80cbc4'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Optimal Count',
-        background = styleColorBar(c(0, max(all_users$`Avg Optimal Count`)), '#a5d6a7'),
+        'Avg Win6Pct',
+        background = styleColorBar(c(0, max(all_users$`Avg Win6Pct`)), '#a5d6a7'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Top1 Count',
-        background = styleColorBar(c(0, max(all_users$`Avg Top1 Count`)), '#ffcc80'),
+        'Avg Win5PlusPct',
+        background = styleColorBar(c(0, max(all_users$`Avg Win5PlusPct`)), '#ffcc80'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Avg Top3 Count',
-        background = styleColorBar(c(0, max(all_users$`Avg Top3 Count`)), '#81c784'),
-        backgroundSize = '100% 90%',
-        backgroundRepeat = 'no-repeat',
-        backgroundPosition = 'center'
-      ) %>%
-      formatStyle(
-        'Avg Top5 Count',
-        background = styleColorBar(c(0, max(all_users$`Avg Top5 Count`)), '#64b5f6'),
+        'Avg Top1Count',
+        background = styleColorBar(c(0, max(all_users$`Avg Top1Count`)), '#81c784'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
