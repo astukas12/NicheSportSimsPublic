@@ -11,7 +11,7 @@ library(lpSolve)
 library(memoise)
 library(shinycssloaders)
 library(shinyjs)
-library(foreach)
+library(later)
 
 
 custom_css <- "
@@ -909,7 +909,7 @@ analyze_dk_dominator_points <- function(sim_results, max_sample_size = 1000000) 
   setDT(sim_results)
   
   n_total_results <- nrow(sim_results)
-
+  
   
   # Sample for performance if dataset is very large
   analysis_data <- sim_results
@@ -1134,7 +1134,7 @@ analyze_fd_dominator_points <- function(sim_results, max_sample_size = 1000000) 
   setDT(sim_results)
   
   n_total_results <- nrow(sim_results)
-
+  
   
   # Sample for performance if dataset is very large
   analysis_data <- sim_results
@@ -1248,7 +1248,7 @@ analyze_dk_fantasy_points <- function(sim_results, max_sample_size = 1000000) {
   setDT(sim_results)
   
   n_total_results <- nrow(sim_results)
-
+  
   
   # Sample for performance if dataset is very large
   analysis_data <- sim_results
@@ -1299,7 +1299,7 @@ analyze_fd_fantasy_points <- function(sim_results, max_sample_size = 1000000) {
   setDT(sim_results)
   
   n_total_results <- nrow(sim_results)
-
+  
   
   # Sample for performance if dataset is very large
   analysis_data <- sim_results
@@ -1919,7 +1919,6 @@ count_optimal_lineups_efficient <- function(sim_results, platform = "DK") {
   })
 }
 
-# REPLACE your calculate_dk_filtered_pool_stats function with this FIXED version
 calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
     return(list(count = 0, thresholds = NULL))
@@ -1928,18 +1927,26 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
   
-  # Apply Top count filters
+  # Apply Top count filters with BOTH min and max
   if (!is.null(filters$min_top1_count) && "Top1Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
   }
-  if (!is.null(filters$min_top2_count) && "Top2Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  if (!is.null(filters$max_top1_count) && "Top1Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top1Count <= filters$max_top1_count]
   }
+  
   if (!is.null(filters$min_top3_count) && "Top3Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
   }
+  if (!is.null(filters$max_top3_count) && "Top3Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top3Count <= filters$max_top3_count]
+  }
+  
   if (!is.null(filters$min_top5_count) && "Top5Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  if (!is.null(filters$max_top5_count) && "Top5Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top5Count <= filters$max_top5_count]
   }
   
   # Apply cumulative ownership filters
@@ -1958,7 +1965,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[GeometricMean <= filters$max_geometric_mean]
   }
   
-  # FIXED: Apply cumulative starting position filters
+  # Apply cumulative starting position filters
   if (!is.null(filters$min_cumulative_starting) && "CumulativeStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -1966,12 +1973,20 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # FIXED: Apply geometric mean starting position filters
+  # Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && "GeometricMeanStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
   if (!is.null(filters$max_geometric_starting) && "GeometricMeanStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= filters$max_geometric_starting]
+  }
+  
+  # Apply salary filters
+  if (!is.null(filters$min_total_salary) && "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[TotalSalary >= filters$min_total_salary]
+  }
+  if (!is.null(filters$max_total_salary) && "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[TotalSalary <= filters$max_total_salary]
   }
   
   # Apply driver exclusion filter
@@ -1987,44 +2002,7 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
     return(list(count = 0, thresholds = NULL))
   }
   
-  # Calculate thresholds for display
-  thresholds <- list()
-  threshold_columns <- c(
-    "Top1Count", "Top2Count", "Top3Count", "Top5Count",
-    "CumulativeOwnership", "GeometricMean",
-    "CumulativeStarting", "GeometricMeanStarting"  # FIXED: Added these
-  )
-  
-  for (col in threshold_columns) {
-    if (col %in% names(filtered_lineups)) {
-      min_val <- min(filtered_lineups[[col]], na.rm = TRUE)
-      max_val <- max(filtered_lineups[[col]], na.rm = TRUE)
-      
-      # Use proper naming convention
-      if (col == "CumulativeOwnership") {
-        min_name <- "min_cumulative_ownership"
-        max_name <- "max_cumulative_ownership"
-      } else if (col == "GeometricMean") {
-        min_name <- "min_geometric_mean"
-        max_name <- "max_geometric_mean"
-      } else if (col == "CumulativeStarting") {
-        min_name <- "min_cumulative_starting"
-        max_name <- "max_cumulative_starting"
-      } else if (col == "GeometricMeanStarting") {
-        min_name <- "min_geometric_starting"
-        max_name <- "max_geometric_starting"
-      } else {
-        col_name <- gsub("Count", "", col)
-        min_name <- paste0("min_", tolower(col_name))
-        max_name <- paste0("max_", tolower(col_name))
-      }
-      
-      thresholds[[min_name]] <- min_val
-      thresholds[[max_name]] <- max_val
-    }
-  }
-  
-  return(list(count = nrow(filtered_lineups), thresholds = thresholds))
+  return(list(count = nrow(filtered_lineups), thresholds = NULL))
 }
 
 calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
@@ -2035,18 +2013,26 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   setDT(optimal_lineups)
   filtered_lineups <- copy(optimal_lineups)
   
-  # Apply Top count filters
+  # Apply Top count filters with BOTH min and max
   if (!is.null(filters$min_top1_count) && "Top1Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
   }
-  if (!is.null(filters$min_top2_count) && "Top2Count" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  if (!is.null(filters$max_top1_count) && "Top1Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top1Count <= filters$max_top1_count]
   }
+  
   if (!is.null(filters$min_top3_count) && "Top3Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
   }
+  if (!is.null(filters$max_top3_count) && "Top3Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top3Count <= filters$max_top3_count]
+  }
+  
   if (!is.null(filters$min_top5_count) && "Top5Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  if (!is.null(filters$max_top5_count) && "Top5Count" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[Top5Count <= filters$max_top5_count]
   }
   
   # Apply cumulative ownership filters
@@ -2081,6 +2067,14 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= filters$max_geometric_starting]
   }
   
+  # Apply salary filters
+  if (!is.null(filters$min_total_salary) && "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[TotalSalary >= filters$min_total_salary]
+  }
+  if (!is.null(filters$max_total_salary) && "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[TotalSalary <= filters$max_total_salary]
+  }
+  
   # Apply driver exclusion filter
   if (!is.null(filters$excluded_drivers) && length(filters$excluded_drivers) > 0) {
     driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
@@ -2098,7 +2092,6 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
 }
 
 
-
 generate_random_dk_lineups <- function(optimal_lineups, filters) {
   filtered_lineups <- optimal_lineups
   
@@ -2110,49 +2103,45 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
   # Convert to data.table for better performance
   setDT(filtered_lineups)
   
-  # Apply min threshold filters
-  if (!is.null(filters$min_top1_count) &&
-      filters$min_top1_count > 0) {
+  # Apply min/max threshold filters
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
     filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
   }
-  
-  if (!is.null(filters$min_top2_count) &&
-      filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  if (!is.null(filters$max_top1_count) && filters$max_top1_count < max(filtered_lineups$Top1Count, na.rm = TRUE)) {
+    filtered_lineups <- filtered_lineups[Top1Count <= filters$max_top1_count]
   }
   
-  if (!is.null(filters$min_top3_count) &&
-      filters$min_top3_count > 0) {
+  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
     filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
   }
+  if (!is.null(filters$max_top3_count) && filters$max_top3_count < max(filtered_lineups$Top3Count, na.rm = TRUE)) {
+    filtered_lineups <- filtered_lineups[Top3Count <= filters$max_top3_count]
+  }
   
-  if (!is.null(filters$min_top5_count) &&
-      filters$min_top5_count > 0) {
+  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  if (!is.null(filters$max_top5_count) && filters$max_top5_count < max(filtered_lineups$Top5Count, na.rm = TRUE)) {
+    filtered_lineups <- filtered_lineups[Top5Count <= filters$max_top5_count]
   }
   
   # Apply cumulative ownership filters
-  if (!is.null(filters$min_cumulative_ownership) &&
-      filters$min_cumulative_ownership > 0) {
+  if (!is.null(filters$min_cumulative_ownership) && filters$min_cumulative_ownership > 0) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$min_cumulative_ownership]
   }
-  
-  if (!is.null(filters$max_cumulative_ownership) &&
-      filters$max_cumulative_ownership > 0) {
+  if (!is.null(filters$max_cumulative_ownership) && filters$max_cumulative_ownership > 0) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership <= filters$max_cumulative_ownership]
   }
   
-  # NEW: Apply geometric mean filters
-  if (!is.null(filters$min_geometric_mean) &&
-      filters$min_geometric_mean > 0) {
+  # Apply geometric mean filters
+  if (!is.null(filters$min_geometric_mean) && filters$min_geometric_mean > 0) {
     filtered_lineups <- filtered_lineups[GeometricMean >= filters$min_geometric_mean]
   }
-  
-  if (!is.null(filters$max_geometric_mean) &&
-      filters$max_geometric_mean > 0) {
+  if (!is.null(filters$max_geometric_mean) && filters$max_geometric_mean > 0) {
     filtered_lineups <- filtered_lineups[GeometricMean <= filters$max_geometric_mean]
   }
   
+  # Apply starting position filters
   if (!is.null(filters$min_cumulative_starting) && filters$min_cumulative_starting > 0) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -2160,7 +2149,7 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # NEW: Apply geometric mean starting position filters
+  # Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && filters$min_geometric_starting > 0) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
@@ -2168,15 +2157,21 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= filters$max_geometric_starting]
   }
   
+  # FIXED: Apply salary filters (this was missing!)
+  if (!is.null(filters$min_total_salary) && filters$min_total_salary > 0) {
+    filtered_lineups <- filtered_lineups[TotalSalary >= filters$min_total_salary]
+  }
+  if (!is.null(filters$max_total_salary) && filters$max_total_salary > 0) {
+    filtered_lineups <- filtered_lineups[TotalSalary <= filters$max_total_salary]
+  }
+  
   # Exclude specific drivers
-  if (!is.null(filters$excluded_drivers) &&
-      length(filters$excluded_drivers) > 0) {
+  if (!is.null(filters$excluded_drivers) && length(filters$excluded_drivers) > 0) {
     driver_cols <- paste0("Driver", 1:DK_ROSTER_SIZE)
     to_exclude <- logical(nrow(filtered_lineups))
     
     for (col in driver_cols) {
-      to_exclude <- to_exclude |
-        filtered_lineups[[col]] %in% filters$excluded_drivers
+      to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_drivers
     }
     
     filtered_lineups <- filtered_lineups[!to_exclude]
@@ -2186,35 +2181,27 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
     return(NULL)
   }
   
-  # Pre-allocate for tracking
+  # Rest of the function remains the same - random sampling logic
   driver_cols <- paste0("Driver", 1:DK_ROSTER_SIZE)
   all_drivers <- unique(unlist(filtered_lineups[, driver_cols, with = FALSE]))
   driver_counts <- setNames(numeric(length(all_drivers)), all_drivers)
   
-  # Use the selected lineups data.table
   selected_lineups <- data.table()
   selected_indices <- integer(0)
   
-  # Use Top1Count as weight for sampling
   weight_col <- "Top1Count"
   
-  # Sampling loop with max attempts limit
   attempts <- 0
   max_attempts <- filters$num_lineups * 10
   
-  while (nrow(selected_lineups) < filters$num_lineups &&
-         attempts < max_attempts) {
+  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
     attempts <- attempts + 1
     
-    # Available lineups
     available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0)
-      break
+    if (length(available_indices) == 0) break
     
-    # Sample based on weights
     weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0)
-      weights <- rep(1, length(available_indices))
+    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
     
     selected_idx <- tryCatch({
       sample(available_indices, 1, prob = weights)
@@ -2223,26 +2210,18 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
     })
     
     candidate_lineup <- filtered_lineups[selected_idx]
-    
-    # Get drivers from this lineup
     candidate_drivers <- unlist(candidate_lineup[, driver_cols, with = FALSE])
     
-    # Update driver counts - no exposure limit check
     driver_counts <- driver_counts + table(factor(candidate_drivers, levels = names(driver_counts)))
     
-    # Add lineup unconditionally (no max exposure check)
     selected_lineups <- rbind(selected_lineups, candidate_lineup)
     selected_indices <- c(selected_indices, selected_idx)
     
-    # Periodically clean up
-    if (attempts %% 100 == 0)
-      gc(verbose = FALSE)
+    if (attempts %% 100 == 0) gc(verbose = FALSE)
   }
   
-  if (nrow(selected_lineups) == 0)
-    return(NULL)
+  if (nrow(selected_lineups) == 0) return(NULL)
   
-  # Calculate exposure for attribute
   final_exposure <- (driver_counts / nrow(selected_lineups)) * 100
   attr(selected_lineups, "exposure") <- final_exposure
   
@@ -2253,58 +2232,51 @@ generate_random_dk_lineups <- function(optimal_lineups, filters) {
 generate_random_fd_lineups <- function(optimal_lineups, filters) {
   filtered_lineups <- optimal_lineups
   
-  # Apply filters with early return if empty
   if (is.null(filtered_lineups) || nrow(filtered_lineups) == 0) {
     return(NULL)
   }
   
-  # Convert to data.table for better performance
   setDT(filtered_lineups)
   
-  # Apply min threshold filters
-  if (!is.null(filters$min_top1_count) &&
-      filters$min_top1_count > 0) {
+  # Apply all filters including salary (same pattern as DK)
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
     filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
   }
-  
-  
-  if (!is.null(filters$min_top2_count) &&
-      filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+  if (!is.null(filters$max_top1_count)) {
+    filtered_lineups <- filtered_lineups[Top1Count <= filters$max_top1_count]
   }
   
-  if (!is.null(filters$min_top3_count) &&
-      filters$min_top3_count > 0) {
+  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
     filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
   }
+  if (!is.null(filters$max_top3_count)) {
+    filtered_lineups <- filtered_lineups[Top3Count <= filters$max_top3_count]
+  }
   
-  if (!is.null(filters$min_top5_count) &&
-      filters$min_top5_count > 0) {
+  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
     filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+  }
+  if (!is.null(filters$max_top5_count)) {
+    filtered_lineups <- filtered_lineups[Top5Count <= filters$max_top5_count]
   }
   
   # Apply cumulative ownership filters
-  if (!is.null(filters$min_cumulative_ownership) &&
-      filters$min_cumulative_ownership > 0) {
+  if (!is.null(filters$min_cumulative_ownership) && filters$min_cumulative_ownership > 0) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$min_cumulative_ownership]
   }
-  if (!is.null(filters$max_cumulative_ownership) &&
-      filters$max_cumulative_ownership > 0) {
+  if (!is.null(filters$max_cumulative_ownership) && filters$max_cumulative_ownership > 0) {
     filtered_lineups <- filtered_lineups[CumulativeOwnership <= filters$max_cumulative_ownership]
   }
   
   # Apply geometric mean filters
-  if (!is.null(filters$min_geometric_mean) &&
-      filters$min_geometric_mean > 0) {
-    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) &
-                                           GeometricMean >= filters$min_geometric_mean]
+  if (!is.null(filters$min_geometric_mean) && filters$min_geometric_mean > 0) {
+    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean >= filters$min_geometric_mean]
   }
-  if (!is.null(filters$max_geometric_mean) &&
-      filters$max_geometric_mean > 0) {
-    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) &
-                                           GeometricMean <= filters$max_geometric_mean]
+  if (!is.null(filters$max_geometric_mean) && filters$max_geometric_mean > 0) {
+    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean <= filters$max_geometric_mean]
   }
   
+  # Apply starting position filters
   if (!is.null(filters$min_cumulative_starting) && filters$min_cumulative_starting > 0) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -2312,7 +2284,6 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[CumulativeStarting <= filters$max_cumulative_starting]
   }
   
-  # NEW: Apply geometric mean starting position filters
   if (!is.null(filters$min_geometric_starting) && filters$min_geometric_starting > 0) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting >= filters$min_geometric_starting]
   }
@@ -2320,15 +2291,21 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
     filtered_lineups <- filtered_lineups[!is.na(GeometricMeanStarting) & GeometricMeanStarting <= filters$max_geometric_starting]
   }
   
+  # FIXED: Apply salary filters (this was missing!)
+  if (!is.null(filters$min_total_salary) && filters$min_total_salary > 0) {
+    filtered_lineups <- filtered_lineups[TotalSalary >= filters$min_total_salary]
+  }
+  if (!is.null(filters$max_total_salary) && filters$max_total_salary > 0) {
+    filtered_lineups <- filtered_lineups[TotalSalary <= filters$max_total_salary]
+  }
+  
   # Exclude specific drivers
-  if (!is.null(filters$excluded_drivers) &&
-      length(filters$excluded_drivers) > 0) {
+  if (!is.null(filters$excluded_drivers) && length(filters$excluded_drivers) > 0) {
     driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
     to_exclude <- logical(nrow(filtered_lineups))
     
     for (col in driver_cols) {
-      to_exclude <- to_exclude |
-        filtered_lineups[[col]] %in% filters$excluded_drivers
+      to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_drivers
     }
     
     filtered_lineups <- filtered_lineups[!to_exclude]
@@ -2338,35 +2315,27 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
     return(NULL)
   }
   
-  # Pre-allocate for tracking
+  # Same sampling logic as DK but for FD
   driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
   all_drivers <- unique(unlist(filtered_lineups[, driver_cols, with = FALSE]))
   driver_counts <- setNames(numeric(length(all_drivers)), all_drivers)
   
-  # Use the selected lineups data.table
   selected_lineups <- data.table()
   selected_indices <- integer(0)
   
-  # Use Top1Count as weight for sampling
   weight_col <- "Top1Count"
   
-  # Sampling loop with max attempts limit
   attempts <- 0
   max_attempts <- filters$num_lineups * 10
   
-  while (nrow(selected_lineups) < filters$num_lineups &&
-         attempts < max_attempts) {
+  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
     attempts <- attempts + 1
     
-    # Available lineups
     available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0)
-      break
+    if (length(available_indices) == 0) break
     
-    # Sample based on weights
     weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0)
-      weights <- rep(1, length(available_indices))
+    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
     
     selected_idx <- tryCatch({
       sample(available_indices, 1, prob = weights)
@@ -2375,31 +2344,24 @@ generate_random_fd_lineups <- function(optimal_lineups, filters) {
     })
     
     candidate_lineup <- filtered_lineups[selected_idx]
-    
-    # Get drivers from this lineup
     candidate_drivers <- unlist(candidate_lineup[, driver_cols, with = FALSE])
     
-    # Update driver counts - no exposure limit check
     driver_counts <- driver_counts + table(factor(candidate_drivers, levels = names(driver_counts)))
     
-    # Add lineup unconditionally (no max exposure check)
     selected_lineups <- rbind(selected_lineups, candidate_lineup)
     selected_indices <- c(selected_indices, selected_idx)
     
-    # Periodically clean up
-    if (attempts %% 100 == 0)
-      gc(verbose = FALSE)
+    if (attempts %% 100 == 0) gc(verbose = FALSE)
   }
   
-  if (nrow(selected_lineups) == 0)
-    return(NULL)
+  if (nrow(selected_lineups) == 0) return(NULL)
   
-  # Calculate exposure for attribute
   final_exposure <- (driver_counts / nrow(selected_lineups)) * 100
   attr(selected_lineups, "exposure") <- final_exposure
   
   return(as.data.frame(selected_lineups))
 }
+
 
 # REPLACE your calculate_dk_driver_exposure function with this FIXED version
 calculate_dk_driver_exposure <- function(optimal_lineups,
@@ -2955,52 +2917,62 @@ ui <- dashboardPage(
                   style = "flex: 1; padding: 3px; font-size: 12px;"
                 )
               )
-            ),
+            )
+          )
+        ),
+        
+        # Tab-based results instead of stacked conditionalPanels
+        conditionalPanel(
+          condition = "output.has_dk_lineups === 'true' || output.has_fd_lineups === 'true'",
+          tabsetPanel(
+            id = "optimal_lineups_tabs",
+            
+            # DraftKings tab
             conditionalPanel(
-              condition = "output.has_draftkings != 'true' && output.has_fanduel != 'true'",
-              div(
-                class = "alert alert-warning",
-                style = "margin: 0; padding: 5px; font-size: 11px;",
-                "No fantasy platform data detected. Check your input file."
+              condition = "output.has_dk_lineups === 'true'",
+              tabPanel(
+                "DraftKings",
+                value = "dk_optimal_tab",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "DraftKings Optimal Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton(
+                        'download_dk_optimal_lineups',
+                        'Download All DK Lineups',
+                        style = "margin-top: 10px;"
+                      )
+                    ),
+                    DTOutput("dk_optimal_lineups_table")
+                  )
+                )
               )
-            )
-          )
-        ),
-        # DraftKings optimal lineups results
-        conditionalPanel(
-          condition = "output.has_dk_lineups === 'true'", 
-          fluidRow(
-            box(
-              width = 12,
-              title = "DraftKings Optimal Lineups",
-              div(
-                style = "text-align: right; margin-bottom: 10px;",
-                downloadButton(
-                  'download_dk_optimal_lineups',
-                  'Download All DK Lineups',
-                  style = "margin-top: 10px;"
+            ),
+            
+            # FanDuel tab
+            conditionalPanel(
+              condition = "output.has_fd_lineups === 'true'",
+              tabPanel(
+                "FanDuel",
+                value = "fd_optimal_tab", 
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "FanDuel Optimal Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton(
+                        'download_fd_optimal_lineups',
+                        'Download All FD Lineups',
+                        style = "margin-top: 10px;"
+                      )
+                    ),
+                    DTOutput("fd_optimal_lineups_table")
+                  )
                 )
-              ),
-              DTOutput("dk_optimal_lineups_table")
-            )
-          )
-        ),
-        # FanDuel optimal lineups results
-        conditionalPanel(
-          condition = "output.has_fd_lineups === 'true'", 
-          fluidRow(
-            box(
-              width = 12,
-              title = "FanDuel Optimal Lineups",
-              div(
-                style = "text-align: right; margin-bottom: 10px;",
-                downloadButton(
-                  'download_fd_optimal_lineups',
-                  'Download All FD Lineups',
-                  style = "margin-top: 10px;"
-                )
-              ),
-              DTOutput("fd_optimal_lineups_table")
+              )
             )
           )
         )
@@ -3194,30 +3166,416 @@ server <- function(input, output, session) {
   # Configure memory settings when server starts
   configure_memory_settings()
   
+
+  # Initialize DK sliders when lineup builder tab is viewed
+  observeEvent(input$lineup_platform_tabs, {
+    if (!is.null(input$lineup_platform_tabs) && 
+        input$lineup_platform_tabs == "dk_tab" && 
+        !is.null(rv$dk_optimal_lineups) &&
+        !rv$sliders_initialized$dk && 
+        !rv$user_modified_sliders$dk) {
+      
+      later::later(function() {
+        isolate({
+          cat("Initializing DK sliders with actual data ranges...\n")
+          rv$updating_sliders <- TRUE
+          
+          # Top1Count slider
+          if ("Top1Count" %in% names(rv$dk_optimal_lineups)) {
+            top1_values <- rv$dk_optimal_lineups$Top1Count[!is.na(rv$dk_optimal_lineups$Top1Count)]
+            if (length(top1_values) > 0) {
+              min_top1 <- min(top1_values)
+              max_top1 <- max(top1_values)
+              updateSliderInput(session, "dk_min_top1_slider", 
+                                min = min_top1, max = max_top1, value = c(min_top1, max_top1))
+            }
+          }
+          
+          # Top3Count slider
+          if ("Top3Count" %in% names(rv$dk_optimal_lineups)) {
+            top3_values <- rv$dk_optimal_lineups$Top3Count[!is.na(rv$dk_optimal_lineups$Top3Count)]
+            if (length(top3_values) > 0) {
+              min_top3 <- min(top3_values)
+              max_top3 <- max(top3_values)
+              updateSliderInput(session, "dk_min_top3_slider", 
+                                min = min_top3, max = max_top3, value = c(min_top3, max_top3))
+            }
+          }
+          
+          # Top5Count slider
+          if ("Top5Count" %in% names(rv$dk_optimal_lineups)) {
+            top5_values <- rv$dk_optimal_lineups$Top5Count[!is.na(rv$dk_optimal_lineups$Top5Count)]
+            if (length(top5_values) > 0) {
+              min_top5 <- min(top5_values)
+              max_top5 <- max(top5_values)
+              updateSliderInput(session, "dk_min_top5_slider", 
+                                min = min_top5, max = max_top5, value = c(min_top5, max_top5))
+            }
+          }
+          
+          # Ownership sliders
+          if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+            ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+            if (length(ownership_values) > 0) {
+              min_own <- floor(min(ownership_values))
+              max_own <- ceiling(max(ownership_values))
+              updateSliderInput(session, "dk_ownership_range",
+                                min = min_own, max = max_own, value = c(min_own, max_own))
+            }
+          }
+          
+          # Geometric mean sliders
+          if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+            geometric_values <- rv$dk_optimal_lineups$GeometricMean[!is.na(rv$dk_optimal_lineups$GeometricMean)]
+            if (length(geometric_values) > 0) {
+              min_geo <- floor(min(geometric_values) * 10) / 10
+              max_geo <- ceiling(max(geometric_values) * 10) / 10
+              updateSliderInput(session, "dk_geometric_range",
+                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            }
+          }
+          
+          # Starting position sliders
+          if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
+            starting_values <- rv$dk_optimal_lineups$CumulativeStarting[!is.na(rv$dk_optimal_lineups$CumulativeStarting)]
+            if (length(starting_values) > 0) {
+              min_start <- floor(min(starting_values))
+              max_start <- ceiling(max(starting_values))
+              updateSliderInput(session, "dk_starting_range",
+                                min = min_start, max = max_start, value = c(min_start, max_start))
+            }
+          }
+          
+          if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
+            geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting[!is.na(rv$dk_optimal_lineups$GeometricMeanStarting)]
+            if (length(geo_starting_values) > 0) {
+              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+              updateSliderInput(session, "dk_starting_geo_range",
+                                min = min_geo_start, max = max_geo_start, value = c(min_geo_start, max_geo_start))
+            }
+          }
+          
+          # Salary sliders
+          if ("TotalSalary" %in% names(rv$dk_optimal_lineups)) {
+            salary_values <- rv$dk_optimal_lineups$TotalSalary[!is.na(rv$dk_optimal_lineups$TotalSalary)]
+            if (length(salary_values) > 0) {
+              min_sal <- floor((min(salary_values) / 1000) * 10) / 10
+              max_sal <- ceiling((max(salary_values) / 1000) * 10) / 10
+              updateSliderInput(session, "dk_salary_range",
+                                min = min_sal, max = max_sal, value = c(min_sal, max_sal))
+            }
+          }
+          
+          rv$sliders_initialized$dk <- TRUE
+          rv$updating_sliders <- FALSE
+          cat("DK sliders initialized successfully\n")
+        })
+      }, delay = 0.5)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = FALSE)
+  
+  observeEvent(rv$dk_optimal_lineups, {
+    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+      # Reset initialization flag
+      rv$sliders_initialized$dk <- FALSE
+      rv$user_modified_sliders$dk <- FALSE
+      
+      later::later(function() {
+        isolate({
+          cat("Initializing DK sliders after optimization...\n")
+          
+          # Top count sliders
+          if ("Top1Count" %in% names(rv$dk_optimal_lineups)) {
+            top1_values <- rv$dk_optimal_lineups$Top1Count[!is.na(rv$dk_optimal_lineups$Top1Count)]
+            if (length(top1_values) > 0) {
+              min_top1 <- min(top1_values)
+              max_top1 <- max(top1_values)
+              updateSliderInput(session, "dk_min_top1_slider", 
+                                min = min_top1, max = max_top1, value = c(min_top1, max_top1))
+            }
+          }
+          
+          if ("Top3Count" %in% names(rv$dk_optimal_lineups)) {
+            top3_values <- rv$dk_optimal_lineups$Top3Count[!is.na(rv$dk_optimal_lineups$Top3Count)]
+            if (length(top3_values) > 0) {
+              min_top3 <- min(top3_values)
+              max_top3 <- max(top3_values)
+              updateSliderInput(session, "dk_min_top3_slider", 
+                                min = min_top3, max = max_top3, value = c(min_top3, max_top3))
+            }
+          }
+          
+          if ("Top5Count" %in% names(rv$dk_optimal_lineups)) {
+            top5_values <- rv$dk_optimal_lineups$Top5Count[!is.na(rv$dk_optimal_lineups$Top5Count)]
+            if (length(top5_values) > 0) {
+              min_top5 <- min(top5_values)
+              max_top5 <- max(top5_values)
+              updateSliderInput(session, "dk_min_top5_slider", 
+                                min = min_top5, max = max_top5, value = c(min_top5, max_top5))
+            }
+          }
+          
+          # Ownership sliders
+          if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
+            ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
+            if (length(ownership_values) > 0) {
+              min_own <- floor(min(ownership_values))
+              max_own <- ceiling(max(ownership_values))
+              updateSliderInput(session, "dk_ownership_range",
+                                min = min_own, max = max_own, value = c(min_own, max_own))
+            }
+          }
+          
+          if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
+            geometric_values <- rv$dk_optimal_lineups$GeometricMean[!is.na(rv$dk_optimal_lineups$GeometricMean)]
+            if (length(geometric_values) > 0) {
+              min_geo <- floor(min(geometric_values) * 10) / 10
+              max_geo <- ceiling(max(geometric_values) * 10) / 10
+              updateSliderInput(session, "dk_geometric_range",
+                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            }
+          }
+          
+          # Starting position sliders
+          if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
+            starting_values <- rv$dk_optimal_lineups$CumulativeStarting[!is.na(rv$dk_optimal_lineups$CumulativeStarting)]
+            if (length(starting_values) > 0) {
+              min_start <- floor(min(starting_values))
+              max_start <- ceiling(max(starting_values))
+              updateSliderInput(session, "dk_starting_range",
+                                min = min_start, max = max_start, value = c(min_start, max_start))
+            }
+          }
+          
+          if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
+            geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting[!is.na(rv$dk_optimal_lineups$GeometricMeanStarting)]
+            if (length(geo_starting_values) > 0) {
+              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+              updateSliderInput(session, "dk_starting_geo_range",
+                                min = min_geo_start, max = max_geo_start, value = c(min_geo_start, max_geo_start))
+            }
+          }
+          
+          # Salary sliders
+          if ("TotalSalary" %in% names(rv$dk_optimal_lineups)) {
+            salary_values <- rv$dk_optimal_lineups$TotalSalary[!is.na(rv$dk_optimal_lineups$TotalSalary)]
+            if (length(salary_values) > 0) {
+              min_sal <- floor((min(salary_values) / 1000) * 10) / 10
+              max_sal <- ceiling((max(salary_values) / 1000) * 10) / 10
+              updateSliderInput(session, "dk_salary_range",
+                                min = min_sal, max = max_sal, value = c(min_sal, max_sal))
+            }
+          }
+          
+          rv$sliders_initialized$dk <- TRUE
+          cat("DK sliders initialized after optimization\n")
+        })
+      }, delay = 1.0)
+    }
+  }, ignoreNULL = TRUE, once = FALSE)
+  
+  # Initialize FD sliders when FD tab is viewed
+  observeEvent(input$lineup_platform_tabs, {
+    if (!is.null(input$lineup_platform_tabs) && 
+        input$lineup_platform_tabs == "fd_tab" && 
+        !is.null(rv$fd_optimal_lineups) &&
+        !rv$sliders_initialized$fd && 
+        !rv$user_modified_sliders$fd) {
+      
+      later::later(function() {
+        isolate({
+          cat("Initializing FD sliders with actual data ranges...\n")
+          rv$updating_sliders <- TRUE
+          
+          # Same structure as DK but for FD
+          if ("Top1Count" %in% names(rv$fd_optimal_lineups)) {
+            top1_values <- rv$fd_optimal_lineups$Top1Count[!is.na(rv$fd_optimal_lineups$Top1Count)]
+            if (length(top1_values) > 0) {
+              min_top1 <- min(top1_values)
+              max_top1 <- max(top1_values)
+              updateSliderInput(session, "fd_min_top1_slider", 
+                                min = min_top1, max = max_top1, value = c(min_top1, max_top1))
+            }
+          }
+          
+          if ("Top3Count" %in% names(rv$fd_optimal_lineups)) {
+            top3_values <- rv$fd_optimal_lineups$Top3Count[!is.na(rv$fd_optimal_lineups$Top3Count)]
+            if (length(top3_values) > 0) {
+              min_top3 <- min(top3_values)
+              max_top3 <- max(top3_values)
+              updateSliderInput(session, "fd_min_top3_slider", 
+                                min = min_top3, max = max_top3, value = c(min_top3, max_top3))
+            }
+          }
+          
+          if ("Top5Count" %in% names(rv$fd_optimal_lineups)) {
+            top5_values <- rv$fd_optimal_lineups$Top5Count[!is.na(rv$fd_optimal_lineups$Top5Count)]
+            if (length(top5_values) > 0) {
+              min_top5 <- min(top5_values)
+              max_top5 <- max(top5_values)
+              updateSliderInput(session, "fd_min_top5_slider", 
+                                min = min_top5, max = max_top5, value = c(min_top5, max_top5))
+            }
+          }
+          
+          # Add all other FD sliders following the same pattern...
+          # (ownership, geometric, starting, salary)
+          
+          rv$sliders_initialized$fd <- TRUE
+          rv$updating_sliders <- FALSE
+          cat("FD sliders initialized successfully\n")
+        })
+      }, delay = 0.5)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = FALSE)
+ 
+   
+  # Initialize FD sliders when FD optimal lineups are created
+  observeEvent(rv$fd_optimal_lineups, {
+    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
+      rv$sliders_initialized$fd <- FALSE
+      rv$user_modified_sliders$fd <- FALSE
+      
+      later::later(function() {
+        isolate({
+          cat("Initializing FD sliders after optimization...\n")
+          
+          # Top count sliders
+          if ("Top1Count" %in% names(rv$fd_optimal_lineups)) {
+            top1_values <- rv$fd_optimal_lineups$Top1Count[!is.na(rv$fd_optimal_lineups$Top1Count)]
+            if (length(top1_values) > 0) {
+              min_top1 <- min(top1_values)
+              max_top1 <- max(top1_values)
+              updateSliderInput(session, "fd_min_top1_slider", 
+                                min = min_top1, max = max_top1, value = c(min_top1, max_top1))
+            }
+          }
+          
+          if ("Top3Count" %in% names(rv$fd_optimal_lineups)) {
+            top3_values <- rv$fd_optimal_lineups$Top3Count[!is.na(rv$fd_optimal_lineups$Top3Count)]
+            if (length(top3_values) > 0) {
+              min_top3 <- min(top3_values)
+              max_top3 <- max(top3_values)
+              updateSliderInput(session, "fd_min_top3_slider", 
+                                min = min_top3, max = max_top3, value = c(min_top3, max_top3))
+            }
+          }
+          
+          if ("Top5Count" %in% names(rv$fd_optimal_lineups)) {
+            top5_values <- rv$fd_optimal_lineups$Top5Count[!is.na(rv$fd_optimal_lineups$Top5Count)]
+            if (length(top5_values) > 0) {
+              min_top5 <- min(top5_values)
+              max_top5 <- max(top5_values)
+              updateSliderInput(session, "fd_min_top5_slider", 
+                                min = min_top5, max = max_top5, value = c(min_top5, max_top5))
+            }
+          }
+          
+          # Ownership sliders
+          if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+            ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership[!is.na(rv$fd_optimal_lineups$CumulativeOwnership)]
+            if (length(ownership_values) > 0) {
+              min_own <- floor(min(ownership_values))
+              max_own <- ceiling(max(ownership_values))
+              updateSliderInput(session, "fd_ownership_range",
+                                min = min_own, max = max_own, value = c(min_own, max_own))
+            }
+          }
+          
+          if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
+            geometric_values <- rv$fd_optimal_lineups$GeometricMean[!is.na(rv$fd_optimal_lineups$GeometricMean)]
+            if (length(geometric_values) > 0) {
+              min_geo <- floor(min(geometric_values) * 10) / 10
+              max_geo <- ceiling(max(geometric_values) * 10) / 10
+              updateSliderInput(session, "fd_geometric_range",
+                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
+            }
+          }
+          
+          # Starting position sliders
+          if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
+            starting_values <- rv$fd_optimal_lineups$CumulativeStarting[!is.na(rv$fd_optimal_lineups$CumulativeStarting)]
+            if (length(starting_values) > 0) {
+              min_start <- floor(min(starting_values))
+              max_start <- ceiling(max(starting_values))
+              updateSliderInput(session, "fd_starting_range",
+                                min = min_start, max = max_start, value = c(min_start, max_start))
+            }
+          }
+          
+          if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
+            geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting[!is.na(rv$fd_optimal_lineups$GeometricMeanStarting)]
+            if (length(geo_starting_values) > 0) {
+              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
+              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
+              updateSliderInput(session, "fd_starting_geo_range",
+                                min = min_geo_start, max = max_geo_start, value = c(min_geo_start, max_geo_start))
+            }
+          }
+          
+          # Salary sliders
+          if ("TotalSalary" %in% names(rv$fd_optimal_lineups)) {
+            salary_values <- rv$fd_optimal_lineups$TotalSalary[!is.na(rv$fd_optimal_lineups$TotalSalary)]
+            if (length(salary_values) > 0) {
+              min_sal <- floor((min(salary_values) / 1000) * 10) / 10
+              max_sal <- ceiling((max(salary_values) / 1000) * 10) / 10
+              updateSliderInput(session, "fd_salary_range",
+                                min = min_sal, max = max_sal, value = c(min_sal, max_sal))
+            }
+          }
+          
+          rv$sliders_initialized$fd <- TRUE
+          cat("FD sliders initialized after optimization\n")
+        })
+      }, delay = 1.0)
+    }
+  }, ignoreNULL = TRUE, once = FALSE)
+  
+  # Initialize sliders when entering lineup builder tab (fallback)
+  observeEvent(input$sidebar_menu, {
+    if (input$sidebar_menu == "lineup_builder") {
+      later::later(function() {
+        isolate({
+          if (!is.null(rv$dk_optimal_lineups) && !rv$sliders_initialized$dk && !rv$user_modified_sliders$dk) {
+            # Trigger the DK tab initialization
+            rv$sliders_initialized$dk <- FALSE  # Reset to trigger initialization
+          }
+          if (!is.null(rv$fd_optimal_lineups) && !rv$sliders_initialized$fd && !rv$user_modified_sliders$fd) {
+            # Trigger the FD tab initialization
+            rv$sliders_initialized$fd <- FALSE  # Reset to trigger initialization
+          }
+        })
+      }, delay = 1.0)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = FALSE)
+  
+
+
   dk_filters <- reactive({
     list(
-      min_top1_count = input$dk_min_top1_count,
-      min_top2_count = input$dk_min_top2_count,
-      min_top3_count = input$dk_min_top3_count,
-      min_top5_count = input$dk_min_top5_count,
+      min_top1_count = input$dk_min_top1_slider,  # FIXED: was dk_min_top1_count
+      min_top3_count = input$dk_min_top3_slider,  # FIXED: was dk_min_top3_count  
+      min_top5_count = input$dk_min_top5_slider,  # FIXED: was dk_min_top5_count
       min_cumulative_ownership = input$dk_ownership_range[1],
       max_cumulative_ownership = input$dk_ownership_range[2],
       min_geometric_mean = input$dk_geometric_range[1],
       max_geometric_mean = input$dk_geometric_range[2],
-      min_cumulative_starting = input$dk_starting_range[1],    # NEW
-      max_cumulative_starting = input$dk_starting_range[2],    # NEW
-      min_geometric_starting = input$dk_starting_geo_range[1], # NEW
-      max_geometric_starting = input$dk_starting_geo_range[2], # NEW
+      min_cumulative_starting = input$dk_starting_range[1],
+      max_cumulative_starting = input$dk_starting_range[2],
+      min_geometric_starting = input$dk_starting_geo_range[1],
+      max_geometric_starting = input$dk_starting_geo_range[2],
       excluded_drivers = input$dk_excluded_drivers
     )
   })
   
+  
   fd_filters <- reactive({
     list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
+      min_top1_count = input$fd_min_top1_slider,  # FIXED: was fd_min_top1_count
+      min_top3_count = input$fd_min_top3_slider,  # FIXED: was fd_min_top3_count
+      min_top5_count = input$fd_min_top5_slider,  # FIXED: was fd_min_top5_count
       min_cumulative_ownership = input$fd_ownership_range[1],
       max_cumulative_ownership = input$fd_ownership_range[2],
       min_geometric_mean = input$fd_geometric_range[1],
@@ -3240,52 +3598,56 @@ server <- function(input, output, session) {
       cleanup_memory(verbose = FALSE)
     }
   })
-  # REPLACE your existing DraftKings filter observer with this FIXED version
+  
+  
+  # Fixed DK filter observer
   observeEvent({
     list(
-      input$dk_min_top1_count,
-      input$dk_min_top2_count, 
-      input$dk_min_top3_count,
-      input$dk_min_top5_count,
+      input$dk_min_top1_slider,
+      input$dk_min_top3_slider,
+      input$dk_min_top5_slider,
       input$dk_ownership_range,
       input$dk_geometric_range,
       input$dk_starting_range,       
-      input$dk_starting_geo_range, 
+      input$dk_starting_geo_range,
+      input$dk_salary_range,
       input$dk_excluded_drivers
     )
   }, {
-    # Only process if:
-    # 1. Not currently updating sliders programmatically
-    # 2. Sliders have been initialized 
-    # 3. We have the necessary data
-    if (!isTRUE(rv$updating_sliders) && 
-        isTRUE(rv$sliders_initialized$dk) &&
+    # Only process if sliders are initialized, not being programmatically updated, and we have data
+    if (isTRUE(rv$sliders_initialized$dk) && 
+        !isTRUE(rv$updating_sliders) &&
         !is.null(rv$dk_optimal_lineups) && 
         !is.null(rv$dk_driver_exposure)) {
       
-      # Mark that user has modified sliders
+      # Mark that user has made changes
       rv$user_modified_sliders$dk <- TRUE
       
-      # Get existing driver mapping from the current exposure data
+      # Get existing mapping
       existing_mapping <- rv$dk_driver_exposure[, c("DKName", "Name", "DKSalary", "DKOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters - FIXED: Added ALL filters
+      # Build current filters - FIXED: Use correct input names
       current_filters <- list(
-        min_top1_count = input$dk_min_top1_count,
-        min_top2_count = input$dk_min_top2_count,
-        min_top3_count = input$dk_min_top3_count,
-        min_top5_count = input$dk_min_top5_count,
-        min_cumulative_ownership = input$dk_ownership_range[1],
-        max_cumulative_ownership = input$dk_ownership_range[2],
-        min_geometric_mean = input$dk_geometric_range[1],
-        max_geometric_mean = input$dk_geometric_range[2],
-        min_cumulative_starting = input$dk_starting_range[1],      # FIXED: These were missing!
-        max_cumulative_starting = input$dk_starting_range[2],      # FIXED: These were missing!
-        min_geometric_starting = input$dk_starting_geo_range[1],   # FIXED: These were missing!
-        max_geometric_starting = input$dk_starting_geo_range[2],   # FIXED: These were missing!
+        min_top1_count = if(is.null(input$dk_min_top1_slider)) 0 else input$dk_min_top1_slider[1],
+        max_top1_count = if(is.null(input$dk_min_top1_slider)) 100 else input$dk_min_top1_slider[2],
+        min_top3_count = if(is.null(input$dk_min_top3_slider)) 0 else input$dk_min_top3_slider[1],
+        max_top3_count = if(is.null(input$dk_min_top3_slider)) 100 else input$dk_min_top3_slider[2],
+        min_top5_count = if(is.null(input$dk_min_top5_slider)) 0 else input$dk_min_top5_slider[1],
+        max_top5_count = if(is.null(input$dk_min_top5_slider)) 100 else input$dk_min_top5_slider[2],
+        min_cumulative_ownership = if(is.null(input$dk_ownership_range)) 0 else input$dk_ownership_range[1],
+        max_cumulative_ownership = if(is.null(input$dk_ownership_range)) 600 else input$dk_ownership_range[2],
+        min_geometric_mean = if(is.null(input$dk_geometric_range)) 0 else input$dk_geometric_range[1],
+        max_geometric_mean = if(is.null(input$dk_geometric_range)) 100 else input$dk_geometric_range[2],
+        min_cumulative_starting = if(is.null(input$dk_starting_range)) 6 else input$dk_starting_range[1],
+        max_cumulative_starting = if(is.null(input$dk_starting_range)) 240 else input$dk_starting_range[2],
+        min_geometric_starting = if(is.null(input$dk_starting_geo_range)) 1 else input$dk_starting_geo_range[1],
+        max_geometric_starting = if(is.null(input$dk_starting_geo_range)) 40 else input$dk_starting_geo_range[2],
+        min_total_salary = if(is.null(input$dk_salary_range)) 42500 else input$dk_salary_range[1] * 1000,
+        max_total_salary = if(is.null(input$dk_salary_range)) 50000 else input$dk_salary_range[2] * 1000,
         excluded_drivers = input$dk_excluded_drivers
       )
       
+      # Update driver exposure
       rv$dk_driver_exposure <- calculate_dk_driver_exposure(
         rv$dk_optimal_lineups,
         existing_mapping,
@@ -3295,45 +3657,46 @@ server <- function(input, output, session) {
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
   
+  # Fixed FD filter observer  
   observeEvent({
     list(
-      input$fd_min_top1_count,
-      input$fd_min_top2_count,
-      input$fd_min_top3_count, 
-      input$fd_min_top5_count,
+      input$fd_min_top1_slider,
+      input$fd_min_top3_slider,
+      input$fd_min_top5_slider,
       input$fd_ownership_range,
       input$fd_geometric_range,
       input$fd_starting_range,    
       input$fd_starting_geo_range,
+      input$fd_salary_range,
       input$fd_excluded_drivers
     )
   }, {
-    # Only process if we have the necessary data and sliders are initialized
-    if (!isTRUE(rv$updating_sliders) && 
-        isTRUE(rv$sliders_initialized$fd) &&
+    if (isTRUE(rv$sliders_initialized$fd) && 
+        !isTRUE(rv$updating_sliders) &&
         !is.null(rv$fd_optimal_lineups) && 
         !is.null(rv$fd_driver_exposure)) {
       
-      # Mark that user has modified sliders
       rv$user_modified_sliders$fd <- TRUE
       
-      # Get existing driver mapping from the current exposure data
       existing_mapping <- rv$fd_driver_exposure[, c("FDName", "Name", "FDSalary", "FDOP", "Starting", "Proj")]
       
-      # Calculate updated driver exposure with new filters
       current_filters <- list(
-        min_top1_count = input$fd_min_top1_count,
-        min_top2_count = input$fd_min_top2_count,
-        min_top3_count = input$fd_min_top3_count,
-        min_top5_count = input$fd_min_top5_count,
-        min_cumulative_ownership = input$fd_ownership_range[1],
-        max_cumulative_ownership = input$fd_ownership_range[2],
-        min_geometric_mean = input$fd_geometric_range[1],
-        max_geometric_mean = input$fd_geometric_range[2],
-        min_cumulative_starting = input$fd_starting_range[1],
-        max_cumulative_starting = input$fd_starting_range[2],
-        min_geometric_starting = input$fd_starting_geo_range[1],
-        max_geometric_starting = input$fd_starting_geo_range[2],
+        min_top1_count = if(is.null(input$fd_min_top1_slider)) 0 else input$fd_min_top1_slider[1],
+        max_top1_count = if(is.null(input$fd_min_top1_slider)) 100 else input$fd_min_top1_slider[2],
+        min_top3_count = if(is.null(input$fd_min_top3_slider)) 0 else input$fd_min_top3_slider[1],
+        max_top3_count = if(is.null(input$fd_min_top3_slider)) 100 else input$fd_min_top3_slider[2],
+        min_top5_count = if(is.null(input$fd_min_top5_slider)) 0 else input$fd_min_top5_slider[1],
+        max_top5_count = if(is.null(input$fd_min_top5_slider)) 100 else input$fd_min_top5_slider[2],
+        min_cumulative_ownership = if(is.null(input$fd_ownership_range)) 0 else input$fd_ownership_range[1],
+        max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 500 else input$fd_ownership_range[2],
+        min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
+        max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
+        min_cumulative_starting = if(is.null(input$fd_starting_range)) 5 else input$fd_starting_range[1],
+        max_cumulative_starting = if(is.null(input$fd_starting_range)) 200 else input$fd_starting_range[2],
+        min_geometric_starting = if(is.null(input$fd_starting_geo_range)) 1 else input$fd_starting_geo_range[1],
+        max_geometric_starting = if(is.null(input$fd_starting_geo_range)) 40 else input$fd_starting_geo_range[2],
+        min_total_salary = if(is.null(input$fd_salary_range)) 42500 else input$fd_salary_range[1] * 1000,
+        max_total_salary = if(is.null(input$fd_salary_range)) 50000 else input$fd_salary_range[2] * 1000,
         excluded_drivers = input$fd_excluded_drivers
       )
       
@@ -3345,6 +3708,7 @@ server <- function(input, output, session) {
       )
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
+  
   
   # Cleanup when simulation data changes
   observeEvent(rv$simulation_results, {
@@ -4081,7 +4445,6 @@ server <- function(input, output, session) {
     }
   })
   
-  # Lineup Builder UI
   output$lineup_builder_ui <- renderUI({
     if (is.null(rv$dk_optimal_lineups) && is.null(rv$fd_optimal_lineups)) {
       return(
@@ -4094,151 +4457,253 @@ server <- function(input, output, session) {
       )
     }
     
-    tagList(
-      # DraftKings lineup builder UI
-      conditionalPanel(
-        condition = "output.has_dk_lineups == 'true'",
-        fluidRow(
-          box(
-            width = 12,
-            title = "DraftKings Lineup Filters",
-            fluidRow(
-              column(3, numericInput("dk_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
-              column(3, numericInput("dk_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
-              column(3, numericInput("dk_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
-              column(3, numericInput("dk_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
-            ),
-            fluidRow(
-              column(6,
-                     sliderInput("dk_ownership_range", "Cumulative Ownership Range:",
-                                 min = 0, max = 600, value = c(0, 600), step = 5)
-              ),
-              column(6,
-                     sliderInput("dk_geometric_range", "Geometric Mean Ownership Range:",
-                                 min = 0, max = 100, value = c(0, 100), step = 0.5)
-              )
-            ),
-            # NEW: Starting Position Filters
-            fluidRow(
-              column(6,
-                     sliderInput("dk_starting_range", "Cumulative Starting Position Range:",
-                                 min = 6, max = 240, value = c(6, 240), step = 1)
-              ),
-              column(6,
-                     sliderInput("dk_starting_geo_range", "Geometric Mean Starting Position Range:",
-                                 min = 1, max = 40, value = c(1, 40), step = 0.1)
-              )
-            ),
-            fluidRow(
-              column(6,
-                     selectizeInput("dk_excluded_drivers", "Exclude Drivers:",
-                                    choices = NULL, multiple = TRUE,
-                                    options = list(plugins = list('remove_button'),
-                                                   placeholder = 'Click to select drivers to exclude'))
-              ),
-              column(6,
-                     numericInput("dk_num_random_lineups", "Number of Lineups to Generate:", 
-                                  value = 20, min = 1, max = 150)
-              )
-            ),
-            fluidRow(
-              column(6,
-                     div(class = "well well-sm",
-                         h4("Filtered Pool Statistics:"),
-                         textOutput("dk_filtered_pool_size"))
-              ),
-              column(6,
-                     div(style = "margin-top: 20px;",
-                         actionButton("generate_dk_lineups", "Randomize DraftKings Lineups", 
-                                      class = "btn-primary btn-lg", style = "width: 100%;"),
-                         br(), br(),
-                         downloadButton("download_dk_random_lineups", "Download Selected Lineups", 
-                                        style = "width: 100%;"))
+    # Create tab panels based on what's available
+    tab_panels <- list()
+    
+    if (!is.null(rv$dk_optimal_lineups)) {
+      tab_panels <- append(tab_panels, list(
+        tabPanel(
+          "DraftKings",
+          value = "dk_tab",
+          
+          # DraftKings content
+          fluidRow(
+            box(
+              width = 12,
+              title = "DraftKings Lineup Filters & Generation",
+              
+              # Two-column layout
+              fluidRow(
+                # Left Column - Filters
+                column(8,
+                       # Performance Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Performance Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(4, 
+                                  sliderInput("dk_min_top1_slider", "Top 1 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           ),
+                           column(4, 
+                                  sliderInput("dk_min_top3_slider", "Top 3 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           ),
+                           column(4, 
+                                  sliderInput("dk_min_top5_slider", "Top 5 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           )
+                         )
+                       ),
+                       
+                       # Ownership Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Ownership Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(6, 
+                                  sliderInput("dk_ownership_range", "Cumulative Ownership Range:",
+                                              min = 0, max = 600, value = c(0, 600), step = 5, width = "100%")
+                           ),
+                           column(6, 
+                                  sliderInput("dk_geometric_range", "Geometric Mean Ownership Range:",
+                                              min = 0, max = 100, value = c(0, 100), step = 0.5, width = "100%")
+                           )
+                         )
+                       ),
+                       
+                       # Starting Position Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Starting Position Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(6, 
+                                  sliderInput("dk_starting_range", "Cumulative Starting Position Range:",
+                                              min = 6, max = 240, value = c(6, 240), step = 1, width = "100%")
+                           ),
+                           column(6, 
+                                  sliderInput("dk_starting_geo_range", "Geometric Mean Starting Position Range:",
+                                              min = 1, max = 40, value = c(1, 40), step = 0.1, width = "100%")
+                           )
+                         )
+                       )
+                ),
+                
+                # Right Column - Salary + Controls
+                column(4,
+                       # Salary Filter
+                       div(
+                         style = "margin-bottom: 20px;",
+                         h4("Salary Filter", style = "margin-bottom: 10px; color: #333;"),
+                         sliderInput("dk_salary_range", "Total Salary Range (k):",
+                                     min = 42.5, max = 50, value = c(42.5, 50), step = 0.1, width = "100%")
+                       ),
+                       
+                       # Generation Controls
+                       selectizeInput("dk_excluded_drivers", "Exclude Drivers:",
+                                      choices = NULL, multiple = TRUE,
+                                      options = list(plugins = list('remove_button'),
+                                                     placeholder = 'Select drivers to exclude'),
+                                      width = "100%"),
+                       
+                       numericInput("dk_num_random_lineups", "Number of Lineups:", 
+                                    value = 20, min = 1, max = 150, width = "100%"),
+                       
+                       div(
+                         class = "well well-sm", 
+                         style = "padding: 15px; margin-bottom: 15px;",
+                         h6("Filtered Pool:", style = "margin-bottom: 5px; font-weight: bold;"),
+                         textOutput("dk_filtered_pool_size")
+                       ),
+                       
+                       div(
+                         style = "display: flex; flex-direction: column; gap: 10px;",
+                         actionButton("generate_dk_lineups", "Randomly Select Lineups", 
+                                      class = "btn-primary", style = "width: 100%; height: 40px; font-size: 16px;"),
+                         downloadButton("download_dk_random_lineups", "Download Lineups", 
+                                        style = "width: 100%; height: 35px; font-size: 14px;")
+                       )
+                )
               )
             )
+          ),
+          
+          # Results tables
+          fluidRow(
+            box(width = 12, title = "DraftKings Driver Exposure Analysis",
+                DTOutput("dk_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
+          ),
+          fluidRow(
+            box(width = 12, title = "Generated DraftKings Lineups",
+                DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#FFD700"))
           )
-        ),
-        fluidRow(
-          box(width = 12, title = "DraftKings Driver Exposure Analysis",
-              DTOutput("dk_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
-        ),
-        fluidRow(
-          box(width = 12, title = "Generated DraftKings Lineups",
-              DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
-      ),
-      # FanDuel lineup builder UI
-      conditionalPanel(
-        condition = "output.has_fd_lineups == 'true'",
-        fluidRow(
-          box(width = 12, title = "FanDuel Lineup Filters",
+      ))
+    }
+    
+    if (!is.null(rv$fd_optimal_lineups)) {
+      tab_panels <- append(tab_panels, list(
+        tabPanel(
+          "FanDuel",
+          value = "fd_tab",
+          
+          # FanDuel content (similar structure)
+          fluidRow(
+            box(
+              width = 12,
+              title = "FanDuel Lineup Filters & Generation",
+              
               fluidRow(
-                column(3, numericInput("fd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
-                column(3, numericInput("fd_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
-                column(3, numericInput("fd_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
-                column(3, numericInput("fd_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
-              ),
-              fluidRow(
-                column(6,
-                       sliderInput("fd_ownership_range", "Cumulative Ownership Range:",
-                                   min = 0, max = 500, value = c(0, 500), step = 5)
+                column(8,
+                       # Performance Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Performance Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(4, 
+                                  sliderInput("fd_min_top1_slider", "Top 1 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           ),
+                           column(4, 
+                                  sliderInput("fd_min_top3_slider", "Top 3 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           ),
+                           column(4, 
+                                  sliderInput("fd_min_top5_slider", "Top 5 Count Range:", 
+                                              min = 0, max = 100, value = c(0, 100), step = 1, width = "100%")
+                           )
+                         )
+                       ),
+                       
+                       # Ownership Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Ownership Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(6, 
+                                  sliderInput("fd_ownership_range", "Cumulative Ownership Range:",
+                                              min = 0, max = 500, value = c(0, 500), step = 5, width = "100%")
+                           ),
+                           column(6, 
+                                  sliderInput("fd_geometric_range", "Geometric Mean Ownership Range:",
+                                              min = 0, max = 100, value = c(0, 100), step = 0.5, width = "100%")
+                           )
+                         )
+                       ),
+                       
+                       # Starting Position Filters
+                       div(
+                         style = "margin-bottom: 15px;",
+                         h4("Starting Position Filters", style = "margin-bottom: 10px; color: #333;"),
+                         fluidRow(
+                           column(6, 
+                                  sliderInput("fd_starting_range", "Cumulative Starting Position Range:",
+                                              min = 5, max = 200, value = c(5, 200), step = 1, width = "100%")
+                           ),
+                           column(6, 
+                                  sliderInput("fd_starting_geo_range", "Geometric Mean Starting Position Range:",
+                                              min = 1, max = 40, value = c(1, 40), step = 0.1, width = "100%")
+                           )
+                         )
+                       )
                 ),
-                column(6,
-                       sliderInput("fd_geometric_range", "Geometric Mean Ownership Range:",
-                                   min = 0, max = 100, value = c(0, 100), step = 0.5)
-                )
-              ),
-              # NEW: Starting Position Filters for FanDuel
-              fluidRow(
-                column(6,
-                       sliderInput("fd_starting_range", "Cumulative Starting Position Range:",
-                                   min = 5, max = 200, value = c(5, 200), step = 1)
-                ),
-                column(6,
-                       sliderInput("fd_starting_geo_range", "Geometric Mean Starting Position Range:",
-                                   min = 1, max = 40, value = c(1, 40), step = 0.1)
-                )
-              ),
-              fluidRow(
-                column(6,
+                
+                column(4,
+                       # Salary Filter
+                       div(
+                         style = "margin-bottom: 20px;",
+                         h4("Salary Filter", style = "margin-bottom: 10px; color: #333;"),
+                         sliderInput("fd_salary_range", "Total Salary Range (k):",
+                                     min = 42.5, max = 50, value = c(42.5, 50), step = 0.1, width = "100%")
+                       ),
+                       
+                       # Generation Controls
                        selectizeInput("fd_excluded_drivers", "Exclude Drivers:",
                                       choices = NULL, multiple = TRUE,
                                       options = list(plugins = list('remove_button'),
-                                                     placeholder = 'Click to select drivers to exclude'))
-                ),
-                column(6,
-                       numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", 
-                                    value = 20, min = 1, max = 150)
-                )
-              ),
-              fluidRow(
-                column(6,
-                       div(class = "well well-sm",
-                           h4("Filtered Pool Statistics:"),
-                           textOutput("fd_filtered_pool_size"))
-                ),
-                column(6,
-                       div(style = "margin-top: 20px;",
-                           actionButton("generate_fd_lineups", "Randomize FanDuel Lineups", 
-                                        class = "btn-primary btn-lg", style = "width: 100%;"),
-                           br(), br(),
-                           downloadButton("download_fd_random_lineups", "Download Selected Lineups", 
-                                          style = "width: 100%;"))
+                                                     placeholder = 'Select drivers to exclude'),
+                                      width = "100%"),
+                       
+                       numericInput("fd_num_random_lineups", "Number of Lineups:", 
+                                    value = 20, min = 1, max = 150, width = "100%"),
+                       
+                       div(
+                         class = "well well-sm", 
+                         style = "padding: 15px; margin-bottom: 15px;",
+                         h6("Filtered Pool:", style = "margin-bottom: 5px; font-weight: bold;"),
+                         textOutput("fd_filtered_pool_size")
+                       ),
+                       
+                       div(
+                         style = "display: flex; flex-direction: column; gap: 10px;",
+                         actionButton("generate_fd_lineups", "Randomly Select Lineups", 
+                                      class = "btn-primary", style = "width: 100%; height: 40px; font-size: 16px;"),
+                         downloadButton("download_fd_random_lineups", "Download Lineups", 
+                                        style = "width: 100%; height: 35px; font-size: 14px;")
+                       )
                 )
               )
+            )
+          ),
+          
+          # Results tables
+          fluidRow(
+            box(width = 12, title = "FanDuel Driver Exposure Analysis",
+                DTOutput("fd_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
+          ),
+          fluidRow(
+            box(width = 12, title = "Generated FanDuel Lineups",
+                DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
           )
-        ),
-        fluidRow(
-          box(width = 12, title = "FanDuel Driver Exposure Analysis",
-              DTOutput("fd_driver_exposure_table") %>% withSpinner(color = "#FFD700"))
-        ),
-        fluidRow(
-          box(width = 12, title = "Generated FanDuel Lineups",
-              DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
-      )
-    )
+      ))
+    }
+    
+    # Return tabsetPanel with all available tabs
+    do.call(tabsetPanel, c(list(id = "lineup_platform_tabs"), tab_panels))
   })
+  
+  
   
   # Create position boxplot
   output$position_box <- renderPlotly({
@@ -4867,13 +5332,13 @@ server <- function(input, output, session) {
     
     # Clear previous analysis results but keep simulation data
     rv$dk_optimal_lineups <- NULL
+    rv$dk_optimal_lineups_display <- NULL
+    rv$dk_optimal_lineups_full <- NULL
     rv$dk_driver_exposure <- NULL
     rv$dk_random_lineups <- NULL
+    rv$sliders_initialized$dk <- FALSE
+    rv$user_modified_sliders$dk <- FALSE
     
-    # Also clear FanDuel lineups if they exist
-    rv$fd_optimal_lineups <- NULL
-    rv$fd_driver_exposure <- NULL
-    rv$fd_random_lineups <- NULL
     
     gc(verbose = FALSE, full = TRUE)
     
@@ -5035,13 +5500,9 @@ server <- function(input, output, session) {
     rv$fd_optimal_lineups_full <- NULL
     rv$fd_driver_exposure <- NULL
     rv$fd_random_lineups <- NULL
+    rv$sliders_initialized$fd <- FALSE
+    rv$user_modified_sliders$fd <- FALSE
     
-    # Also clear DraftKings lineups if they exist
-    rv$dk_optimal_lineups <- NULL
-    rv$dk_optimal_lineups_display <- NULL
-    rv$dk_optimal_lineups_full <- NULL
-    rv$dk_driver_exposure <- NULL
-    rv$dk_random_lineups <- NULL
     
     # Force garbage collection before starting
     cleanup_memory()
@@ -5201,7 +5662,7 @@ server <- function(input, output, session) {
     cleanup_memory()
   })
   
-
+  
   # DraftKings contest simulation
   observeEvent(input$run_dk_contest_simulation, {
     req(rv$dk_optimal_lineups, rv$simulation_results)
@@ -5755,44 +6216,6 @@ server <- function(input, output, session) {
     contentType = "text/csv"
   )
   
-
-  # Update excluded drivers when navigating to contest tab
-  observe({
-    if(input$sidebar_menu == "contest_sim") {
-      
-      # Update DraftKings excluded drivers
-      if(!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
-        driver_data <- rv$dk_driver_exposure
-        driver_names <- driver_data$Name
-        driver_ids <- driver_data$DKName
-        driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
-        driver_choices <- setNames(driver_ids, driver_labels)
-        
-        updateSelectizeInput(
-          session = session,
-          inputId = "dk_contest_excluded_drivers",
-          choices = driver_choices,
-          selected = input$dk_contest_excluded_drivers
-        )
-      }
-      
-      # Update FanDuel excluded drivers
-      if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
-        driver_data <- rv$fd_driver_exposure
-        driver_names <- driver_data$Name
-        driver_ids <- driver_data$FDName
-        driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
-        driver_choices <- setNames(driver_ids, driver_labels)
-        
-        updateSelectizeInput(
-          session = session,
-          inputId = "fd_contest_excluded_drivers",
-          choices = driver_choices,
-          selected = input$fd_contest_excluded_drivers
-        )
-      }
-    }
-  })
   
 
   
@@ -5979,18 +6402,28 @@ server <- function(input, output, session) {
     req(rv$dk_optimal_lineups)
     
     filters <- list(
-      min_top1_count = input$dk_min_top1_count,
-      min_top2_count = input$dk_min_top2_count,
-      min_top3_count = input$dk_min_top3_count,
-      min_top5_count = input$dk_min_top5_count,
-      min_cumulative_ownership = input$dk_ownership_range[1],
-      max_cumulative_ownership = input$dk_ownership_range[2],
-      min_geometric_mean = input$dk_geometric_range[1],
-      max_geometric_mean = input$dk_geometric_range[2],
-      min_cumulative_starting = input$dk_starting_range[1],        # FIXED: Added
-      max_cumulative_starting = input$dk_starting_range[2],        # FIXED: Added
-      min_geometric_starting = input$dk_starting_geo_range[1],     # FIXED: Added
-      max_geometric_starting = input$dk_starting_geo_range[2],     # FIXED: Added
+      # Fixed variable names to match the UI slider inputs
+      min_top1_count = if(is.null(input$dk_min_top1_slider)) 0 else input$dk_min_top1_slider[1],
+      max_top1_count = if(is.null(input$dk_min_top1_slider)) 100 else input$dk_min_top1_slider[2],
+      min_top3_count = if(is.null(input$dk_min_top3_slider)) 0 else input$dk_min_top3_slider[1],
+      max_top3_count = if(is.null(input$dk_min_top3_slider)) 100 else input$dk_min_top3_slider[2],
+      min_top5_count = if(is.null(input$dk_min_top5_slider)) 0 else input$dk_min_top5_slider[1],
+      max_top5_count = if(is.null(input$dk_min_top5_slider)) 100 else input$dk_min_top5_slider[2],
+      
+      min_cumulative_ownership = if(is.null(input$dk_ownership_range)) 0 else input$dk_ownership_range[1],
+      max_cumulative_ownership = if(is.null(input$dk_ownership_range)) 600 else input$dk_ownership_range[2],
+      min_geometric_mean = if(is.null(input$dk_geometric_range)) 0 else input$dk_geometric_range[1],
+      max_geometric_mean = if(is.null(input$dk_geometric_range)) 100 else input$dk_geometric_range[2],
+      
+      min_cumulative_starting = if(is.null(input$dk_starting_range)) 6 else input$dk_starting_range[1],
+      max_cumulative_starting = if(is.null(input$dk_starting_range)) 240 else input$dk_starting_range[2],
+      min_geometric_starting = if(is.null(input$dk_starting_geo_range)) 1 else input$dk_starting_geo_range[1],
+      max_geometric_starting = if(is.null(input$dk_starting_geo_range)) 40 else input$dk_starting_geo_range[2],
+      
+      # Add salary filter support
+      min_total_salary = if(is.null(input$dk_salary_range)) 42500 else input$dk_salary_range[1] * 1000,
+      max_total_salary = if(is.null(input$dk_salary_range)) 50000 else input$dk_salary_range[2] * 1000,
+      
       excluded_drivers = input$dk_excluded_drivers
     )
     
@@ -5998,44 +6431,37 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  
   output$fd_filtered_pool_size <- renderText({
-    # Add dependencies to ensure this only runs when everything is ready
     req(rv$fd_optimal_lineups)
-    req(rv$sliders_initialized$fd)  # Wait for slider initialization
     
-    # Also wait for the actual input values to be available
-    req(input$fd_min_top1_count)
-    req(input$fd_ownership_range)
-    req(input$fd_geometric_range) 
-    req(input$fd_starting_range)
-    req(input$fd_starting_geo_range)
+    filters <- list(
+      # Fixed variable names to match the UI slider inputs
+      min_top1_count = if(is.null(input$fd_min_top1_slider)) 0 else input$fd_min_top1_slider[1],
+      max_top1_count = if(is.null(input$fd_min_top1_slider)) 100 else input$fd_min_top1_slider[2],
+      min_top3_count = if(is.null(input$fd_min_top3_slider)) 0 else input$fd_min_top3_slider[1],
+      max_top3_count = if(is.null(input$fd_min_top3_slider)) 100 else input$fd_min_top3_slider[2],
+      min_top5_count = if(is.null(input$fd_min_top5_slider)) 0 else input$fd_min_top5_slider[1],
+      max_top5_count = if(is.null(input$fd_min_top5_slider)) 100 else input$fd_min_top5_slider[2],
+      
+      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) 0 else input$fd_ownership_range[1],
+      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 500 else input$fd_ownership_range[2],
+      min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
+      max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
+      
+      min_cumulative_starting = if(is.null(input$fd_starting_range)) 5 else input$fd_starting_range[1],
+      max_cumulative_starting = if(is.null(input$fd_starting_range)) 200 else input$fd_starting_range[2],
+      min_geometric_starting = if(is.null(input$fd_starting_geo_range)) 1 else input$fd_starting_geo_range[1],
+      max_geometric_starting = if(is.null(input$fd_starting_geo_range)) 40 else input$fd_starting_geo_range[2],
+      
+      # Add salary filter support
+      min_total_salary = if(is.null(input$fd_salary_range)) 42500 else input$fd_salary_range[1] * 1000,
+      max_total_salary = if(is.null(input$fd_salary_range)) 50000 else input$fd_salary_range[2] * 1000,
+      
+      excluded_drivers = input$fd_excluded_drivers
+    )
     
-    tryCatch({
-      # Create filters list
-      filters <- list(
-        min_top1_count = input$fd_min_top1_count %||% 0,
-        min_top2_count = input$fd_min_top2_count %||% 0,
-        min_top3_count = input$fd_min_top3_count %||% 0,
-        min_top5_count = input$fd_min_top5_count %||% 0,
-        min_cumulative_ownership = input$fd_ownership_range[1] %||% 0,
-        max_cumulative_ownership = input$fd_ownership_range[2] %||% 500,
-        min_geometric_mean = input$fd_geometric_range[1] %||% 0,
-        max_geometric_mean = input$fd_geometric_range[2] %||% 100,
-        min_cumulative_starting = input$fd_starting_range[1] %||% 5,
-        max_cumulative_starting = input$fd_starting_range[2] %||% 200,
-        min_geometric_starting = input$fd_starting_geo_range[1] %||% 1,
-        max_geometric_starting = input$fd_starting_geo_range[2] %||% 40,
-        excluded_drivers = input$fd_excluded_drivers %||% character(0)
-      )
-      
-      stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-      paste("Number of lineups in filtered pool:", stats$count)
-      
-    }, error = function(e) {
-      cat("Error in fd_filtered_pool_size:", e$message, "\n")
-      "Calculating pool size..."
-    })
+    stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
+    paste("Number of lineups in filtered pool:", stats$count)
   })
   
   # Download handlers
@@ -6149,18 +6575,30 @@ server <- function(input, output, session) {
     
     # Create filters for lineup generation
     filters <- list(
-      min_top1_count = input$dk_min_top1_count,
-      min_top2_count = input$dk_min_top2_count,
-      min_top3_count = input$dk_min_top3_count,
-      min_top5_count = input$dk_min_top5_count,
-      min_cumulative_ownership = input$dk_ownership_range[1],
-      max_cumulative_ownership = input$dk_ownership_range[2],
-      min_geometric_mean = input$dk_geometric_range[1],
-      max_geometric_mean = input$dk_geometric_range[2],
-      min_cumulative_starting = input$dk_starting_range[1],        # NEW
-      max_cumulative_starting = input$dk_starting_range[2],        # NEW
-      min_geometric_starting = input$dk_starting_geo_range[1],     # NEW
-      max_geometric_starting = input$dk_starting_geo_range[2], 
+      min_top1_count = if(is.null(input$dk_min_top1_slider)) 0 else input$dk_min_top1_slider[1],
+      max_top1_count = if(is.null(input$dk_min_top1_slider)) 100 else input$dk_min_top1_slider[2],
+      min_top3_count = if(is.null(input$dk_min_top3_slider)) 0 else input$dk_min_top3_slider[1],
+      max_top3_count = if(is.null(input$dk_min_top3_slider)) 100 else input$dk_min_top3_slider[2],
+      min_top5_count = if(is.null(input$dk_min_top5_slider)) 0 else input$dk_min_top5_slider[1],
+      max_top5_count = if(is.null(input$dk_min_top5_slider)) 100 else input$dk_min_top5_slider[2],
+      
+      # Ownership filters
+      min_cumulative_ownership = if(is.null(input$dk_ownership_range)) 0 else input$dk_ownership_range[1],
+      max_cumulative_ownership = if(is.null(input$dk_ownership_range)) 600 else input$dk_ownership_range[2],
+      min_geometric_mean = if(is.null(input$dk_geometric_range)) 0 else input$dk_geometric_range[1],
+      max_geometric_mean = if(is.null(input$dk_geometric_range)) 100 else input$dk_geometric_range[2],
+      
+      # Starting position filters
+      min_cumulative_starting = if(is.null(input$dk_starting_range)) 6 else input$dk_starting_range[1],
+      max_cumulative_starting = if(is.null(input$dk_starting_range)) 240 else input$dk_starting_range[2],
+      min_geometric_starting = if(is.null(input$dk_starting_geo_range)) 1 else input$dk_starting_geo_range[1],
+      max_geometric_starting = if(is.null(input$dk_starting_geo_range)) 40 else input$dk_starting_geo_range[2],
+      
+      # Salary filters - FIXED
+      min_total_salary = if(is.null(input$dk_salary_range)) 42500 else input$dk_salary_range[1] * 1000,
+      max_total_salary = if(is.null(input$dk_salary_range)) 50000 else input$dk_salary_range[2] * 1000,
+      
+      # Driver exclusions and count
       excluded_drivers = input$dk_excluded_drivers,
       num_lineups = input$dk_num_random_lineups
     )
@@ -6297,535 +6735,7 @@ server <- function(input, output, session) {
   })
   
   
-  # REPLACE your existing tab observer (around line 3800) with this FIXED version
-  observe({
-    if(input$sidebar_menu == "lineup_builder") {
-      
-      # Update DraftKings elements
-      if(!is.null(rv$dk_optimal_lineups)) {
-        
-        # Update excluded drivers dropdown
-        if(!is.null(rv$dk_driver_exposure)) {
-          driver_data <- rv$dk_driver_exposure
-          driver_names <- driver_data$Name
-          driver_ids <- driver_data$DKName
-          driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
-          driver_choices <- setNames(driver_ids, driver_labels)
-          
-          updateSelectizeInput(
-            session = session,
-            inputId = "dk_excluded_drivers",
-            choices = driver_choices,
-            selected = input$dk_excluded_drivers
-          )
-        }
-        
-        # ONLY update sliders if they haven't been user-modified
-        if (!isTRUE(rv$user_modified_sliders$dk)) {
-          # Update sliders based on actual data ranges
-          if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-            ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-            ownership_values <- ownership_values[!is.na(ownership_values)]
-            
-            if (length(ownership_values) > 0) {
-              min_own <- floor(min(ownership_values))
-              max_own <- ceiling(max(ownership_values))
-              
-              updateSliderInput(session, "dk_ownership_range",
-                                min = min_own, max = max_own, value = c(min_own, max_own))
-            }
-          }
-          
-          if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-            geometric_values <- rv$dk_optimal_lineups$GeometricMean
-            geometric_values <- geometric_values[!is.na(geometric_values)]
-            
-            if (length(geometric_values) > 0) {
-              min_geo <- floor(min(geometric_values))
-              max_geo <- ceiling(max(geometric_values))
-              
-              updateSliderInput(session, "dk_geometric_range",
-                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
-            }
-          }
-          
-          # NEW: Update starting position sliders
-          if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-            starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-            starting_values <- starting_values[!is.na(starting_values)]
-            
-            if (length(starting_values) > 0) {
-              min_start <- floor(min(starting_values))
-              max_start <- ceiling(max(starting_values))
-              
-              updateSliderInput(session, "dk_starting_range",
-                                min = min_start, max = max_start, value = c(min_start, max_start))
-            }
-          }
-          
-          if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-            geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-            geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-            
-            if (length(geo_starting_values) > 0) {
-              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-              
-              updateSliderInput(session, "dk_starting_geo_range",
-                                min = min_geo_start, max = max_geo_start, 
-                                value = c(min_geo_start, max_geo_start))
-            }
-          }
-        }
-      }
-      
-      # Update FanDuel elements
-      if(!is.null(rv$fd_optimal_lineups)) {
-        
-        # Update excluded drivers dropdown
-        if(!is.null(rv$fd_driver_exposure)) {
-          driver_data <- rv$fd_driver_exposure
-          driver_names <- driver_data$Name
-          driver_ids <- driver_data$FDName
-          driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
-          driver_choices <- setNames(driver_ids, driver_labels)
-          
-          updateSelectizeInput(
-            session = session,
-            inputId = "fd_excluded_drivers",
-            choices = driver_choices,
-            selected = input$fd_excluded_drivers
-          )
-        }
-        
-        # ONLY update sliders if they haven't been user-modified
-        if (!isTRUE(rv$user_modified_sliders$fd)) {
-          # Update sliders based on actual data ranges
-          if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-            ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-            ownership_values <- ownership_values[!is.na(ownership_values)]
-            
-            if (length(ownership_values) > 0) {
-              min_own <- floor(min(ownership_values))
-              max_own <- ceiling(max(ownership_values))
-              
-              updateSliderInput(session, "fd_ownership_range",
-                                min = min_own, max = max_own, value = c(min_own, max_own))
-            }
-          }
-          
-          if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-            geometric_values <- rv$fd_optimal_lineups$GeometricMean
-            geometric_values <- geometric_values[!is.na(geometric_values)]
-            
-            if (length(geometric_values) > 0) {
-              min_geo <- floor(min(geometric_values))
-              max_geo <- ceiling(max(geometric_values))
-              
-              updateSliderInput(session, "fd_geometric_range",
-                                min = min_geo, max = max_geo, value = c(min_geo, max_geo))
-            }
-          }
-          
-          # NEW: Update starting position sliders for FanDuel
-          if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-            starting_values <- rv$fd_optimal_lineups$CumulativeStarting
-            starting_values <- starting_values[!is.na(starting_values)]
-            
-            if (length(starting_values) > 0) {
-              min_start <- floor(min(starting_values))
-              max_start <- ceiling(max(starting_values))
-              
-              updateSliderInput(session, "fd_starting_range",
-                                min = min_start, max = max_start, value = c(min_start, max_start))
-            }
-          }
-          
-          if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-            geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
-            geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-            
-            if (length(geo_starting_values) > 0) {
-              min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-              max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-              
-              updateSliderInput(session, "fd_starting_geo_range",
-                                min = min_geo_start, max = max_geo_start, 
-                                value = c(min_geo_start, max_geo_start))
-            }
-          }
-        }
-      }
-    }
-  })
   
-  
-  
-  observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups) && 
-        nrow(rv$dk_optimal_lineups) > 0 && 
-        !isTRUE(rv$sliders_initialized$dk)) {
-      
-      cat("Initializing DraftKings sliders...\n")
-      
-      # Set flag to prevent filter observers from firing
-      rv$updating_sliders <- TRUE
-      
-      # Use isolate to prevent any reactive dependencies during initialization
-      isolate({
-        # Update Top Count inputs to default to 0
-        updateNumericInput(session, "dk_min_top1_count", value = 0)
-        updateNumericInput(session, "dk_min_top2_count", value = 0)
-        updateNumericInput(session, "dk_min_top3_count", value = 0)
-        updateNumericInput(session, "dk_min_top5_count", value = 0)
-        
-        # Update ownership slider based on actual data range - ONLY if not user-modified
-        if (!isTRUE(rv$user_modified_sliders$dk) && "CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            cat("DK Ownership range:", min_own, "to", max_own, "\n")
-            
-            updateSliderInput(
-              session,
-              "dk_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own),
-              step = 1
-            )
-          }
-        }
-        
-        # Update geometric mean slider based on actual data range - ONLY if not user-modified
-        if (!isTRUE(rv$user_modified_sliders$dk) && "GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-          geometric_values <- rv$dk_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            cat("DK Geometric range:", min_geo, "to", max_geo, "\n")
-            
-            updateSliderInput(
-              session,
-              "dk_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo),
-              step = 0.1
-            )
-          }
-        }
-        
-        # Update starting position sliders - ONLY if not user-modified
-        if (!isTRUE(rv$user_modified_sliders$dk) && "CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-          starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-          starting_values <- starting_values[!is.na(starting_values)]
-          
-          if (length(starting_values) > 0) {
-            min_start <- floor(min(starting_values))
-            max_start <- ceiling(max(starting_values))
-            
-            updateSliderInput(session, "dk_starting_range",
-                              min = min_start, max = max_start, 
-                              value = c(min_start, max_start), step = 1)
-          }
-        }
-        
-        if (!isTRUE(rv$user_modified_sliders$dk) && "GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-          geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-          geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-          
-          if (length(geo_starting_values) > 0) {
-            min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-            max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-            
-            updateSliderInput(session, "dk_starting_geo_range",
-                              min = min_geo_start, max = max_geo_start, 
-                              value = c(min_geo_start, max_geo_start), step = 0.1)
-          }
-        }
-      })
-      
-      # FIXED: Use a longer delay to ensure all updates complete before resetting flags
-      observe({
-        invalidateLater(1000, session)  # Wait 1 second instead of immediate
-        if (isTRUE(rv$updating_sliders)) {  # Only reset if still updating
-          rv$sliders_initialized$dk <- TRUE
-          rv$updating_sliders <- FALSE
-          # Don't reset user_modified_sliders here - let it stay TRUE if user changed something
-          cat("DraftKings sliders initialization complete\n")
-        }
-      })
-    }
-  }, once = TRUE)
-  
-  observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups) && 
-        nrow(rv$fd_optimal_lineups) > 0 && 
-        !isTRUE(rv$sliders_initialized$fd)) {
-      
-      cat("Initializing FanDuel sliders...\n")
-      
-      # Set flag to prevent filter observers from firing
-      rv$updating_sliders <- TRUE
-      
-      # Use isolate to prevent any reactive dependencies during initialization
-      isolate({
-        # Update Top Count inputs to default to 0
-        updateNumericInput(session, "fd_min_top1_count", value = 0)
-        updateNumericInput(session, "fd_min_top2_count", value = 0)
-        updateNumericInput(session, "fd_min_top3_count", value = 0)
-        updateNumericInput(session, "fd_min_top5_count", value = 0)
-        
-        # Update ownership slider based on actual data range
-        if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-          ownership_values <- ownership_values[!is.na(ownership_values)]
-          
-          if (length(ownership_values) > 0) {
-            min_own <- floor(min(ownership_values))
-            max_own <- ceiling(max(ownership_values))
-            
-            cat("FD Ownership range:", min_own, "to", max_own, "\n")
-            
-            updateSliderInput(
-              session,
-              "fd_ownership_range",
-              min = min_own,
-              max = max_own,
-              value = c(min_own, max_own),
-              step = 1
-            )
-          }
-        }
-        
-        # Update geometric mean slider
-        if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          geometric_values <- rv$fd_optimal_lineups$GeometricMean
-          geometric_values <- geometric_values[!is.na(geometric_values)]
-          
-          if (length(geometric_values) > 0) {
-            min_geo <- floor(min(geometric_values))
-            max_geo <- ceiling(max(geometric_values))
-            
-            cat("FD Geometric range:", min_geo, "to", max_geo, "\n")
-            
-            updateSliderInput(
-              session,
-              "fd_geometric_range",
-              min = min_geo,
-              max = max_geo,
-              value = c(min_geo, max_geo),
-              step = 0.1
-            )
-          }
-        }
-        
-        # Update starting position sliders
-        if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-          starting_values <- rv$fd_optimal_lineups$CumulativeStarting
-          starting_values <- starting_values[!is.na(starting_values)]
-          
-          if (length(starting_values) > 0) {
-            min_start <- floor(min(starting_values))
-            max_start <- ceiling(max(starting_values))
-            
-            updateSliderInput(session, "fd_starting_range",
-                              min = min_start, max = max_start, 
-                              value = c(min_start, max_start), step = 1)
-          }
-        }
-        
-        if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-          geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
-          geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-          
-          if (length(geo_starting_values) > 0) {
-            min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-            max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-            
-            updateSliderInput(session, "fd_starting_geo_range",
-                              min = min_geo_start, max = max_geo_start, 
-                              value = c(min_geo_start, max_geo_start), step = 0.1)
-          }
-        }
-      })
-      
-      # FIXED: Use a more reliable way to mark initialization complete
-      observe({
-        invalidateLater(1500, session)  # Wait longer for all updates to complete
-        if (isTRUE(rv$updating_sliders)) {  
-          rv$sliders_initialized$fd <- TRUE
-          rv$updating_sliders <- FALSE
-          cat("FanDuel sliders initialization complete\n")
-          
-          # Force the filtered pool size to recalculate after initialization
-          observe({
-            invalidateLater(200, session)  # Short delay then trigger recalc
-            outputOptions(output, "fd_filtered_pool_size", suspendWhenHidden = FALSE)
-          })
-        }
-      })
-    }
-  }, once = TRUE)
-  
-  
-  # Initialize DraftKings contest sliders based on actual data ranges
-  observeEvent(rv$dk_optimal_lineups, {
-    if (!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-      
-      # Update ownership slider based on actual data range
-      if ("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-        ownership_values <- rv$dk_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "dk_contest_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own),
-            step = 1
-          )
-        }
-      }
-      
-      # Update geometric mean slider
-      if ("GeometricMean" %in% names(rv$dk_optimal_lineups)) {
-        geometric_values <- rv$dk_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "dk_contest_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo),
-            step = 0.1
-          )
-        }
-      }
-      
-      # Update starting position sliders
-      if ("CumulativeStarting" %in% names(rv$dk_optimal_lineups)) {
-        starting_values <- rv$dk_optimal_lineups$CumulativeStarting
-        starting_values <- starting_values[!is.na(starting_values)]
-        
-        if (length(starting_values) > 0) {
-          min_start <- floor(min(starting_values))
-          max_start <- ceiling(max(starting_values))
-          
-          updateSliderInput(session, "dk_contest_starting_range",
-                            min = min_start, max = max_start, 
-                            value = c(min_start, max_start), step = 1)
-        }
-      }
-      
-      if ("GeometricMeanStarting" %in% names(rv$dk_optimal_lineups)) {
-        geo_starting_values <- rv$dk_optimal_lineups$GeometricMeanStarting
-        geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-        
-        if (length(geo_starting_values) > 0) {
-          min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-          max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-          
-          updateSliderInput(session, "dk_contest_starting_geo_range",
-                            min = min_geo_start, max = max_geo_start, 
-                            value = c(min_geo_start, max_geo_start), step = 0.1)
-        }
-      }
-    }
-  }, once = TRUE)
-  
-  # Initialize FanDuel contest sliders based on actual data ranges
-  observeEvent(rv$fd_optimal_lineups, {
-    if (!is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0) {
-      
-      # Update ownership slider based on actual data range
-      if ("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-        ownership_values <- rv$fd_optimal_lineups$CumulativeOwnership
-        ownership_values <- ownership_values[!is.na(ownership_values)]
-        
-        if (length(ownership_values) > 0) {
-          min_own <- floor(min(ownership_values))
-          max_own <- ceiling(max(ownership_values))
-          
-          updateSliderInput(
-            session,
-            "fd_contest_ownership_range",
-            min = min_own,
-            max = max_own,
-            value = c(min_own, max_own),
-            step = 1
-          )
-        }
-      }
-      
-      # Update geometric mean slider
-      if ("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-        geometric_values <- rv$fd_optimal_lineups$GeometricMean
-        geometric_values <- geometric_values[!is.na(geometric_values)]
-        
-        if (length(geometric_values) > 0) {
-          min_geo <- floor(min(geometric_values))
-          max_geo <- ceiling(max(geometric_values))
-          
-          updateSliderInput(
-            session,
-            "fd_contest_geometric_range",
-            min = min_geo,
-            max = max_geo,
-            value = c(min_geo, max_geo),
-            step = 0.1
-          )
-        }
-      }
-      
-      # Update starting position sliders
-      if ("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-        starting_values <- rv$fd_optimal_lineups$CumulativeStarting
-        starting_values <- starting_values[!is.na(starting_values)]
-        
-        if (length(starting_values) > 0) {
-          min_start <- floor(min(starting_values))
-          max_start <- ceiling(max(starting_values))
-          
-          updateSliderInput(session, "fd_contest_starting_range",
-                            min = min_start, max = max_start, 
-                            value = c(min_start, max_start), step = 1)
-        }
-      }
-      
-      if ("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-        geo_starting_values <- rv$fd_optimal_lineups$GeometricMeanStarting
-        geo_starting_values <- geo_starting_values[!is.na(geo_starting_values)]
-        
-        if (length(geo_starting_values) > 0) {
-          min_geo_start <- floor(min(geo_starting_values) * 10) / 10
-          max_geo_start <- ceiling(max(geo_starting_values) * 10) / 10
-          
-          updateSliderInput(session, "fd_contest_starting_geo_range",
-                            min = min_geo_start, max = max_geo_start, 
-                            value = c(min_geo_start, max_geo_start), step = 0.1)
-        }
-      }
-    }
-  }, once = TRUE)
   
   # Generate random FanDuel lineups
   observeEvent(input$generate_fd_lineups, {
@@ -6834,18 +6744,30 @@ server <- function(input, output, session) {
     
     # Create filters for lineup generation
     filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      min_cumulative_ownership = input$fd_ownership_range[1],
-      max_cumulative_ownership = input$fd_ownership_range[2],
-      min_geometric_mean = input$fd_geometric_range[1],
-      max_geometric_mean = input$fd_geometric_range[2],
-      min_cumulative_starting = input$fd_starting_range[1],        # NEW
-      max_cumulative_starting = input$fd_starting_range[2],        # NEW
-      min_geometric_starting = input$fd_starting_geo_range[1],     # NEW
-      max_geometric_starting = input$fd_starting_geo_range[2], 
+      min_top1_count = if(is.null(input$fd_min_top1_slider)) 0 else input$fd_min_top1_slider[1],
+      max_top1_count = if(is.null(input$fd_min_top1_slider)) 100 else input$fd_min_top1_slider[2],
+      min_top3_count = if(is.null(input$fd_min_top3_slider)) 0 else input$fd_min_top3_slider[1],
+      max_top3_count = if(is.null(input$fd_min_top3_slider)) 100 else input$fd_min_top3_slider[2],
+      min_top5_count = if(is.null(input$fd_min_top5_slider)) 0 else input$fd_min_top5_slider[1],
+      max_top5_count = if(is.null(input$fd_min_top5_slider)) 100 else input$fd_min_top5_slider[2],
+      
+      # Ownership filters
+      min_cumulative_ownership = if(is.null(input$dfd_ownership_range)) 0 else input$fd_ownership_range[1],
+      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 600 else input$fd_ownership_range[2],
+      min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
+      max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
+      
+      # Starting position filters
+      min_cumulative_starting = if(is.null(input$fd_starting_range)) 6 else input$fd_starting_range[1],
+      max_cumulative_starting = if(is.null(input$fd_starting_range)) 240 else input$fd_starting_range[2],
+      min_geometric_starting = if(is.null(input$fd_starting_geo_range)) 1 else input$fd_starting_geo_range[1],
+      max_geometric_starting = if(is.null(input$fd_starting_geo_range)) 40 else input$fd_starting_geo_range[2],
+      
+      # Salary filters - FIXED
+      min_total_salary = if(is.null(input$fd_salary_range)) 42500 else input$fd_salary_range[1] * 1000,
+      max_total_salary = if(is.null(input$fd_salary_range)) 50000 else input$fd_salary_range[2] * 1000,
+      
+      # Driver exclusions and count
       excluded_drivers = input$fd_excluded_drivers,
       num_lineups = input$fd_num_random_lineups
     )
