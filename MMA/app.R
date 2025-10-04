@@ -10,7 +10,6 @@ library(plotly)
 library(data.table)
 library(lpSolve)
 library(memoise)
-library(webshot)
 library(shinyjs)
 library(shinycssloaders)
 
