@@ -2652,7 +2652,7 @@ server <- function(input, output, session) {
               match_idx <- which(driver_ids$Name == name)
               if (length(match_idx) > 0) {
                 driver_dfsid <- driver_ids$DFSID[match_idx[1]]
-                captain_dfsid <- driver_dfsid + 20  # Add 20 to get captain DFSID
+                captain_dfsid <- driver_dfsid + 30  # Add 20 to get captain DFSID
                 download_data$Captain[i] <- paste0(name, " (", captain_dfsid, ")")
               }
             }
