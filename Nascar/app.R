@@ -2045,13 +2045,13 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   
   # Apply geometric mean ownership filters
   if (!is.null(filters$min_geometric_mean) && "GeometricMean" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean >= filters$min_geometric_mean]
+    filtered_lineups <- filtered_lineups[GeometricMean >= filters$min_geometric_mean]
   }
   if (!is.null(filters$max_geometric_mean) && "GeometricMean" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[!is.na(GeometricMean) & GeometricMean <= filters$max_geometric_mean]
+    filtered_lineups <- filtered_lineups[GeometricMean <= filters$max_geometric_mean]
   }
   
-  # Apply starting position filters
+  # Apply cumulative starting position filters
   if (!is.null(filters$min_cumulative_starting) && "CumulativeStarting" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[CumulativeStarting >= filters$min_cumulative_starting]
   }
@@ -2090,7 +2090,6 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
   
   return(list(count = nrow(filtered_lineups), thresholds = NULL))
 }
-
 
 generate_random_dk_lineups <- function(optimal_lineups, filters) {
   filtered_lineups <- optimal_lineups
@@ -6087,32 +6086,47 @@ server <- function(input, output, session) {
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
+    # Explicitly depend on all filter inputs to trigger re-calculation
+    top1_range <- input$fd_min_top1_slider
+    top3_range <- input$fd_min_top3_slider
+    top5_range <- input$fd_min_top5_slider
+    ownership_range <- input$fd_ownership_range
+    geometric_range <- input$fd_geometric_range
+    starting_range <- input$fd_starting_range
+    starting_geo_range <- input$fd_starting_geo_range
+    salary_range <- input$fd_salary_range
+    excluded <- input$fd_excluded_drivers
+    
+    # Wait for sliders to be initialized
+    req(top1_range, top3_range, top5_range, ownership_range, geometric_range,
+        starting_range, starting_geo_range, salary_range)
+    
     filters <- list(
-      min_top1_count = if(is.null(input$fd_min_top1_slider)) 0 else input$fd_min_top1_slider[1],
-      max_top1_count = if(is.null(input$fd_min_top1_slider)) 100 else input$fd_min_top1_slider[2],
-      min_top3_count = if(is.null(input$fd_min_top3_slider)) 0 else input$fd_min_top3_slider[1],
-      max_top3_count = if(is.null(input$fd_min_top3_slider)) 100 else input$fd_min_top3_slider[2],
-      min_top5_count = if(is.null(input$fd_min_top5_slider)) 0 else input$fd_min_top5_slider[1],
-      max_top5_count = if(is.null(input$fd_min_top5_slider)) 100 else input$fd_min_top5_slider[2],
+      min_top1_count = top1_range[1],
+      max_top1_count = top1_range[2],
+      min_top3_count = top3_range[1],
+      max_top3_count = top3_range[2],
+      min_top5_count = top5_range[1],
+      max_top5_count = top5_range[2],
       
-      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) 0 else input$fd_ownership_range[1],
-      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) 500 else input$fd_ownership_range[2],
-      min_geometric_mean = if(is.null(input$fd_geometric_range)) 0 else input$fd_geometric_range[1],
-      max_geometric_mean = if(is.null(input$fd_geometric_range)) 100 else input$fd_geometric_range[2],
+      min_cumulative_ownership = ownership_range[1],
+      max_cumulative_ownership = ownership_range[2],
+      min_geometric_mean = geometric_range[1],
+      max_geometric_mean = geometric_range[2],
       
-      min_cumulative_starting = if(is.null(input$fd_starting_range)) 5 else input$fd_starting_range[1],
-      max_cumulative_starting = if(is.null(input$fd_starting_range)) 200 else input$fd_starting_range[2],
-      min_geometric_starting = if(is.null(input$fd_starting_geo_range)) 1 else input$fd_starting_geo_range[1],
-      max_geometric_starting = if(is.null(input$fd_starting_geo_range)) 40 else input$fd_starting_geo_range[2],
+      min_cumulative_starting = starting_range[1],
+      max_cumulative_starting = starting_range[2],
+      min_geometric_starting = starting_geo_range[1],
+      max_geometric_starting = starting_geo_range[2],
       
-      min_total_salary = if(is.null(input$fd_salary_range)) 42500 else input$fd_salary_range[1] * 1000,
-      max_total_salary = if(is.null(input$fd_salary_range)) 50000 else input$fd_salary_range[2] * 1000,
+      min_total_salary = salary_range[1] * 1000,
+      max_total_salary = salary_range[2] * 1000,
       
-      excluded_drivers = input$fd_excluded_drivers
+      excluded_drivers = excluded
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-    paste("Number of lineups in filtered pool:", stats$count)
+    paste("Number of lineups:", stats$count)
   })
   
   # Download handlers
