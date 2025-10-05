@@ -500,7 +500,7 @@ score_lineup_fast <- function(lineup_row, sim_driver_results, sim_constructor_re
   }
   
   # Score regular drivers
- driver_names <- c(lineup_row$Driver1, lineup_row$Driver2, lineup_row$Driver3, lineup_row$Driver4)
+  driver_names <- c(lineup_row$Driver1, lineup_row$Driver2, lineup_row$Driver3, lineup_row$Driver4)
   for (driver in driver_names) {
     driver_idx <- which(sim_driver_results$Name == driver)
     if (length(driver_idx) > 0) {
@@ -2615,7 +2615,7 @@ server <- function(input, output, session) {
   })
   
   
-
+  
   
   output$downloadOptimalFrequency <- downloadHandler(
     filename = function() {
