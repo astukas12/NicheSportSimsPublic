@@ -105,6 +105,7 @@ calc_dom_points <- function(total_laps, green_laps) {
 ui <- fluidPage(
   useShinyjs(),
   
+
   # Custom CSS - Black and Gold Theme
   tags$head(
     tags$style(HTML("
@@ -137,36 +138,49 @@ ui <- fluidPage(
         margin: 0;
       }
       
-   /* Horizontal tabs */
-      .nav-tabs {
-        background-color: #000000;
-        border-bottom: 3px solid #FFD700;
-        padding-left: 20px;
-        margin-bottom: 20px;
-      }
-      
-      .nav-tabs > li > a {
-        color: #FFD700 !important;
+      /* Horizontal tabs - Bootstrap navbar override */
+      .navbar-default {
         background-color: #000000 !important;
         border: none !important;
-        padding: 12px 25px;
-        margin-right: 2px;
-        font-weight: 500;
-        transition: all 0.3s;
+        border-bottom: 4px solid #FFD700 !important;
+        border-radius: 0 !important;
+        margin-bottom: 0 !important;
+        min-height: 60px !important;
       }
       
-      .nav-tabs > li > a:hover {
-        background-color: #333333 !important;
+      .navbar-default .navbar-nav > li > a {
+        color: #FFD700 !important;
+        background-color: #000000 !important;
+        padding: 20px 30px !important;
+        font-weight: 700 !important;
+        font-size: 16px !important;
+        letter-spacing: 0.5px !important;
+        text-transform: uppercase !important;
+        transition: all 0.3s ease !important;
+        border-right: 1px solid #333333 !important;
+      }
+      
+      .navbar-default .navbar-nav > li:last-child > a {
+        border-right: none !important;
+      }
+      
+      .navbar-default .navbar-nav > li > a:hover,
+      .navbar-default .navbar-nav > li > a:focus {
+        background-color: #1a1a1a !important;
         color: #FFD700 !important;
       }
       
-      .nav-tabs > li.active > a,
-      .nav-tabs > li.active > a:hover,
-      .nav-tabs > li.active > a:focus {
+      .navbar-default .navbar-nav > .active > a,
+      .navbar-default .navbar-nav > .active > a:hover,
+      .navbar-default .navbar-nav > .active > a:focus {
         background-color: #FFD700 !important;
         color: #000000 !important;
-        border: none !important;
-        font-weight: bold;
+        font-weight: 900 !important;
+        box-shadow: 0 4px 8px rgba(255, 215, 0, 0.3) !important;
+      }
+      
+      .navbar-nav {
+        margin: 0 !important;
       }
       
       /* Main content */
@@ -256,7 +270,7 @@ ui <- fluidPage(
         box-shadow: 0 0 0 0.2rem rgba(255, 215, 0, 0.25) !important;
       }
       
-     .selectize-dropdown {
+      .selectize-dropdown {
         background-color: #333333 !important;
         border: 1px solid #666666 !important;
         color: #ffffff !important;
@@ -330,8 +344,37 @@ ui <- fluidPage(
         font-weight: bold;
       }
       
+      /* DataTable column filters */
+      .dataTables_wrapper input[type=search],
+      .dataTables_wrapper input[type=text] {
+        background-color: #404040 !important;
+        border: 1px solid #FFD700 !important;
+        color: #ffffff !important;
+        padding: 5px 10px !important;
+        border-radius: 3px !important;
+      }
+      
+      .dataTables_wrapper input[type=search]:focus,
+      .dataTables_wrapper input[type=text]:focus {
+        border-color: #FFD700 !important;
+        box-shadow: 0 0 5px rgba(255, 215, 0, 0.5) !important;
+        outline: none !important;
+      }
+      
+      .dataTables_wrapper input::placeholder {
+        color: #999999 !important;
+      }
+      
+      .dataTables_wrapper select {
+        background-color: #404040 !important;
+        border: 1px solid #FFD700 !important;
+        color: #ffffff !important;
+        padding: 5px !important;
+        border-radius: 3px !important;
+      }
+      
       /* Checkboxes */
-      input[type='checkbox'] {
+      input[type=checkbox] {
         cursor: pointer;
         width: 18px;
         height: 18px;
@@ -404,14 +447,14 @@ ui <- fluidPage(
   # Header
   div(class = "app-header",
       img(src = "logo.jpg", class = "app-logo"),
-      h1("Golden Ticket Research", class = "app-title")
+      h1("Golden Ticket Research Center", class = "app-title")
   ),
   
   # Navigation Tabs
   navbarPage(
     title = NULL,
     id = "main_tabs",
-    windowTitle = "Golden Ticket Research",
+    windowTitle = "Golden Ticket Research Center",
     
     # Race Selection Tab
     tabPanel(
@@ -479,7 +522,7 @@ ui <- fluidPage(
           column(12,
                  div(class = "box",
                      div(class = "box-header",
-                         h3("Races Available for Analysis", class = "box-title")
+                         h3("Filtered Races", class = "box-title")
                      ),
                      div(class = "box-body",
                          fluidRow(
@@ -487,31 +530,16 @@ ui <- fluidPage(
                                   div(class = "info-box",
                                       p(style = "margin: 0; color: #ffffff;",
                                         strong("Dominator Lap Filter: "), 
-                                        "Races with fewer laps can skew dominator analysis. Use the slider below to set minimum lap requirement for dominator analysis only. Other sections use all races."
+                                        "Set lap range to filter which races are included in Dominator tab analysis. Other sections use all races."
                                       )
                                   )
                            )
                          ),
                          fluidRow(
-                           column(12,
-                                  div(class = "info-box",
-                                      p(style = "margin: 0; color: #ffffff;",
-                                        strong("Dominator Lap Filter: "), 
-                                        "Races with fewer laps can skew dominator analysis. Set minimum and maximum lap requirements for dominator analysis only. Other sections use all races."
-                                      )
-                                  )
-                           )
-                         ),
-                         fluidRow(
-                           column(4,
-                                  sliderInput("min_laps_dominator", 
-                                              "Minimum Laps:",
-                                              min = 0, max = 600, value = 0, step = 10)
-                           ),
-                           column(4,
-                                  sliderInput("max_laps_dominator", 
-                                              "Maximum Laps:",
-                                              min = 0, max = 600, value = 600, step = 10)
+                           column(8,
+                                  sliderInput("lap_range_dominator", 
+                                              "Lap Range for Dominator Analysis:",
+                                              min = 0, max = 600, value = c(0, 600), step = 10)
                            ),
                            column(4,
                                   uiOutput("lap_filter_summary")
@@ -539,11 +567,19 @@ ui <- fluidPage(
         fluidRow(
           column(12,
                  div(class = "box",
-                     div(class = "box-header",
-                         h3("NASCAR Entry List", class = "box-title")
+                     div(class = "box-header", style = "display: flex; justify-content: space-between; align-items: center;",
+                         uiOutput("entry_list_title", inline = TRUE),
+                         downloadButton("download_entry_list_csv", 
+                                        "Download CSV", 
+                                        class = "btn-success",
+                                        style = "margin: 0;")
                      ),
                      div(class = "box-body",
-                         withSpinner(DT::dataTableOutput("entry_list_table"))
+                         fluidRow(
+                           column(12,
+                                  withSpinner(DT::dataTableOutput("entry_list_table"))
+                           )
+                         )
                      )
                  )
           )
@@ -580,18 +616,14 @@ ui <- fluidPage(
         fluidRow(
           column(12,
                  div(class = "box",
-                     div(class = "box-header",
-                         h3("Dominator Data", class = "box-title")
+                     div(class = "box-header", style = "display: flex; justify-content: space-between; align-items: center;",
+                         h3("Dominator Data", class = "box-title", style = "margin: 0;"),
+                         downloadButton("download_dominator_csv", 
+                                        "Download CSV", 
+                                        class = "btn-success",
+                                        style = "margin: 0;")
                      ),
                      div(class = "box-body",
-                         fluidRow(
-                           column(12,
-                                  downloadButton("download_dominator_csv", 
-                                                 "Download CSV", 
-                                                 class = "btn-success", 
-                                                 style = "margin-bottom: 15px;")
-                           )
-                         ),
                          fluidRow(
                            column(12,
                                   withSpinner(DT::dataTableOutput("dominator_data_table"))
@@ -624,7 +656,8 @@ ui <- fluidPage(
                                                 "Fast Laps by Finish Position" = "fast_laps",
                                                 "Fast Laps by Starting Position" = "fast_laps_start",
                                                 "Driver Dominator Boxplots" = "driver_boxplot",
-                                                "Team Dominator Boxplots" = "team_boxplot"
+                                                "Team Dominator Boxplots" = "team_boxplot",
+                                                "Entry Boxplots" = "entry_boxplot"
                                               ),
                                               selected = "score_dist")
                            ),
@@ -676,18 +709,14 @@ ui <- fluidPage(
         fluidRow(
           column(12,
                  div(class = "box",
-                     div(class = "box-header",
-                         h3("Place Differential Data", class = "box-title")
+                     div(class = "box-header", style = "display: flex; justify-content: space-between; align-items: center;",
+                         h3("Place Differential Data", class = "box-title", style = "margin: 0;"),
+                         downloadButton("download_pd_csv", 
+                                        "Download CSV", 
+                                        class = "btn-success",
+                                        style = "margin: 0;")
                      ),
                      div(class = "box-body",
-                         fluidRow(
-                           column(12,
-                                  downloadButton("download_pd_csv", 
-                                                 "Download CSV", 
-                                                 class = "btn-success", 
-                                                 style = "margin-bottom: 15px;")
-                           )
-                         ),
                          fluidRow(
                            column(12,
                                   withSpinner(DT::dataTableOutput("pd_data_table"))
@@ -698,7 +727,7 @@ ui <- fluidPage(
           )
         ),
         
-        # Visual Section
+        # Visualization Section
         fluidRow(
           column(12,
                  div(class = "box",
@@ -707,15 +736,14 @@ ui <- fluidPage(
                      ),
                      div(class = "box-body",
                          fluidRow(
-                           column(12,
-                                  selectInput("pd_visual_type", "Select Visualization:",
+                           column(4,
+                                  selectInput("pd_visual_type", "Visualization Type:",
                                               choices = c(
-                                                "Starting vs Finishing Position" = "scatter",
+                                                "Start vs Finish Scatter" = "scatter",
                                                 "Position Change Distribution" = "histogram",
-                                                "PD by Starting Position" = "boxplot_start",
-                                                "PD by Finishing Position" = "boxplot_finish"
-                                              ),
-                                              selected = "scatter")
+                                                "PD by Start Position" = "boxplot_start",
+                                                "PD by Finish Position" = "boxplot_finish"
+                                              ))
                            )
                          ),
                          fluidRow(
@@ -1128,7 +1156,6 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "filters_confirmed", suspendWhenHidden = FALSE)
   
-  # Races Selection Table (simplified - no checkboxes)
   output$races_selection_table <- DT::renderDataTable({
     req(values$analysis_races_available)
     
@@ -1141,8 +1168,8 @@ server <- function(input, output, session) {
         Qualifying,
         Leaders = number_of_leaders,
         Cautions = number_of_cautions,
-        `Total Laps` = total_laps,
-        `GF Laps` = green_flag_laps,
+        `Scheduled Laps` = scheduled_laps,
+        `Actual Laps` = total_laps,
         `DK Dom Avail` = DK_Dom_Available,
         `FD Dom Avail` = FD_Dom_Available,
         `Lead Lap` = lead_lap,
@@ -1168,11 +1195,11 @@ server <- function(input, output, session) {
   })
   
   output$lap_filter_summary <- renderUI({
-    req(values$analysis_races_available, input$min_laps_dominator, input$max_laps_dominator)
+    req(values$analysis_races_available, input$lap_range_dominator)
     
     filtered_count <- values$analysis_races_available %>%
-      filter(total_laps >= input$min_laps_dominator, 
-             total_laps <= input$max_laps_dominator) %>%
+      filter(total_laps >= input$lap_range_dominator[1], 
+             total_laps <= input$lap_range_dominator[2]) %>%
       nrow()
     
     total_count <- nrow(values$analysis_races_available)
@@ -1183,13 +1210,14 @@ server <- function(input, output, session) {
     )
   })
   
+  
   # Dominator race IDs based on lap filter
   dominator_filtered_races <- reactive({
-    req(values$analysis_races_available, input$min_laps_dominator, input$max_laps_dominator)
+    req(values$analysis_races_available, input$lap_range_dominator)
     
     values$analysis_races_available %>%
-      filter(total_laps >= input$min_laps_dominator,
-             total_laps <= input$max_laps_dominator) %>%
+      filter(total_laps >= input$lap_range_dominator[1],
+             total_laps <= input$lap_range_dominator[2]) %>%
       pull(race_id)
   })
   
@@ -1213,6 +1241,57 @@ server <- function(input, output, session) {
       class = "display nowrap compact"
     )
   })
+  
+  # Entry List Title (dynamic based on selected race)
+  output$entry_list_title <- renderUI({
+    req(values$analysis_races_available, input$analysis_race_id)
+    
+    race_info <- values$analysis_races_available %>%
+      filter(race_id == as.numeric(input$analysis_race_id)) %>%
+      slice(1)
+    
+    # If no race found in filtered data, get from full race list
+    if (nrow(race_info) == 0) {
+      all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
+      race_info <- all_races %>%
+        filter(race_id == as.numeric(input$analysis_race_id)) %>%
+        slice(1)
+    }
+    
+    race_name <- if(nrow(race_info) > 0) race_info$race_name else "Entry List"
+    
+    h3(paste(race_name, "Entry List"), class = "box-title")
+  })
+  
+  # Download Entry List CSV
+  output$download_entry_list_csv <- downloadHandler(
+    filename = function() {
+      req(values$analysis_races_available, input$analysis_race_id)
+      
+      race_info <- values$analysis_races_available %>%
+        filter(race_id == as.numeric(input$analysis_race_id)) %>%
+        slice(1)
+      
+      if (nrow(race_info) == 0) {
+        all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
+        race_info <- all_races %>%
+          filter(race_id == as.numeric(input$analysis_race_id)) %>%
+          slice(1)
+      }
+      
+      race_name <- if(nrow(race_info) > 0) {
+        gsub("[^A-Za-z0-9]", "_", race_info$race_name)
+      } else {
+        "Entry_List"
+      }
+      
+      paste0(race_name, "_Entry_List_", Sys.Date(), ".csv")
+    },
+    content = function(file) {
+      req(values$analysis_entry_list)
+      write.csv(values$analysis_entry_list, file, row.names = FALSE)
+    }
+  )
   
   #--------------------- Dominator Section ---------------------#
   
@@ -1280,9 +1359,18 @@ server <- function(input, output, session) {
       options = list(
         pageLength = 25,
         scrollX = TRUE,
-        dom = 'frtip',
+        dom = 'tip',  # Removed 'f' for search, removed 'r' for processing
         columnDefs = list(
           list(className = "dt-center", targets = "_all")
+        ),
+        initComplete = JS(
+          "function(settings, json) {",
+          "  $('.dataTables_filter input').css({",
+          "    'background-color': '#404040',",
+          "    'border': '1px solid #666666',",
+          "    'color': '#ffffff'",
+          "  });",
+          "}"
         )
       ),
       rownames = FALSE,
@@ -1326,7 +1414,7 @@ server <- function(input, output, session) {
     }
   )
   
-
+#--------------------- Dominator Visualizations ---------------------#
   
   #--------------------- Dominator Visualizations ---------------------#
   
@@ -1349,7 +1437,7 @@ server <- function(input, output, session) {
     
     # Create visualization based on selected type
     if (input$dom_visual_type == "score_dist") {
-      # Score Distribution by Dom Rank
+      # Score Distribution by Dom Rank - HORIZONTAL
       viz_data <- plot_data %>%
         filter(!!sym(dom_rank_col) <= 10, !!sym(dom_pts_col) > 0)
       
@@ -1358,15 +1446,14 @@ server <- function(input, output, session) {
           "Dom Rank: %d\nDominator Points: %.1f\nDriver: %s\nTrack: %s",
           !!sym(dom_rank_col), !!sym(dom_pts_col), Full_Name, track_name
         )), fill = "forestgreen", alpha = 0.7) +
-        geom_smooth(aes(x = as.numeric(!!sym(dom_rank_col)), y = !!sym(dom_pts_col)), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = paste(platform_name, "Dominator Points Distribution by Dom Rank (Top 10)"),
           x = "Dominator Rank",
           y = "Dominator Points"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(10:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:10)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1388,7 +1475,7 @@ server <- function(input, output, session) {
         )
       
     } else if (input$dom_visual_type == "rank_finish") {
-      # Dom Rank Finish Ranges
+      # Dom Rank Finish Ranges - KEEP VERTICAL
       viz_data <- plot_data %>%
         filter(!!sym(dom_rank_col) <= 10, !!sym(dom_pts_col) > 0)
       
@@ -1428,7 +1515,7 @@ server <- function(input, output, session) {
         )
       
     } else if (input$dom_visual_type == "pts_by_finish") {
-      # Dom Pts by Finish Position
+      # Dom Pts by Finish Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(ps <= 40, !is.na(ps), !is.na(!!sym(dom_pts_col)))
       
@@ -1437,15 +1524,14 @@ server <- function(input, output, session) {
           "Position: %d\nDominator Points: %.1f\nDriver: %s\nTrack: %s",
           ps, !!sym(dom_pts_col), Full_Name, track_name
         )), fill = "darkgreen", alpha = 0.7) +
-        geom_smooth(aes(x = ps, y = !!sym(dom_pts_col)), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = paste(platform_name, "Dominator Points by Finish Position"),
           x = "Finish Position",
           y = "Dominator Points"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1463,11 +1549,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "dom_pts_start") {
-      # Dom Pts by Starting Position
+      # Dom Pts by Starting Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(start_ps <= 40, !is.na(start_ps), !is.na(!!sym(dom_pts_col)))
       
@@ -1476,15 +1562,14 @@ server <- function(input, output, session) {
           "Start Position: %d\nDominator Points: %.1f\nDriver: %s\nTrack: %s",
           start_ps, !!sym(dom_pts_col), Full_Name, track_name
         )), fill = "darkgreen", alpha = 0.7) +
-        geom_smooth(aes(x = start_ps, y = !!sym(dom_pts_col)), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = paste(platform_name, "Dominator Points by Starting Position"),
           x = "Starting Position",
           y = "Dominator Points"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1502,11 +1587,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "dom_rank_start") {
-      # Dom Rank by Starting Position
+      # Dom Rank by Starting Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(start_ps <= 40, !is.na(start_ps), !is.na(!!sym(dom_rank_col)), !!sym(dom_pts_col) > 0)
       
@@ -1515,15 +1600,14 @@ server <- function(input, output, session) {
           "Start Position: %d\nDom Rank: %d\nDriver: %s\nTrack: %s",
           start_ps, !!sym(dom_rank_col), Full_Name, track_name
         )), fill = "forestgreen", alpha = 0.7) +
-        geom_smooth(aes(x = start_ps, y = !!sym(dom_rank_col)), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = paste(platform_name, "Dominator Rank by Starting Position"),
           x = "Starting Position",
           y = "Dominator Rank"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1541,11 +1625,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "laps_led") {
-      # Laps Led by Finish Position
+      # Laps Led by Finish Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(ps <= 40, !is.na(ps), !is.na(lead_laps))
       
@@ -1554,15 +1638,14 @@ server <- function(input, output, session) {
           "Position: %d\nLaps Led: %d\nDriver: %s\nTrack: %s",
           ps, lead_laps, Full_Name, track_name
         )), fill = "lightgreen", alpha = 0.7) +
-        geom_smooth(aes(x = ps, y = lead_laps), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = "Laps Led by Finish Position",
           x = "Finish Position",
           y = "Laps Led"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1580,11 +1663,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "laps_led_start") {
-      # Laps Led by Starting Position
+      # Laps Led by Starting Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(start_ps <= 40, !is.na(start_ps), !is.na(lead_laps))
       
@@ -1593,15 +1676,14 @@ server <- function(input, output, session) {
           "Start Position: %d\nLaps Led: %d\nDriver: %s\nTrack: %s",
           start_ps, lead_laps, Full_Name, track_name
         )), fill = "lightgreen", alpha = 0.7) +
-        geom_smooth(aes(x = start_ps, y = lead_laps), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = "Laps Led by Starting Position",
           x = "Starting Position",
           y = "Laps Led"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1619,11 +1701,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "fast_laps") {
-      # Fast Laps by Finish Position
+      # Fast Laps by Finish Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(ps <= 40, !is.na(ps), !is.na(fast_laps))
       
@@ -1632,15 +1714,14 @@ server <- function(input, output, session) {
           "Position: %d\nFast Laps: %d\nDriver: %s\nTrack: %s",
           ps, fast_laps, Full_Name, track_name
         )), fill = "green", alpha = 0.7) +
-        geom_smooth(aes(x = ps, y = fast_laps), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = "Fast Laps by Finish Position",
           x = "Finish Position",
           y = "Fast Laps"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1658,11 +1739,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "fast_laps_start") {
-      # Fast Laps by Starting Position
+      # Fast Laps by Starting Position - HORIZONTAL
       viz_data <- plot_data %>%
         filter(start_ps <= 40, !is.na(start_ps), !is.na(fast_laps))
       
@@ -1671,15 +1752,14 @@ server <- function(input, output, session) {
           "Start Position: %d\nFast Laps: %d\nDriver: %s\nTrack: %s",
           start_ps, fast_laps, Full_Name, track_name
         )), fill = "green", alpha = 0.7) +
-        geom_smooth(aes(x = start_ps, y = fast_laps), 
-                    method = "loess", se = FALSE, color = "#FFD700", size = 1.5) +
         labs(
           title = "Fast Laps by Starting Position",
           x = "Starting Position",
           y = "Fast Laps"
         ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
         theme_minimal() +
-        scale_x_discrete(limits = factor(1:40)) +
         theme(
           plot.title = element_text(size = 18, face = "bold", color = "#FFD700"),
           axis.title = element_text(size = 16, color = "#ffffff"),
@@ -1697,11 +1777,11 @@ server <- function(input, output, session) {
           font = list(color = "#ffffff"),
           xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
           yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
-          height = 700
+          height = 900
         )
       
     } else if (input$dom_visual_type == "driver_boxplot") {
-      # Driver Dominator Boxplots
+      # Driver Dominator Boxplots - ALREADY HORIZONTAL
       req(values$analysis_entry_list)
       
       entry_drivers <- values$analysis_entry_list$Name
@@ -1710,7 +1790,7 @@ server <- function(input, output, session) {
         filter(Full_Name %in% entry_drivers) %>%
         group_by(Full_Name) %>%
         summarize(
-          avg_dom = mean(!!sym(dom_pts_col), na.rm = TRUE),
+          avg_dom = mean(.data[[dom_pts_col]], na.rm = TRUE),
           race_count = n(),
           .groups = 'drop'
         ) %>%
@@ -1724,18 +1804,16 @@ server <- function(input, output, session) {
         mutate(Driver = factor(Full_Name, levels = driver_order))
       
       plot_ly(
+        data = viz_data,
         type = "box",
         y = ~Driver,
-        x = as.formula(paste0("~", dom_pts_col)),
-        data = viz_data,
+        x = ~get(dom_pts_col),
         orientation = "h",
         marker = list(color = "#FFD700", opacity = 0.6),
         line = list(color = "#DAA520"),
         fillcolor = "rgba(255, 215, 0, 0.3)",
-        hoverinfo = "text",
-        text = ~paste("Driver:", Full_Name, 
-                      "<br>Dom Points:", round(!!sym(dom_pts_col), 1),
-                      "<br>Race:", race_name)
+        hoverinfo = "x",
+        showlegend = FALSE
       ) %>%
         layout(
           title = list(
@@ -1751,7 +1829,9 @@ server <- function(input, output, session) {
           yaxis = list(
             title = "", 
             color = "#ffffff",
-            gridcolor = "#404040"
+            gridcolor = "#404040",
+            categoryorder = "array",
+            categoryarray = driver_order
           ),
           paper_bgcolor = "#2d2d2d",
           plot_bgcolor = "#2d2d2d",
@@ -1762,7 +1842,7 @@ server <- function(input, output, session) {
         )
       
     } else if (input$dom_visual_type == "team_boxplot") {
-      # Team Dominator Boxplots
+      # Team Dominator Boxplots - ALREADY HORIZONTAL
       req(values$analysis_entry_list)
       
       entry_teams <- unique(values$analysis_entry_list$Team)
@@ -1771,7 +1851,7 @@ server <- function(input, output, session) {
         filter(team_name %in% entry_teams) %>%
         group_by(team_name) %>%
         summarize(
-          median_dom = median(!!sym(dom_pts_col), na.rm = TRUE),
+          median_dom = median(.data[[dom_pts_col]], na.rm = TRUE),
           count = n(),
           .groups = 'drop'
         ) %>%
@@ -1784,19 +1864,16 @@ server <- function(input, output, session) {
         mutate(Team = factor(team_name, levels = team_order))
       
       plot_ly(
+        data = viz_data,
         type = "box",
         y = ~Team,
-        x = as.formula(paste0("~", dom_pts_col)),
-        data = viz_data,
+        x = ~get(dom_pts_col),
         orientation = "h",
         marker = list(color = "#FFD700", opacity = 0.6),
         line = list(color = "#DAA520"),
         fillcolor = "rgba(255, 215, 0, 0.3)",
-        hoverinfo = "text",
-        text = ~paste("Team:", team_name, 
-                      "<br>Dom Points:", round(!!sym(dom_pts_col), 1),
-                      "<br>Driver:", Full_Name,
-                      "<br>Track:", track_name)
+        hoverinfo = "x",
+        showlegend = FALSE
       ) %>%
         layout(
           title = list(
@@ -1812,13 +1889,80 @@ server <- function(input, output, session) {
           yaxis = list(
             title = "", 
             color = "#ffffff",
-            gridcolor = "#404040"
+            gridcolor = "#404040",
+            categoryorder = "array",
+            categoryarray = team_order
           ),
           paper_bgcolor = "#2d2d2d",
           plot_bgcolor = "#2d2d2d",
           font = list(color = "#ffffff"),
           height = 900,
           margin = list(l = 150),
+          hovermode = "closest"
+        )
+      
+    } else if (input$dom_visual_type == "entry_boxplot") {
+      # Entry List (Team/Number + Driver) Dominator Boxplots - ALREADY HORIZONTAL
+      req(values$analysis_entry_list)
+      
+      # Create entry list labels with team/number and driver
+      entry_labels <- values$analysis_entry_list %>%
+        mutate(Entry_Label = paste0(Team, " #", Car, " (", Name, ")")) %>%
+        select(Name, Entry_Label)
+      
+      entry_data <- plot_data %>%
+        inner_join(entry_labels, by = c("Full_Name" = "Name")) %>%
+        group_by(Entry_Label) %>%
+        summarize(
+          avg_dom = mean(.data[[dom_pts_col]], na.rm = TRUE),
+          race_count = n(),
+          .groups = 'drop'
+        ) %>%
+        filter(avg_dom > 0) %>%
+        arrange(avg_dom)
+      
+      entry_order <- entry_data$Entry_Label
+      
+      viz_data <- plot_data %>%
+        inner_join(entry_labels, by = c("Full_Name" = "Name")) %>%
+        filter(Entry_Label %in% entry_order) %>%
+        mutate(Entry = factor(Entry_Label, levels = entry_order))
+      
+      plot_ly(
+        data = viz_data,
+        type = "box",
+        y = ~Entry,
+        x = ~get(dom_pts_col),
+        orientation = "h",
+        marker = list(color = "#FFD700", opacity = 0.6),
+        line = list(color = "#DAA520"),
+        fillcolor = "rgba(255, 215, 0, 0.3)",
+        hoverinfo = "x",
+        showlegend = FALSE
+      ) %>%
+        layout(
+          title = list(
+            text = paste(platform_name, "Dominator Points by Entry"),
+            font = list(size = 18, color = "#FFD700")
+          ),
+          xaxis = list(
+            title = "Dominator Points", 
+            color = "#ffffff",
+            gridcolor = "#404040",
+            zerolinecolor = "#666666"
+          ),
+          yaxis = list(
+            title = "", 
+            color = "#ffffff",
+            gridcolor = "#404040",
+            categoryorder = "array",
+            categoryarray = entry_order
+          ),
+          paper_bgcolor = "#2d2d2d",
+          plot_bgcolor = "#2d2d2d",
+          font = list(color = "#ffffff"),
+          height = 900,
+          margin = list(l = 200),
           hovermode = "closest"
         )
     }
@@ -1844,14 +1988,18 @@ server <- function(input, output, session) {
     display_data <- pd_data() %>%
       select(
         Driver = Full_Name,
-        Team = team_name,
         Start = start_ps,
         Finish = ps,
         PD,
         Qualifying,
+        Team = team_name,
+        ARP,
         Season = race_season,
         Race = race_name,
         Track = track_name
+      ) %>%
+      mutate(
+        ARP = round(ARP, 1)
       ) %>%
       arrange(desc(PD))
     
@@ -1860,7 +2008,7 @@ server <- function(input, output, session) {
       options = list(
         pageLength = 25,
         scrollX = TRUE,
-        dom = 'frtip',
+        dom = 'tip',
         columnDefs = list(
           list(className = "dt-center", targets = "_all")
         )
@@ -1868,22 +2016,13 @@ server <- function(input, output, session) {
       rownames = FALSE,
       filter = "top",
       class = "display nowrap compact"
-    ) %>%
-      formatStyle(
-        'PD',
-        backgroundColor = styleInterval(
-          cuts = c(-10, -5, 0, 5, 10),
-          values = c('#8B0000', '#CD5C5C', '#F0E68C', '#90EE90', '#228B22', '#006400')
-        ),
-        color = "#000000",
-        fontWeight = "bold"
-      )
+    )
   })
   
   # Download Place Differential CSV
   output$download_pd_csv <- downloadHandler(
     filename = function() {
-      paste("place_differential_data_", Sys.Date(), ".csv", sep = "")
+      paste("place_differential_", Sys.Date(), ".csv", sep = "")
     },
     content = function(file) {
       req(pd_data())
@@ -1891,19 +2030,211 @@ server <- function(input, output, session) {
       export_data <- pd_data() %>%
         select(
           Driver = Full_Name,
-          Team = team_name,
           Start = start_ps,
           Finish = ps,
           PD,
           Qualifying,
+          Team = team_name,
+          ARP,
           Season = race_season,
           Race = race_name,
           Track = track_name
+        ) %>%
+        mutate(
+          ARP = round(ARP, 1)
         )
       
       write.csv(export_data, file, row.names = FALSE)
     }
   )
+  
+  # Place Differential Visualizations
+  output$pd_plot <- renderPlotly({
+    req(pd_data(), input$pd_visual_type)
+    
+    plot_data <- pd_data()
+    
+    if (input$pd_visual_type == "scatter") {
+      # Starting vs Finishing Position Scatter
+      viz_data <- plot_data %>%
+        filter(start_ps <= 40, ps <= 40)
+      
+      p <- ggplot(viz_data, 
+                  aes(x = start_ps, 
+                      y = ps,
+                      size = abs(PD),
+                      color = PD,
+                      text = sprintf(
+                        "Driver: %s\nTeam: %s\nStart: %d\nFinish: %d\nPD: %d\nSeason: %d\nTrack: %s",
+                        Full_Name, team_name, start_ps, ps, PD, race_season, track_name
+                      ))) +
+        geom_point(alpha = 0.6) +
+        geom_abline(linetype = "dashed", color = "#FFD700", size = 1.2) +
+        scale_color_gradient2(
+          low = "#DC143C",
+          mid = "#cccccc",
+          high = "#32CD32",
+          midpoint = 0,
+          name = "Position\nChange"
+        ) +
+        scale_size_continuous(range = c(2, 12), name = "Magnitude") +
+        scale_x_continuous(limits = c(0, 40), breaks = seq(0, 40, 5), expand = c(0, 0)) +
+        scale_y_continuous(limits = c(0, 40), breaks = seq(0, 40, 5), expand = c(0, 0)) +
+        labs(
+          title = "Starting vs Finishing Position",
+          subtitle = "Point size = magnitude | Color = direction (green = gained, red = lost)",
+          x = "Starting Position",
+          y = "Finishing Position"
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 20, face = "bold", color = "#FFD700"),
+          plot.subtitle = element_text(size = 14, color = "#ffffff"),
+          axis.title = element_text(size = 16, color = "#ffffff"),
+          axis.text = element_text(size = 14, color = "#ffffff"),
+          legend.title = element_text(size = 14, color = "#FFD700"),
+          legend.text = element_text(size = 12, color = "#ffffff"),
+          panel.background = element_rect(fill = "#2d2d2d"),
+          plot.background = element_rect(fill = "#2d2d2d"),
+          panel.grid.major = element_line(color = "#404040"),
+          panel.grid.minor = element_line(color = "#333333"),
+          legend.background = element_rect(fill = "#2d2d2d"),
+          legend.key = element_rect(fill = "#2d2d2d")
+        )
+      
+      ggplotly(p, tooltip = "text") %>%
+        layout(
+          paper_bgcolor = "#2d2d2d",
+          plot_bgcolor = "#2d2d2d",
+          font = list(color = "#ffffff"),
+          xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          height = 700
+        )
+      
+    } else if (input$pd_visual_type == "histogram") {
+      # Position Change Distribution
+      p <- ggplot(plot_data, aes(x = PD)) +
+        geom_histogram(binwidth = 1, fill = "#FFD700", color = "#000000", alpha = 0.8) +
+        geom_vline(xintercept = 0, linetype = "dashed", color = "#FF0000", size = 1.5) +
+        labs(
+          title = "Position Change Distribution",
+          subtitle = "Positive = gained positions | Negative = lost positions",
+          x = "Place Differential",
+          y = "Count"
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 20, face = "bold", color = "#FFD700"),
+          plot.subtitle = element_text(size = 14, color = "#ffffff"),
+          axis.title = element_text(size = 16, color = "#ffffff"),
+          axis.text = element_text(size = 14, color = "#ffffff"),
+          panel.background = element_rect(fill = "#2d2d2d"),
+          plot.background = element_rect(fill = "#2d2d2d"),
+          panel.grid.major = element_line(color = "#404040"),
+          panel.grid.minor = element_line(color = "#333333")
+        )
+      
+      ggplotly(p) %>%
+        layout(
+          paper_bgcolor = "#2d2d2d",
+          plot_bgcolor = "#2d2d2d",
+          font = list(color = "#ffffff"),
+          xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          height = 700
+        )
+      
+    } else if (input$pd_visual_type == "boxplot_start") {
+      # PD by Starting Position
+      viz_data <- plot_data %>%
+        filter(start_ps <= 40)
+      
+      p <- ggplot(viz_data, 
+                  aes(x = factor(start_ps), 
+                      y = PD,
+                      text = sprintf(
+                        "Start: %d\nPosition Change: %d\nDriver: %s\nTeam: %s\nTrack: %s",
+                        start_ps, PD, Full_Name, team_name, track_name
+                      ))) +
+        geom_boxplot(fill = "skyblue", alpha = 0.7) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "#FFD700", size = 1.2) +
+        labs(
+          title = "Place Differential by Starting Position",
+          subtitle = "Gold line = no change",
+          x = "Starting Position",
+          y = "Place Differential"
+        ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 20, face = "bold", color = "#FFD700"),
+          plot.subtitle = element_text(size = 14, color = "#ffffff"),
+          axis.title = element_text(size = 16, color = "#ffffff"),
+          axis.text = element_text(size = 14, color = "#ffffff"),
+          panel.background = element_rect(fill = "#2d2d2d"),
+          plot.background = element_rect(fill = "#2d2d2d"),
+          panel.grid.major = element_line(color = "#404040"),
+          panel.grid.minor = element_line(color = "#333333")
+        )
+      
+      ggplotly(p, tooltip = "text") %>%
+        layout(
+          paper_bgcolor = "#2d2d2d",
+          plot_bgcolor = "#2d2d2d",
+          font = list(color = "#ffffff"),
+          xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          height = 900
+        )
+      
+    } else if (input$pd_visual_type == "boxplot_finish") {
+      # PD by Finishing Position
+      viz_data <- plot_data %>%
+        filter(ps <= 40)
+      
+      p <- ggplot(viz_data, 
+                  aes(x = factor(ps), 
+                      y = PD,
+                      text = sprintf(
+                        "Finish: %d\nPosition Change: %d\nDriver: %s\nTeam: %s\nTrack: %s",
+                        ps, PD, Full_Name, team_name, track_name
+                      ))) +
+        geom_boxplot(fill = "lightcoral", alpha = 0.7) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "#FFD700", size = 1.2) +
+        labs(
+          title = "Place Differential by Finishing Position",
+          subtitle = "Gold line = no change",
+          x = "Finishing Position",
+          y = "Place Differential"
+        ) +
+        coord_flip() +
+        scale_x_discrete(limits = factor(40:1)) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 20, face = "bold", color = "#FFD700"),
+          plot.subtitle = element_text(size = 14, color = "#ffffff"),
+          axis.title = element_text(size = 16, color = "#ffffff"),
+          axis.text = element_text(size = 14, color = "#ffffff"),
+          panel.background = element_rect(fill = "#2d2d2d"),
+          plot.background = element_rect(fill = "#2d2d2d"),
+          panel.grid.major = element_line(color = "#404040"),
+          panel.grid.minor = element_line(color = "#333333")
+        )
+      
+      ggplotly(p, tooltip = "text") %>%
+        layout(
+          paper_bgcolor = "#2d2d2d",
+          plot_bgcolor = "#2d2d2d",
+          font = list(color = "#ffffff"),
+          xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+          height = 900
+        )
+    }
+  })
+  
   
   # Performance Visualizations
   output$performance_plot <- renderPlotly({
