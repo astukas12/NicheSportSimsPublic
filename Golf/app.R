@@ -136,12 +136,25 @@ read_golf_input_file <- function(file_path) {
       message("FDPts sheet not found - running DraftKings only")
     }
     
+    # Try to read Tiers (optional)
+    if ("Tiers" %in% sheet_names) {
+      sheets$Tiers <- read_excel(file_path, sheet = "Tiers")
+    } else {
+      sheets$Tiers <- NULL
+      message("Tiers sheet not found - Tiers format not available")
+    }
+    
     # Identify available platforms based on columns
     has_dk <- "DKSalary" %in% colnames(sheets$Player)
     has_fd <- "FDSalary" %in% colnames(sheets$Player) && !is.null(sheets$FDPts)
+    has_tiers <- !is.null(sheets$Tiers)
     
     # Create platform info
-    platform_info <- list(has_draftkings = has_dk, has_fanduel = has_fd)
+    platform_info <- list(
+      has_draftkings = has_dk, 
+      has_fanduel = has_fd,
+      has_tiers = has_tiers
+    )
     
     list(sheets = sheets, platform_info = platform_info)
   }, error = function(e) {
@@ -198,6 +211,32 @@ process_golf_input_data <- function(input_data) {
   )
 }
 
+# Read and process tiers data
+read_tiers_data <- function(input_data) {
+  if ("Tiers" %in% names(input_data$sheets)) {
+    tiers_dt <- as.data.table(input_data$sheets$Tiers)
+    
+    # Validate required columns
+    required_cols <- c("TiersName", "Name", "ID", "Tier")
+    if (!all(required_cols %in% names(tiers_dt))) {
+      warning("Tiers sheet missing required columns")
+      return(NULL)
+    }
+    
+    # Convert Tier to numeric
+    tiers_dt[, Tier := as.numeric(Tier)]
+    
+    # Validate tiers are 1-6
+    if (any(tiers_dt$Tier < 1 | tiers_dt$Tier > 6)) {
+      warning("Tiers must be between 1 and 6")
+      return(NULL)
+    }
+    
+    return(tiers_dt)
+  }
+  return(NULL)
+}
+
 # Memory management and optimization functions
 options(datatable.optimize = Inf)
 
@@ -208,6 +247,8 @@ cleanup_memory <- function(verbose = FALSE) {
     try(system("sync"), silent = TRUE)
   }
 }
+
+
 
 precompute_golf_distributions <- function(players_dt, cut_line = 65, no_cut = FALSE) {
   n_players <- nrow(players_dt)
@@ -668,6 +709,176 @@ analyze_fd_golf_fantasy_points <- function(sim_results) {
   }
   
   return(results)
+}
+
+# Generate all possible tier lineups
+generate_all_tier_lineups <- function(tiers_data) {
+  # Split players by tier
+  tier_lists <- list()
+  for(tier_num in 1:6) {
+    tier_players <- tiers_data[Tier == tier_num]
+    if(nrow(tier_players) == 0) {
+      stop(paste("No players found in Tier", tier_num))
+    }
+    tier_lists[[tier_num]] <- tier_players
+  }
+  
+  # Calculate total possible combinations
+  n_combinations <- prod(sapply(tier_lists, nrow))
+  cat(sprintf("Total possible tier lineups: %s\n", format(n_combinations, big.mark=",")))
+  
+  if(n_combinations > 100000) {
+    warning(sprintf("Large number of combinations (%s). This may take a while.", 
+                    format(n_combinations, big.mark=",")))
+  }
+  
+  # Generate all combinations using expand.grid on the indices
+  indices <- expand.grid(lapply(tier_lists, function(x) 1:nrow(x)))
+  
+  # Create lineup data table
+  all_lineups <- data.table(
+    Tier1 = tier_lists[[1]]$Name[indices[,1]],
+    Tier2 = tier_lists[[2]]$Name[indices[,2]],
+    Tier3 = tier_lists[[3]]$Name[indices[,3]],
+    Tier4 = tier_lists[[4]]$Name[indices[,4]],
+    Tier5 = tier_lists[[5]]$Name[indices[,5]],
+    Tier6 = tier_lists[[6]]$Name[indices[,6]],
+    Tier1Name = tier_lists[[1]]$TiersName[indices[,1]],
+    Tier2Name = tier_lists[[2]]$TiersName[indices[,2]],
+    Tier3Name = tier_lists[[3]]$TiersName[indices[,3]],
+    Tier4Name = tier_lists[[4]]$TiersName[indices[,4]],
+    Tier5Name = tier_lists[[5]]$TiersName[indices[,5]],
+    Tier6Name = tier_lists[[6]]$TiersName[indices[,6]]
+  )
+  
+  return(all_lineups)
+}
+
+# Quick filter tier lineups by average points
+quick_filter_tier_lineups <- function(tier_lineups, sim_results, top_n = 10000) {
+  setDT(sim_results)
+  
+  cat(sprintf("Quick filtering %s lineups to top %s...\n", 
+              format(nrow(tier_lineups), big.mark=","), format(top_n, big.mark=",")))
+  
+  # Calculate average DK points for each player
+  player_avg <- sim_results[, .(AvgPoints = mean(DKFantasyPoints, na.rm = TRUE)), by = Name]
+  
+  # Calculate lineup average (sum of 6 player averages)
+  tier_lineups[, LineupAvg := {
+    players <- c(Tier1, Tier2, Tier3, Tier4, Tier5, Tier6)
+    sum(player_avg[match(players, Name), AvgPoints], na.rm = TRUE)
+  }]
+  
+  # Keep top N
+  tier_lineups <- tier_lineups[order(-LineupAvg)][1:min(top_n, .N)]
+  tier_lineups[, LineupAvg := NULL]
+  
+  cat(sprintf("Filtered to %s lineups\n", format(nrow(tier_lineups), big.mark=",")))
+  
+  return(tier_lineups)
+}
+
+# Count tier optimal lineups across simulations
+count_tier_optimal_lineups <- function(sim_results, tiers_data) {
+  sim_results_dt <- as.data.table(sim_results)
+  
+  # Generate all possible lineups
+  cat("Generating all tier combinations...\n")
+  all_lineups <- generate_all_tier_lineups(tiers_data)
+  
+  # Quick filter to top candidates by points if there are too many
+  if(nrow(all_lineups) > 10000) {
+    cat("Many lineups generated, applying points filter...\n")
+    all_lineups <- quick_filter_tier_lineups(all_lineups, sim_results_dt, top_n = 10000)
+  }
+  
+  # Get unique simulation IDs
+  all_sim_ids <- unique(sim_results_dt$SimID)
+  n_sims <- length(all_sim_ids)
+  n_lineups <- nrow(all_lineups)
+  
+  cat(sprintf("Evaluating %s lineups across %s simulations...\n", 
+              format(n_lineups, big.mark=","), format(n_sims, big.mark=",")))
+  
+  # Initialize results storage using data.table for efficiency
+  all_results <- data.table()
+  
+  # Process simulations in batches
+  batch_size <- 100
+  chunks <- ceiling(n_sims / batch_size)
+  
+  for(chunk in 1:chunks) {
+    start_idx <- (chunk-1) * batch_size + 1
+    end_idx <- min(chunk * batch_size, n_sims)
+    chunk_sim_ids <- all_sim_ids[start_idx:end_idx]
+    
+    if(chunk %% 5 == 0) {
+      cat(sprintf("Processing chunk %d/%d (%.1f%%)\n", 
+                  chunk, chunks, (chunk/chunks)*100))
+    }
+    
+    # Process all simulations in this chunk
+    chunk_results <- rbindlist(lapply(chunk_sim_ids, function(sim_id) {
+      sim_data <- sim_results_dt[SimID == sim_id]
+      
+      # Calculate points for all lineups in this simulation
+      lineup_scores <- all_lineups[, .(
+        LineupIdx = .I,
+        TotalScore = {
+          players <- c(Tier1, Tier2, Tier3, Tier4, Tier5, Tier6)
+          sum(sim_data[Name %in% players, DKFantasyPoints], na.rm = TRUE)
+        }
+      )]
+      
+      # Rank lineups
+      lineup_scores[, Rank := frank(-TotalScore, ties.method = "random")]
+      lineup_scores[, SimID := sim_id]
+      
+      return(lineup_scores)
+    }))
+    
+    all_results <- rbind(all_results, chunk_results)
+  }
+  
+  cat(sprintf("\nTotal results collected: %s rows\n", format(nrow(all_results), big.mark=",")))
+  
+  if(nrow(all_results) == 0) {
+    cat("ERROR: No results were generated!\n")
+    return(NULL)
+  }
+  
+  # Count lineup appearances by rank - NEW METRICS
+  cat("Calculating lineup statistics...\n")
+  lineup_counts <- all_results[, .(
+    Top1Count = sum(Rank == 1),
+    Top10Count = sum(Rank <= 10),
+    Top100Count = sum(Rank <= 100),
+    Top1000Count = sum(Rank <= 1000)
+  ), by = LineupIdx]
+  
+  # Sort by Top1Count, then Top10Count
+  lineup_counts <- lineup_counts[order(-Top1Count, -Top10Count, -Top100Count)]
+  
+  cat(sprintf("Lineup stats calculated for %s lineups\n", format(nrow(lineup_counts), big.mark=",")))
+  
+  # Join back with lineup details
+  all_lineups[, LineupIdx := .I]
+  result <- merge(lineup_counts, all_lineups, by = "LineupIdx")
+  
+  # Keep only the columns we want in the final output
+  keep_cols <- c("Tier1", "Tier2", "Tier3", "Tier4", "Tier5", "Tier6",
+                 "Tier1Name", "Tier2Name", "Tier3Name", "Tier4Name", "Tier5Name", "Tier6Name",
+                 "Top1Count", "Top10Count", "Top100Count", "Top1000Count")
+  
+  result <- result[, ..keep_cols]
+  
+  cat(sprintf("\nGenerated %s tier lineup results\n", format(nrow(result), big.mark=",")))
+  if(nrow(result) > 0) {
+    cat(sprintf("Top lineup Top1Count: %d\n", result$Top1Count[1]))
+  }
+  
+  return(as.data.frame(result))
 }
 
 calculate_dk_golf_player_exposure <- function(optimal_lineups, fantasy_analysis, random_lineups = NULL) {
@@ -1911,12 +2122,14 @@ ui <- dashboardPage(
                   solidHeader = TRUE,
                   
                   # Radio buttons to select platform - only one at a time
+                  # Radio buttons to select platform - now includes Tiers
                   radioButtons(
                     "platform_selection", 
                     "Select Fantasy Platform:",
                     choices = list(
                       "DraftKings" = "dk",
-                      "FanDuel" = "fd"
+                      "FanDuel" = "fd",
+                      "DK Tiers" = "tiers"
                     ),
                     selected = "dk",
                     inline = TRUE
@@ -1955,6 +2168,34 @@ ui <- dashboardPage(
                                uiOutput("fd_optimization_status")
                              )
                       )
+                    )
+                  ),
+                  
+                  # Conditional panel for Tiers options
+                  conditionalPanel(
+                    condition = "input.platform_selection == 'tiers' && output.has_tiers == 'true'",
+                    fluidRow(
+                      column(6,
+                             actionButton("run_tiers_optimization", "Calculate DK Tiers Lineups",
+                                          class = "btn-primary", 
+                                          style = "width: 100%; margin-top: 10px;")
+                      ),
+                      column(6,
+                             div(
+                               style = "margin-top: 10px;",
+                               uiOutput("tiers_optimization_status")
+                             )
+                      )
+                    )
+                  ),
+                  
+                  # Show warning if Tiers not available
+                  conditionalPanel(
+                    condition = "input.platform_selection == 'tiers' && output.has_tiers != 'true'",
+                    div(
+                      class = "alert alert-warning",
+                      style = "margin-top: 10px;",
+                      "Tiers data is not available in the input file. Please ensure your file contains a 'Tiers' sheet with columns: TiersName, Name, ID, Tier."
                     )
                   ),
                   
@@ -2003,6 +2244,22 @@ ui <- dashboardPage(
                     DTOutput("fd_optimal_lineups_table")
                   )
                 )
+              ),
+              # Tiers results section - only shown when Tiers selected and lineups available
+              conditionalPanel(
+                condition = "input.platform_selection == 'tiers' && output.has_tiers_lineups == 'true'",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "DK Tiers Optimal Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_tiers_optimal_lineups', 'Download All Tiers Lineups',
+                                     style = "margin-top: 10px;")
+                    ),
+                    DTOutput("tiers_optimal_lineups_table")
+                  )
+                )
               )
       ),
       
@@ -2023,11 +2280,14 @@ server <- function(input, output, session) {
     simulation_results = NULL,
     has_draftkings = FALSE,
     has_fanduel = FALSE,
+    has_tiers = FALSE,  # ADD THIS
+    tiers_data = NULL,  # ADD THIS
     finishing_analysis = NULL,
     dk_fantasy_analysis = NULL,
     fd_fantasy_analysis = NULL,
     dk_optimal_lineups = NULL,
     fd_optimal_lineups = NULL,
+    tiers_optimal_lineups = NULL,  # ADD THIS
     dk_player_exposure = NULL,
     fd_player_exposure = NULL,
     dk_random_lineups = NULL,
@@ -2059,6 +2319,20 @@ server <- function(input, output, session) {
         # Store platform availability
         rv$has_draftkings <- rv$input_data$platform_info$has_draftkings
         rv$has_fanduel <- rv$input_data$platform_info$has_fanduel
+        rv$has_tiers <- rv$input_data$platform_info$has_tiers 
+        
+        # Process tiers data if available
+        if(rv$has_tiers) {
+          rv$tiers_data <- read_tiers_data(rv$input_data)
+          if(is.null(rv$tiers_data)) {
+            rv$has_tiers <- FALSE
+            showModal(modalDialog(
+              title = "Tiers Data Error",
+              "Tiers sheet found but could not be processed. Please check the format.",
+              easyClose = TRUE
+            ))
+          }
+        }
         
         # Process the data
         incProgress(0.5, detail = "Processing data...")
@@ -2277,6 +2551,113 @@ server <- function(input, output, session) {
       class = 'cell-border stripe compact'
     )
   })
+  
+  
+  output$has_tiers <- reactive({
+    result <- tolower(as.character(rv$has_tiers))
+    return(result)
+  })
+  outputOptions(output, "has_tiers", suspendWhenHidden = FALSE)
+  
+  output$has_tiers_lineups <- reactive({
+    result <- tolower(as.character(!is.null(rv$tiers_optimal_lineups) && nrow(rv$tiers_optimal_lineups) > 0))
+    return(result)
+  })
+  outputOptions(output, "has_tiers_lineups", suspendWhenHidden = FALSE)
+  
+  output$tiers_optimal_lineups_table <- renderDT({
+    req(rv$tiers_optimal_lineups)
+    
+    display_data <- as.data.frame(rv$tiers_optimal_lineups)
+    
+    cat(sprintf("Displaying tiers table with %d rows\n", nrow(display_data)))
+    
+    # Show top 1000 for display
+    if(nrow(display_data) > 1000) {
+      display_data <- display_data[1:1000, ]
+    }
+    
+    # Select columns for display
+    display_cols <- c("Tier1Name", "Tier2Name", "Tier3Name", "Tier4Name", "Tier5Name", "Tier6Name",
+                      "Top1Count", "Top10Count", "Top100Count", "Top1000Count")
+    
+    display_data <- display_data[, display_cols]
+    
+    # Rename for cleaner display
+    colnames(display_data) <- c("Tier 1", "Tier 2", "Tier 3", "Tier 4", "Tier 5", "Tier 6",
+                                "Top 1", "Top 10", "Top 100", "Top 1000")
+    
+    dt <- datatable(
+      display_data,
+      caption = htmltools::tags$caption(
+        style = "caption-side: top; text-align: center; color: #FFD700; font-weight: bold;",
+        sprintf("Showing Top %d Tier Lineups", nrow(display_data))
+      ),
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        rownames = FALSE,
+        dom = "ftp",
+        ordering = TRUE,
+        processing = TRUE,
+        serverSide = FALSE,
+        order = list(list(6, 'desc')),  # Sort by Top 1 (column index 6)
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      ),
+      class = 'cell-border stripe compact',
+      rownames = FALSE
+    )
+    
+    # Style count columns with color bars
+    count_cols <- c("Top 1", "Top 10", "Top 100", "Top 1000")
+    for(col in count_cols) {
+      if(col %in% names(display_data) && any(!is.na(display_data[[col]]))) {
+        max_count <- max(display_data[[col]], na.rm = TRUE)
+        if(is.finite(max_count) && max_count > 0) {
+          dt <- dt %>% formatStyle(
+            col,
+            background = styleColorBar(c(0, max_count), 'lightblue'),
+            backgroundSize = '98% 88%',
+            backgroundRepeat = 'no-repeat',
+            backgroundPosition = 'center'
+          )
+        }
+      }
+    }
+    
+    dt
+  })
+  
+  # Tiers optimal lineups download handler
+  output$download_tiers_optimal_lineups <- downloadHandler(
+    filename = function() {
+      paste("tiers_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+    },
+    content = function(file) {
+      if(is.null(rv$tiers_optimal_lineups) || nrow(rv$tiers_optimal_lineups) == 0) {
+        empty_data <- data.frame(
+          Tier1 = character(0), Tier2 = character(0), Tier3 = character(0),
+          Tier4 = character(0), Tier5 = character(0), Tier6 = character(0),
+          Top1Count = integer(0), Top10Count = integer(0), 
+          Top100Count = integer(0), Top1000Count = integer(0)
+        )
+        write.csv(empty_data, file, row.names = FALSE)
+        return()
+      }
+      
+      # Create download data using TiersName columns only
+      download_data <- rv$tiers_optimal_lineups[, c("Tier1Name", "Tier2Name", "Tier3Name", 
+                                                    "Tier4Name", "Tier5Name", "Tier6Name",
+                                                    "Top1Count", "Top10Count", 
+                                                    "Top100Count", "Top1000Count")]
+      
+      # Rename columns to just Tier1-6
+      colnames(download_data)[1:6] <- paste0("Tier", 1:6)
+      
+      write.csv(download_data, file, row.names = FALSE)
+    },
+    contentType = "text/csv"
+  )
   
   output$dk_filtered_pool_size <- renderText({
     if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
@@ -3518,6 +3899,55 @@ output$download_fd_random_lineups <- downloadHandler(
       ))
     })
   })
+  
+  # Tiers optimization button handler
+  # Tiers optimization button handler
+  observeEvent(input$run_tiers_optimization, {
+    req(rv$simulation_results, rv$has_tiers, rv$tiers_data)
+    
+    rv$tiers_optimal_lineups <- NULL
+    
+    gc(verbose = FALSE, full = TRUE)
+    
+    withProgress(message = 'Calculating DK Tiers optimal lineups...', value = 0, {
+      showModal(modalDialog(
+        title = "Processing DK Tiers Optimal Lineups",
+        "Evaluating tier combinations across all simulations. This may take several minutes.",
+        footer = NULL, easyClose = FALSE
+      ))
+      
+      setProgress(0.2, detail = "Generating and evaluating lineups...")
+      rv$tiers_optimal_lineups <- tryCatch({
+        count_tier_optimal_lineups(rv$simulation_results, rv$tiers_data)
+      }, error = function(e) {
+        removeModal()
+        showModal(modalDialog(
+          title = "Error", 
+          paste("Error:", e$message),
+          easyClose = TRUE
+        ))
+        NULL
+      })
+      
+      removeModal()
+      
+      if(!is.null(rv$tiers_optimal_lineups) && nrow(rv$tiers_optimal_lineups) > 0) {
+        showModal(modalDialog(
+          title = "Success",
+          HTML(sprintf("Successfully generated <b>%s</b> optimal tier lineups!", 
+                       format(nrow(rv$tiers_optimal_lineups), big.mark=","))),
+          easyClose = TRUE
+        ))
+      } else {
+        showModal(modalDialog(
+          title = "No Results",
+          "No tier lineups were generated. This may be due to missing player names between the Tiers sheet and Player sheet.",
+          easyClose = TRUE
+        ))
+      }
+    })
+  })
+  
   
   # 3. Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
