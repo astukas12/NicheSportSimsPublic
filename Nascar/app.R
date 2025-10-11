@@ -5103,34 +5103,51 @@ server <- function(input, output, session) {
     })
     
     # Update excluded drivers selection for the lineup builder
-    if (!is.null(rv$dk_optimal_lineups) &&
-        !is.null(rv$dk_driver_exposure)) {
-      # Get all drivers from the driver exposure data
-      driver_data <- rv$dk_driver_exposure
+    if (!is.null(rv$dk_optimal_lineups) && !is.null(rv$dk_driver_exposure)) {
+      # Get all drivers from the optimal lineups
+      driver_cols <- paste0("Driver", 1:DK_ROSTER_SIZE)
       
-      # Create basic named vector for choices
-      driver_names <- driver_data$Name
-      driver_ids <- driver_data$DKName
+      # Convert to data.frame to avoid data.table issues
+      lineup_df <- as.data.frame(rv$dk_optimal_lineups)
+      all_drivers <- unique(unlist(lineup_df[, driver_cols]))
       
-      # Create simple labels with name and optimal rate
-      driver_labels <- paste0(driver_names,
-                              " (",
-                              round(driver_data$OptimalRate, 1),
-                              "%)")
+      # Create mapping from DKName to display info
+      driver_info <- data.frame(
+        DKName = character(0),
+        Name = character(0),
+        OptimalRate = numeric(0),
+        stringsAsFactors = FALSE
+      )
       
-      # Create choices with names
-      driver_choices <- setNames(driver_ids, driver_labels)
+      for (dk_name in all_drivers) {
+        # Find this driver in the exposure data
+        match_idx <- which(rv$dk_driver_exposure$DKName == dk_name)
+        if (length(match_idx) > 0) {
+          driver_info <- rbind(driver_info, data.frame(
+            DKName = dk_name,
+            Name = rv$dk_driver_exposure$Name[match_idx[1]],
+            OptimalRate = rv$dk_driver_exposure$OptimalRate[match_idx[1]],
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      
+      # Sort by name for easier finding
+      driver_info <- driver_info[order(driver_info$Name), ]
+      
+      # Create labels with name and optimal rate
+      driver_labels <- paste0(driver_info$Name, " (", round(driver_info$OptimalRate, 1), "%)")
+      
+      # Create named vector for choices
+      driver_choices <- setNames(driver_info$DKName, driver_labels)
       
       # Update the select input with choices
       updateSelectizeInput(
         session = session,
         inputId = "dk_excluded_drivers",
         choices = driver_choices,
-        selected = character(0)  # Empty selection initially
+        selected = character(0)
       )
-      
-      
-      
       
       # Show success message
       showModal(modalDialog(title = "Success", HTML(
@@ -5272,13 +5289,44 @@ server <- function(input, output, session) {
     
     # Update UI elements if optimization was successful
     if (!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_driver_exposure)) {
-      # Update excluded drivers dropdown
-      driver_data <- rv$fd_driver_exposure
-      driver_names <- driver_data$Name
-      driver_ids <- driver_data$FDName
-      driver_labels <- paste0(driver_names, " (", round(driver_data$OptimalRate, 1), "%)")
-      driver_choices <- setNames(driver_ids, driver_labels)
+      # Get all drivers from the optimal lineups
+      driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
       
+      # Convert to data.frame to avoid data.table issues
+      lineup_df <- as.data.frame(rv$fd_optimal_lineups)
+      all_drivers <- unique(unlist(lineup_df[, driver_cols]))
+      
+      # Create mapping from FDName to display info
+      driver_info <- data.frame(
+        FDName = character(0),
+        Name = character(0),
+        OptimalRate = numeric(0),
+        stringsAsFactors = FALSE
+      )
+      
+      for (fd_name in all_drivers) {
+        # Find this driver in the exposure data
+        match_idx <- which(rv$fd_driver_exposure$FDName == fd_name)
+        if (length(match_idx) > 0) {
+          driver_info <- rbind(driver_info, data.frame(
+            FDName = fd_name,
+            Name = rv$fd_driver_exposure$Name[match_idx[1]],
+            OptimalRate = rv$fd_driver_exposure$OptimalRate[match_idx[1]],
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      
+      # Sort by name for easier finding
+      driver_info <- driver_info[order(driver_info$Name), ]
+      
+      # Create labels with name and optimal rate
+      driver_labels <- paste0(driver_info$Name, " (", round(driver_info$OptimalRate, 1), "%)")
+      
+      # Create named vector for choices
+      driver_choices <- setNames(driver_info$FDName, driver_labels)
+      
+      # Update the select input with choices
       updateSelectizeInput(
         session = session,
         inputId = "fd_excluded_drivers",
@@ -5292,9 +5340,9 @@ server <- function(input, output, session) {
         HTML(
           sprintf(
             "Successfully generated <b>%d</b> optimal lineups for FanDuel!<br><br>
-          <strong>Display:</strong> Showing top 100 lineups in table for performance<br>
-          <strong>Download:</strong> All lineups available via download button<br><br>
-          You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.",
+      <strong>Display:</strong> Showing top 100 lineups in table for performance<br>
+      <strong>Download:</strong> All lineups available via download button<br><br>
+      You can now go to the <b>Lineup Builder</b> tab to filter and select lineups from this pool.",
             nrow(rv$fd_optimal_lineups)
           )
         ), 
@@ -5412,6 +5460,8 @@ server <- function(input, output, session) {
       ))
     })
   })
+  
+
   
   # FanDuel contest simulation
   observeEvent(input$run_fd_contest_simulation, {
@@ -6548,6 +6598,122 @@ server <- function(input, output, session) {
       }
     })
   })
+  
+  # Update DK excluded drivers dropdown when lineup builder tab is opened
+  observeEvent({
+    list(rv$dk_optimal_lineups, rv$dk_driver_exposure, input$sidebar_menu)
+  }, {
+    req(rv$dk_optimal_lineups, rv$dk_driver_exposure)
+    
+    # Only update if on the lineup builder tab
+    if (!is.null(input$sidebar_menu) && input$sidebar_menu == "lineup_builder") {
+      # Get all drivers from the optimal lineups
+      driver_cols <- paste0("Driver", 1:DK_ROSTER_SIZE)
+      
+      # Convert to data.frame to avoid data.table issues
+      lineup_df <- as.data.frame(rv$dk_optimal_lineups)
+      all_drivers <- unique(unlist(lineup_df[, driver_cols]))
+      
+      # Create mapping from DKName to display info
+      driver_info <- data.frame(
+        DKName = character(0),
+        Name = character(0),
+        OptimalRate = numeric(0),
+        stringsAsFactors = FALSE
+      )
+      
+      for (dk_name in all_drivers) {
+        # Find this driver in the exposure data
+        match_idx <- which(rv$dk_driver_exposure$DKName == dk_name)
+        if (length(match_idx) > 0) {
+          driver_info <- rbind(driver_info, data.frame(
+            DKName = dk_name,
+            Name = rv$dk_driver_exposure$Name[match_idx[1]],
+            OptimalRate = rv$dk_driver_exposure$OptimalRate[match_idx[1]],
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      
+      # Sort by name for easier finding
+      driver_info <- driver_info[order(driver_info$Name), ]
+      
+      # Create labels with name and optimal rate
+      driver_labels <- paste0(driver_info$Name, " (", round(driver_info$OptimalRate, 1), "%)")
+      
+      # Create named vector for choices
+      driver_choices <- setNames(driver_info$DKName, driver_labels)
+      
+      # Get current selection to preserve it
+      current_selection <- input$dk_excluded_drivers
+      
+      # Update the select input with choices, preserving current selection
+      updateSelectizeInput(
+        session = session,
+        inputId = "dk_excluded_drivers",
+        choices = driver_choices,
+        selected = current_selection  # Preserve current selection
+      )
+    }
+  }, ignoreNULL = FALSE)
+  
+  # Update FD excluded drivers dropdown when lineup builder tab is opened
+  observeEvent({
+    list(rv$fd_optimal_lineups, rv$fd_driver_exposure, input$sidebar_menu)
+  }, {
+    req(rv$fd_optimal_lineups, rv$fd_driver_exposure)
+    
+    # Only update if on the lineup builder tab
+    if (!is.null(input$sidebar_menu) && input$sidebar_menu == "lineup_builder") {
+      # Get all drivers from the optimal lineups
+      driver_cols <- paste0("Driver", 1:FD_ROSTER_SIZE)
+      
+      # Convert to data.frame to avoid data.table issues
+      lineup_df <- as.data.frame(rv$fd_optimal_lineups)
+      all_drivers <- unique(unlist(lineup_df[, driver_cols]))
+      
+      # Create mapping from FDName to display info
+      driver_info <- data.frame(
+        FDName = character(0),
+        Name = character(0),
+        OptimalRate = numeric(0),
+        stringsAsFactors = FALSE
+      )
+      
+      for (fd_name in all_drivers) {
+        # Find this driver in the exposure data
+        match_idx <- which(rv$fd_driver_exposure$FDName == fd_name)
+        if (length(match_idx) > 0) {
+          driver_info <- rbind(driver_info, data.frame(
+            FDName = fd_name,
+            Name = rv$fd_driver_exposure$Name[match_idx[1]],
+            OptimalRate = rv$fd_driver_exposure$OptimalRate[match_idx[1]],
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      
+      # Sort by name for easier finding
+      driver_info <- driver_info[order(driver_info$Name), ]
+      
+      # Create labels with name and optimal rate
+      driver_labels <- paste0(driver_info$Name, " (", round(driver_info$OptimalRate, 1), "%)")
+      
+      # Create named vector for choices
+      driver_choices <- setNames(driver_info$FDName, driver_labels)
+      
+      # Get current selection to preserve it
+      current_selection <- input$fd_excluded_drivers
+      
+      # Update the select input with choices, preserving current selection
+      updateSelectizeInput(
+        session = session,
+        inputId = "fd_excluded_drivers",
+        choices = driver_choices,
+        selected = current_selection  # Preserve current selection
+      )
+    }
+  }, ignoreNULL = FALSE)
   
   output$dk_driver_exposure_table <- renderDT({
     req(rv$dk_driver_exposure)
