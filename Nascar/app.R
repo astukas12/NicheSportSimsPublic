@@ -7134,68 +7134,49 @@ server <- function(input, output, session) {
   output$fd_filtered_pool_size <- renderText({
     req(rv$fd_optimal_lineups)
     
-    # Use default values if sliders haven't been initialized yet
+    # Explicitly depend on all filter inputs to trigger re-calculation
+    top1_range <- input$fd_min_top1_slider
+    top3_range <- input$fd_min_top3_slider
+    top5_range <- input$fd_min_top5_slider
+    ownership_range <- input$fd_ownership_range
+    geometric_range <- input$fd_geometric_range
+    starting_range <- input$fd_starting_range
+    starting_geo_range <- input$fd_starting_geo_range
+    salary_range <- input$fd_salary_range
+    excluded <- input$fd_excluded_drivers
+    
+    # Wait for sliders to be initialized
+    req(top1_range, top3_range, top5_range, ownership_range, geometric_range,
+        starting_range, starting_geo_range, salary_range)
+    
     filters <- list(
-      min_top1_count = if(is.null(input$fd_min_top1_count)) 0 else input$fd_min_top1_count,
-      min_top2_count = if(is.null(input$fd_min_top2_count)) 0 else input$fd_min_top2_count,
-      min_top3_count = if(is.null(input$fd_min_top3_count)) 0 else input$fd_min_top3_count,
-      min_top5_count = if(is.null(input$fd_min_top5_count)) 0 else input$fd_min_top5_count,
+      # FIXED: Using correct slider input names
+      min_top1_count = top1_range[1],
+      max_top1_count = top1_range[2],
+      min_top3_count = top3_range[1],
+      max_top3_count = top3_range[2],
+      min_top5_count = top5_range[1],
+      max_top5_count = top5_range[2],
       
-      min_cumulative_ownership = if(is.null(input$fd_ownership_range)) {
-        if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          floor(min(rv$fd_optimal_lineups$CumulativeOwnership, na.rm = TRUE))
-        } else 0
-      } else input$fd_ownership_range[1],
+      min_cumulative_ownership = ownership_range[1],
+      max_cumulative_ownership = ownership_range[2],
+      min_geometric_mean = geometric_range[1],
+      max_geometric_mean = geometric_range[2],
       
-      max_cumulative_ownership = if(is.null(input$fd_ownership_range)) {
-        if("CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
-          ceiling(max(rv$fd_optimal_lineups$CumulativeOwnership, na.rm = TRUE))
-        } else 500
-      } else input$fd_ownership_range[2],
+      min_cumulative_starting = starting_range[1],
+      max_cumulative_starting = starting_range[2],
+      min_geometric_starting = starting_geo_range[1],
+      max_geometric_starting = starting_geo_range[2],
       
-      min_geometric_mean = if(is.null(input$fd_geometric_range)) {
-        if("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          floor(min(rv$fd_optimal_lineups$GeometricMean, na.rm = TRUE))
-        } else 0
-      } else input$fd_geometric_range[1],
+      min_total_salary = salary_range[1] * 1000,
+      max_total_salary = salary_range[2] * 1000,
       
-      max_geometric_mean = if(is.null(input$fd_geometric_range)) {
-        if("GeometricMean" %in% names(rv$fd_optimal_lineups)) {
-          ceiling(max(rv$fd_optimal_lineups$GeometricMean, na.rm = TRUE))
-        } else 100
-      } else input$fd_geometric_range[2],
-      
-      min_cumulative_starting = if(is.null(input$fd_starting_range)) {
-        if("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-          floor(min(rv$fd_optimal_lineups$CumulativeStarting, na.rm = TRUE))
-        } else 5
-      } else input$fd_starting_range[1],
-      
-      max_cumulative_starting = if(is.null(input$fd_starting_range)) {
-        if("CumulativeStarting" %in% names(rv$fd_optimal_lineups)) {
-          ceiling(max(rv$fd_optimal_lineups$CumulativeStarting, na.rm = TRUE))
-        } else 200
-      } else input$fd_starting_range[2],
-      
-      min_geometric_starting = if(is.null(input$fd_starting_geo_range)) {
-        if("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-          floor(min(rv$fd_optimal_lineups$GeometricMeanStarting, na.rm = TRUE) * 10) / 10
-        } else 1
-      } else input$fd_starting_geo_range[1],
-      
-      max_geometric_starting = if(is.null(input$fd_starting_geo_range)) {
-        if("GeometricMeanStarting" %in% names(rv$fd_optimal_lineups)) {
-          ceiling(max(rv$fd_optimal_lineups$GeometricMeanStarting, na.rm = TRUE) * 10) / 10
-        } else 40
-      } else input$fd_starting_geo_range[2],
-      
-      excluded_drivers = if(is.null(input$fd_excluded_drivers)) character(0) else input$fd_excluded_drivers
+      excluded_drivers = excluded
     )
     
     stats <- calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-    paste("Number of lineups in filtered pool:", stats$count)
+    paste("Number of lineups:", stats$count)
   })
-  
   # Clean up on session end
   session$onSessionEnded(function() {
     gc(verbose = FALSE, full = TRUE)
