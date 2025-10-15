@@ -603,6 +603,7 @@ ui <- fluidPage(
       )
     ),
     
+
     # Dominator Tab
     tabPanel(
       "Dominator",
@@ -617,10 +618,16 @@ ui <- fluidPage(
                  div(class = "box",
                      div(class = "box-header", style = "display: flex; justify-content: space-between; align-items: center;",
                          h3("Dominator Data", class = "box-title", style = "margin: 0;"),
-                         downloadButton("download_dominator_csv", 
-                                        "Download CSV", 
-                                        class = "btn-success",
-                                        style = "margin: 0;")
+                         div(style = "display: flex; gap: 10px;",
+                             downloadButton("download_dominator_csv", 
+                                            "Download CSV", 
+                                            class = "btn-success",
+                                            style = "margin: 0;"),
+                             downloadButton("download_dominator_profile", 
+                                            "Download Dominator Profile", 
+                                            class = "btn-success",
+                                            style = "margin: 0;")
+                         )
                      ),
                      div(class = "box-body",
                          fluidRow(
@@ -695,7 +702,6 @@ ui <- fluidPage(
         )
       )
     ),
-    
     # Place Differential Tab
     tabPanel(
       "Place Differential",
@@ -1135,8 +1141,7 @@ server <- function(input, output, session) {
       # Initialize all races selected for non-dominator sections
       values$pd_race_ids <- races_available$race_id
       values$performance_race_ids <- races_available$race_id
-      values$fantasy_race_ids <- races_available$race_id
-      
+
       values$filters_confirmed <- TRUE
       
       incProgress(1.0, detail = "Complete!")
@@ -1410,6 +1415,74 @@ server <- function(input, output, session) {
         )
       
       write.csv(export_data, file, row.names = FALSE)
+    }
+  )
+  
+  # Download Dominator Profile (Excel with 3 sheets)
+  output$download_dominator_profile <- downloadHandler(
+    filename = function() {
+      paste("dominator_profile_", Sys.Date(), ".xlsx", sep = "")
+    },
+    content = function(file) {
+      req(dominator_data(), values$analysis_races_available)
+      
+      # Sheet 1: FDLaps - Average FD lap points by finish position (using FDLP)
+      fd_laps <- dominator_data() %>%
+        filter(!is.na(ps), !is.na(FDLP)) %>%
+        group_by(ps) %>%
+        summarize(Pt = round(mean(FDLP, na.rm = TRUE), 1), .groups = 'drop') %>%
+        arrange(ps) %>%
+        rename(PS = ps)
+      
+      # Sheet 2: Race_Weights - Equal weights for all races that sum to 1 (lap filtered races only)
+      race_weights <- values$analysis_races_available %>%
+        filter(race_id %in% dominator_filtered_races()) %>%
+        select(
+          RaceID = race_id,
+          RaceName = race_name,
+          Season = race_season,
+          Track = track_name
+        ) %>%
+        mutate(Weight = round(1 / n(), 4)) %>%
+        arrange(Season, Track)
+      
+      # Sheet 3: Race_Profiles - All dominator performances from lap filtered races
+      race_profiles <- dominator_data() %>%
+        select(
+          RaceID = race_id,
+          StartPos = start_ps,
+          FinPos = ps,
+          LeadLaps = lead_laps,
+          FastLaps = fast_laps,
+          DKDomPoints = DKSP,
+          FDDomPoints = FDSP,
+          TrackName = track_name,
+          Driver = Full_Name,
+          Team = team_name
+        ) %>%
+        mutate(
+          DKDomPoints = round(DKDomPoints, 1),
+          FDDomPoints = round(FDDomPoints, 1)
+        ) %>%
+        arrange(desc(FDDomPoints))
+      
+      # Create workbook
+      wb <- createWorkbook()
+      
+      # Add Sheet 1: FDLaps
+      addWorksheet(wb, "FDLaps")
+      writeData(wb, "FDLaps", fd_laps, startRow = 1, startCol = 1)
+      
+      # Add Sheet 2: Race_Weights
+      addWorksheet(wb, "Race_Weights")
+      writeData(wb, "Race_Weights", race_weights, startRow = 1, startCol = 1)
+      
+      # Add Sheet 3: Race_Profiles
+      addWorksheet(wb, "Race_Profiles")
+      writeData(wb, "Race_Profiles", race_profiles, startRow = 1, startCol = 1)
+      
+      # Save workbook
+      saveWorkbook(wb, file, overwrite = TRUE)
     }
   )
   
@@ -3180,10 +3253,10 @@ server <- function(input, output, session) {
   
   # Fantasy Scoring filtered data
   fantasy_data <- reactive({
-    req(values$analysis_filtered_data, values$fantasy_race_ids)
+    req(values$analysis_filtered_data, dominator_filtered_races())
     
     data <- values$analysis_filtered_data %>%
-      filter(race_id %in% values$fantasy_race_ids)
+      filter(race_id %in% dominator_filtered_races())
     
     return(data)
   })

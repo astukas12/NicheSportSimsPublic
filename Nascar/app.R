@@ -130,10 +130,6 @@ read_input_file <- function(file_path) {
       error = function(e) NULL
     )
     
-    sheets$Dom_Tier <- tryCatch(
-      read_excel(file_path, sheet = "Dom_Tier"),
-      error = function(e) NULL
-    )
     
     # Keep FD Laps (unchanged)
     sheets$FDLaps <- tryCatch(
@@ -183,7 +179,8 @@ process_input_data <- function(input_data) {
     "DKOP",
     "FDOP",
     "Starting",
-    "DomTier"
+    "DKMax",
+    "FDMax"
   )
   
   for (col in numeric_cols) {
@@ -229,19 +226,6 @@ process_input_data <- function(input_data) {
     data.table()
   }
   
-  processed_dom_tier <- if (!is.null(input_data$sheets$Dom_Tier)) {
-    tier_dt <- as.data.table(input_data$sheets$Dom_Tier)
-    if (all(c("DomTier", "DKMax", "FDMax") %in% names(tier_dt))) {
-      tier_dt[, DomTier := as.numeric(DomTier)]
-      tier_dt[, DKMax := as.numeric(DKMax)]
-      tier_dt[, FDMax := as.numeric(FDMax)]
-      tier_dt
-    } else {
-      data.table()
-    }
-  } else {
-    data.table()
-  }
   
   # Process FD laps data if available
   processed_fd_laps <- if (!is.null(fd_laps_data)) {
@@ -272,7 +256,6 @@ process_input_data <- function(input_data) {
     drivers = processed_drivers,
     race_weights = processed_race_weights,
     race_profiles = processed_race_profiles,
-    dom_tier = processed_dom_tier,
     fd_laps = processed_fd_laps
   )
 }
@@ -527,11 +510,10 @@ calculate_match_score <- function(sim_start, sim_finish, profile_start, profile_
 }
 
 
-assign_dominator_points_from_profiles <- function(race_results, race_weights, race_profiles, dom_tier_limits, platform = "DK") {
+assign_dominator_points_from_profiles <- function(race_results, race_weights, race_profiles, platform = "DK") {
   setDT(race_results)
   setDT(race_weights)
   setDT(race_profiles)
-  setDT(dom_tier_limits)
   
   # Initialize dominator points
   dom_col <- if (platform == "DK") "DKDomPoints" else "FDDomPoints"
@@ -556,13 +538,11 @@ assign_dominator_points_from_profiles <- function(race_results, race_weights, ra
     setorder(race_profiles_subset, -FDDomPoints)
   }
   
-  # Handle missing DomTier
-  if (!"DomTier" %in% names(race_results)) {
-    race_results[, DomTier := 1]
+  # Check if Max column exists in race_results
+  if (!max_col %in% names(race_results)) {
+    warning(paste("Column", max_col, "not found in race_results. All drivers will have 0 max dominator points."))
+    race_results[, (max_col) := 0]
   }
-  
-  # Pre-compute tier limits lookup
-  tier_limits <- setNames(dom_tier_limits[[max_col]], dom_tier_limits$DomTier)
   
   # Track assigned drivers
   assigned_drivers <- logical(nrow(race_results))
@@ -576,10 +556,10 @@ assign_dominator_points_from_profiles <- function(race_results, race_weights, ra
     # Skip if no points to assign
     if (is.na(profile_points) || profile_points == 0) next
     
-    # Find drivers whose tier allows this point value AND who haven't been assigned yet
+    # Find drivers whose max allows this point value AND who haven't been assigned yet
     eligible_drivers_mask <- !assigned_drivers & 
-      !is.na(tier_limits[as.character(race_results$DomTier)]) &
-      tier_limits[as.character(race_results$DomTier)] >= profile_points
+      !is.na(race_results[[max_col]]) &
+      race_results[[max_col]] >= profile_points
     
     eligible_indices <- which(eligible_drivers_mask)
     
@@ -604,7 +584,6 @@ assign_dominator_points_from_profiles <- function(race_results, race_weights, ra
   
   return(race_results)
 }
-
 
 assign_fd_lap_points <- function(race_results, fd_laps_data) {
   setDT(race_results)
@@ -767,7 +746,8 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
     static_data$dk <- list(
       salary = drivers_dt$DKSalary,
       op = drivers_dt$DKOP,
-      name = drivers_dt$DKName
+      name = drivers_dt$DKName,
+      max = drivers_dt$DKMax
     )
     cat("[SETUP] DraftKings data loaded\n")
   }
@@ -776,7 +756,8 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
     static_data$fd <- list(
       salary = drivers_dt$FDSalary,
       op = drivers_dt$FDOP,
-      name = drivers_dt$FDName
+      name = drivers_dt$FDName,
+      max = drivers_dt$FDMax
     )
     cat("[SETUP] FanDuel data loaded\n")
   }
@@ -829,6 +810,7 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         DKSalary = static_data$dk$salary,
         DKOP = static_data$dk$op,
         DKName = static_data$dk$name,
+        DKMax = static_data$dk$max,
         DKFantasyPoints = dk_finish_pts + dk_place_diff  # Will add dominator points later
       )]
       
@@ -837,7 +819,6 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         sim_result, 
         input_data$race_weights, 
         input_data$race_profiles,
-        input_data$dom_tier,
         "DK"
       )
       
@@ -855,6 +836,7 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         FDSalary = static_data$fd$salary,
         FDOP = static_data$fd$op,
         FDName = static_data$fd$name,
+        FDMax = static_data$fd$max,
         FDLapPoints = rep(0, n_drivers),  # Will be calculated separately
         FDFantasyPoints = fd_finish_pts + fd_place_diff  # Will add dominator points later
       )]
@@ -864,7 +846,6 @@ run_efficient_simulation <- function(input_data, n_sims = 1000) {
         sim_result, 
         input_data$race_weights, 
         input_data$race_profiles,
-        input_data$dom_tier,
         "FD"
       )
       
