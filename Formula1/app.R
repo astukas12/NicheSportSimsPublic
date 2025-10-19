@@ -788,35 +788,46 @@ initialize_results_matrices <- function(n_sims, n_drivers, n_constructors) {
   ))
 }
 
-# Vectorized fantasy points calculation
+
 calculate_fantasy_points_vectorized <- function(finish_positions, starting_positions, 
                                                 fastest_lap, laps_led, defeated_teammate, 
                                                 is_classified, position_points) {
-  # Position points
-  pos_points <- position_points[pmin(finish_positions, 20)]
+  # Predefined position points (matching the manual calculation)
+  pos_points <- sapply(finish_positions, function(pos) {
+    if (pos <= 10) position_points[pos] else 0
+  })
   
-  # Differential points (vectorized)
+  # Position Differential Points
   pos_diff <- starting_positions - finish_positions
-  diff_points <- ifelse(pos_diff >= 10, 5,
-                        ifelse(pos_diff >= 5, 3,
-                               ifelse(pos_diff >= 3, 2,
-                                      ifelse(pos_diff <= -10, -5,
-                                             ifelse(pos_diff <= -5, -3,
-                                                    ifelse(pos_diff <= -3, -2, 0))))))
+  diff_points <- sapply(pos_diff, function(diff) {
+    if (diff >= 10) 5
+    else if (diff >= 5) 3
+    else if (diff >= 3) 2
+    else if (diff <= -10) -5
+    else if (diff <= -5) -3
+    else if (diff <= -3) -2
+    else 0
+  })
   
-  # Bonus points
-  fl_points <- fastest_lap * 3
+  # Fastest Lap Points
+  fl_points <- as.numeric(fastest_lap) * 3
+  
+  # Laps Led Points
   ll_points <- laps_led * 0.1
-  teammate_points <- defeated_teammate * 5
-  classified_points <- is_classified * 1
   
-  # Total fantasy points
-  total_points <- pos_points + diff_points + fl_points + ll_points + teammate_points + classified_points
+  # Teammate Points
+  teammate_points <- as.numeric(defeated_teammate) * 5
+  
+  # Classification Points
+  classification_points <- as.numeric(is_classified)
+  
+  # Total Points - EXACTLY match manual calculation
+  total_points <- pos_points + diff_points + fl_points + ll_points + 
+    teammate_points + classification_points
   
   return(total_points)
 }
 
-# Simulate a chunk of races using vectorized operations
 simulate_races_vectorized_chunk <- function(driver_data, constructor_data, 
                                             fl_probs, ll_data, classification_data,
                                             total_race_laps, chunk_sims, 
@@ -957,16 +968,16 @@ simulate_races_vectorized_chunk <- function(driver_data, constructor_data,
   # Store teammate defeat
   results$drivers[, , 5] <- as.numeric(defeated_teammate_matrix)
   
-  # CALCULATE FANTASY POINTS (vectorized)
-  starting_positions <- rep(driver_data$Start, each = chunk_sims)
-  starting_matrix <- matrix(starting_positions, nrow = chunk_sims, ncol = n_drivers, byrow = TRUE)
+  # Use the original starting positions from driver_data
+  starting_positions <- driver_data$Start
   
+  # CALCULATE FANTASY POINTS (vectorized)
   fantasy_points_matrix <- matrix(0, nrow = chunk_sims, ncol = n_drivers)
   
   for (sim in 1:chunk_sims) {
     fantasy_points_matrix[sim, ] <- calculate_fantasy_points_vectorized(
       finish_positions[sim, ],
-      starting_matrix[sim, ],
+      starting_positions,
       fastest_lap_matrix[sim, ],
       laps_led_matrix[sim, ],
       defeated_teammate_matrix[sim, ],
@@ -978,12 +989,40 @@ simulate_races_vectorized_chunk <- function(driver_data, constructor_data,
   # Store fantasy points
   results$drivers[, , 6] <- fantasy_points_matrix
   
-  # CONSTRUCTOR SCORING (simplified for now)
-  # This can be optimized further later
-  
   return(results)
 }
 
+
+
+manual_fantasy_points <- function(finish_position, starting_position, fastest_lap, laps_led, is_classified, defeated_teammate) {
+  # Predefined position points
+  position_points <- c(25, 18, 15, 12, 10, 8, 6, 4, 2, 1, rep(0, 10))
+  
+  # Position Points (top 10 only)
+  pos_points <- if (finish_position <= 10) position_points[finish_position] else 0
+  
+  # Position Differential Points
+  pos_diff <- starting_position - finish_position
+  diff_points <- if (pos_diff >= 10) 5
+  else if (pos_diff >= 5) 3
+  else if (pos_diff >= 3) 2
+  else if (pos_diff <= -10) -5
+  else if (pos_diff <= -5) -3
+  else if (pos_diff <= -3) -2
+  else 0
+  
+  # Other points components
+  fl_points <- as.numeric(fastest_lap) * 3
+  ll_points <- laps_led * 0.1
+  teammate_points <- as.numeric(defeated_teammate) * 5
+  classification_points <- as.numeric(is_classified)
+  
+  # Total points
+  total_points <- pos_points + diff_points + fl_points + ll_points + 
+    teammate_points + classification_points
+  
+  return(total_points)
+}
 
 
 find_top_lineups <- function(sim_drivers,
@@ -1938,9 +1977,11 @@ ui <- dashboardPage(
         box(width = 12, title = "Driver Performance Analysis", 
             DTOutput("driver_stats"),
             br(),
-            downloadButton("downloadDriverAnalysis", "Download Driver Analysis", class = "btn-success")
+            downloadButton("downloadDriverAnalysis", "Download Driver Analysis", class = "btn-success"),
+            downloadButton("downloadSimulationResults", "Download Full Simulation Results", class = "btn-success")
         )
-      ), fluidRow(
+      ), 
+      fluidRow(
         box(
           width = 12,
           title = "Position Distribution",
@@ -2732,6 +2773,77 @@ server <- function(input, output, session) {
         # Create an error file and print detailed error
         print(e)
         cat("Error in download handler:", as.character(e), "\n")
+        write.csv(data.frame(Error = paste("Error:", e$message)), file, row.names = FALSE)
+      })
+    }
+  )
+
+  output$downloadSimulationResults <- downloadHandler(
+    filename = function() {
+      paste("f1_full_simulation_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+    },
+    content = function(file) {
+      tryCatch({
+        req(rv$simulation_results)
+        
+        # Get driver results
+        driver_results <- rv$simulation_results$driver_results
+        
+        # Predefined position points (matching the vectorized calculation)
+        position_points <- c(25, 18, 15, 12, 10, 8, 6, 4, 2, 1, rep(0, 10))
+        
+        # Calculate manual points
+        download_data <- driver_results[, .(
+          SimID,
+          Name, 
+          Team, 
+          DFSID,
+          Starting,
+          FinishPosition, 
+          FantasyPoints,
+          FastestLap,
+          LapsLed,
+          IsClassified,
+          DefeatedTeammate
+        )]
+        
+        # Manually calculate position points
+        download_data[, PositionPoints := ifelse(FinishPosition <= 10, 
+                                                 position_points[FinishPosition], 
+                                                 0)]
+        
+        # Calculate position differential points
+        download_data[, PositionDiffPoints := 
+                        ifelse(Starting - FinishPosition >= 10, 5,
+                               ifelse(Starting - FinishPosition >= 5, 3,
+                                      ifelse(Starting - FinishPosition >= 3, 2,
+                                             ifelse(Starting - FinishPosition <= -10, -5,
+                                                    ifelse(Starting - FinishPosition <= -5, -3,
+                                                           ifelse(Starting - FinishPosition <= -3, -2, 0))))))]
+        
+        # Add other point components
+        download_data[, FastestLapPoints := as.numeric(FastestLap) * 3]
+        download_data[, LapsLedPoints := LapsLed * 0.1]
+        download_data[, TeammatePoints := as.numeric(DefeatedTeammate) * 5]
+        download_data[, ClassificationPoints := as.numeric(IsClassified)]
+        
+        # Manually calculate total points
+        download_data[, ManualPointCalculation := 
+                        PositionPoints + 
+                        PositionDiffPoints + 
+                        FastestLapPoints + 
+                        LapsLedPoints + 
+                        TeammatePoints + 
+                        ClassificationPoints]
+        
+        # Calculate discrepancy
+        download_data[, PointDiscrepancy := FantasyPoints - ManualPointCalculation]
+        
+        # Write to CSV file
+        write.csv(download_data, file, row.names = FALSE)
+        
+      }, error = function(e) {
+        # Handle errors
         write.csv(data.frame(Error = paste("Error:", e$message)), file, row.names = FALSE)
       })
     }
