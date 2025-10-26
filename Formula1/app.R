@@ -204,7 +204,7 @@ read_f1_input_file <- function(file_path) {
   
   # Extract driver and captain salaries
   driver_salaries <- salaries_data[Position == "Driver", .(DFSID, Name, Salary)]
-  captain_salaries <- salaries_data[Position == "Captain", .(Name, Salary)]
+  captain_salaries <- salaries_data[Position == "Captain", .(DFSID, Name, Salary)]
   
   # Check for potential errors
   if (length(unique(driver_data$Name)) != nrow(driver_data)) {
@@ -230,6 +230,7 @@ read_f1_input_file <- function(file_path) {
   driver_data[, DFSID := NA]
   driver_data[, DriverSal := NA]
   driver_data[, CptSal := NA]
+  driver_data[, CptDFSID := NA]
   
   # Update driver information with salary data
   matched_drivers <- 0
@@ -248,6 +249,7 @@ read_f1_input_file <- function(file_path) {
     
     if (length(captain_idx) > 0) {
       driver_data$CptSal[i] <- captain_salaries$Salary[captain_idx[1]]
+      driver_data$CptDFSID[i] <- captain_salaries$DFSID[captain_idx[1]]
     }
   }
   
@@ -1413,6 +1415,7 @@ convert_matrices_to_display <- function(results_matrices, driver_data, construct
       driver_results_list[[length(driver_results_list) + 1]] <- list(
         SimID = sim_ids[sim],
         DFSID = driver_data$DFSID[driver],
+        CptDFSID = driver_data$CptDFSID[driver],
         Name = driver_data$Name[driver],
         Team = driver_data$Team[driver],
         FinishPosition = results_matrices$drivers[sim, driver, 1],
@@ -2673,11 +2676,13 @@ server <- function(input, output, session) {
         
         # Get DFSID mappings
         driver_ids <- NULL
+        captain_ids <- NULL
         constructor_ids <- NULL
         
         # Get driver IDs if available
         if (!is.null(rv$simulation_results$driver_results)) {
           driver_ids <- unique(rv$simulation_results$driver_results[, c("Name", "DFSID")])
+          captain_ids <- unique(rv$simulation_results$driver_results[, c("Name", "CptDFSID")])
         }
         
         # Get constructor IDs if available
@@ -2685,15 +2690,14 @@ server <- function(input, output, session) {
           constructor_ids <- unique(rv$simulation_results$constructor_results[, c("Name", "DFSID")])
         }
         
-        # Add DFSID to Captain - with +20 to driver DFSID
-        if ("Captain" %in% names(download_data) && !is.null(driver_ids)) {
+        # Add DFSID to Captain - use actual captain DFSID from salaries
+        if ("Captain" %in% names(download_data) && !is.null(captain_ids)) {
           for (i in 1:nrow(download_data)) {
             name <- download_data$Captain[i]
             if (!is.na(name)) {
-              match_idx <- which(driver_ids$Name == name)
+              match_idx <- which(captain_ids$Name == name)
               if (length(match_idx) > 0) {
-                driver_dfsid <- driver_ids$DFSID[match_idx[1]]
-                captain_dfsid <- driver_dfsid + 30  # Add 20 to get captain DFSID
+                captain_dfsid <- captain_ids$CptDFSID[match_idx[1]]
                 download_data$Captain[i] <- paste0(name, " (", captain_dfsid, ")")
               }
             }
@@ -2777,7 +2781,7 @@ server <- function(input, output, session) {
       })
     }
   )
-
+  
   output$downloadSimulationResults <- downloadHandler(
     filename = function() {
       paste("f1_full_simulation_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
@@ -3273,11 +3277,13 @@ server <- function(input, output, session) {
         
         # Get DFSID mappings
         driver_ids <- NULL
+        captain_ids <- NULL
         constructor_ids <- NULL
         
         # Get driver IDs if available
         if (!is.null(rv$simulation_results$driver_results)) {
           driver_ids <- unique(rv$simulation_results$driver_results[, c("Name", "DFSID")])
+          captain_ids <- unique(rv$simulation_results$driver_results[, c("Name", "CptDFSID")])
         }
         
         # Get constructor IDs if available
@@ -3285,15 +3291,14 @@ server <- function(input, output, session) {
           constructor_ids <- unique(rv$simulation_results$constructor_results[, c("Name", "DFSID")])
         }
         
-        # Add DFSID to Captain - with +20 to driver DFSID
-        if ("Captain" %in% names(download_data) && !is.null(driver_ids)) {
+        # Add DFSID to Captain - use actual captain DFSID from salaries
+        if ("Captain" %in% names(download_data) && !is.null(captain_ids)) {
           for (i in 1:nrow(download_data)) {
             name <- download_data$Captain[i]
             if (!is.na(name)) {
-              match_idx <- which(driver_ids$Name == name)
+              match_idx <- which(captain_ids$Name == name)
               if (length(match_idx) > 0) {
-                driver_dfsid <- driver_ids$DFSID[match_idx[1]]
-                captain_dfsid <- driver_dfsid + 20  # Add 20 to get captain DFSID
+                captain_dfsid <- captain_ids$CptDFSID[match_idx[1]]
                 download_data$Captain[i] <- paste0(name, " (", captain_dfsid, ")")
               }
             }
