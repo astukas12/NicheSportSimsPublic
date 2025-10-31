@@ -12,7 +12,7 @@ library(memoise)
 library(shinycssloaders)
 library(shinyjs)
 library(later)
-
+library(Matrix)
 
 custom_css <- "
   /* Override dashboard header colors */
@@ -1432,10 +1432,12 @@ analyze_simulation_accuracy <- function(sim_results, input_data) {
   return(results)
 }
 
-# Simplified contest simulation - fixed setkey issue
-simulate_double_up_contest <- function(optimal_lineups, simulation_results, platform = "DK", num_contests = 100) {
-  cat("Starting vectorized double-up contest simulation...\n")
+simulate_double_up_contest <- function(optimal_lineups, simulation_results, 
+                                       platform = "DK", num_contests = 100) {
   
+  cat("Starting optimized double-up contest simulation...\n")
+  
+  # Platform-specific setup
   if (platform == "DK") {
     fantasy_col <- "DKFantasyPoints"
     driver_cols <- paste0("Driver", 1:6)
@@ -1457,40 +1459,56 @@ simulate_double_up_contest <- function(optimal_lineups, simulation_results, plat
   
   cat(sprintf("Processing %d lineups across %d simulations\n", n_lineups, n_sims))
   
-  # Pre-calculate all lineup scores efficiently (same as your current code)
-  cat("Pre-calculating lineup scores...\n")
-  lineup_scores <- matrix(0, nrow = n_lineups, ncol = n_sims)
+  # ========================================================================
+  # OPTIMIZATION: Build score matrix with single pass through data
+  # ========================================================================
+  cat("Building score matrix...\n")
   
-  for (s in 1:n_sims) {
-    sim_data <- simulation_results[SimID == sim_ids[s]]
-    
-    for (i in 1:n_lineups) {
-      lineup_drivers <- unlist(optimal_lineups[i, ..driver_cols])
-      
-      total_score <- 0
-      for (d in 1:roster_size) {
-        driver_match <- sim_data[get(name_col) == lineup_drivers[d]]
-        if (nrow(driver_match) > 0) {
-          total_score <- total_score + driver_match[[fantasy_col]][1]
-        }
-      }
-      lineup_scores[i, s] <- total_score
-    }
-    
-    if (s %% 50 == 0) {
-      cat(sprintf("Pre-calc progress: %d/%d simulations\n", s, n_sims))
-    }
+  all_drivers <- unique(simulation_results[[name_col]])
+  n_drivers <- length(all_drivers)
+  
+  score_matrix <- matrix(0, nrow = n_drivers, ncol = n_sims)
+  rownames(score_matrix) <- all_drivers
+  colnames(score_matrix) <- as.character(sim_ids)
+  
+  for (i in seq_along(sim_ids)) {
+    sim_data <- simulation_results[SimID == sim_ids[i]]
+    driver_indices <- match(sim_data[[name_col]], all_drivers)
+    score_matrix[driver_indices, i] <- sim_data[[fantasy_col]]
   }
   
-  # Field sampling weights
+  # ========================================================================
+  # OPTIMIZATION: Build lineup-driver mapping matrix
+  # ========================================================================
+  cat("Building lineup-driver mapping...\n")
+  
+  lineup_drivers_list <- lapply(1:n_lineups, function(i) {
+    unlist(optimal_lineups[i, ..driver_cols], use.names = FALSE)
+  })
+  
+  lineup_driver_matrix <- Matrix(0, nrow = n_lineups, ncol = n_drivers, sparse = TRUE)
+  
+  for (i in 1:n_lineups) {
+    driver_indices <- match(lineup_drivers_list[[i]], all_drivers)
+    driver_indices <- driver_indices[!is.na(driver_indices)]
+    lineup_driver_matrix[i, driver_indices] <- 1
+  }
+  
+  # ========================================================================
+  # OPTIMIZATION: Matrix multiplication for ALL lineup scores at once
+  # ========================================================================
+  cat("Calculating all lineup scores via matrix multiplication...\n")
+  lineup_scores <- as.matrix(lineup_driver_matrix %*% score_matrix)
+  
+  # ========================================================================
+  # CONTEST SIMULATION (unchanged - already efficient)
+  # ========================================================================
+  cat("Running contest simulations...\n")
+  
   field_weights <- optimal_lineups$CumulativeOwnership
   field_weights[is.na(field_weights)] <- min(field_weights, na.rm = TRUE)
   field_weights <- field_weights / sum(field_weights)
   
-  # VECTORIZED contest simulation - this is the key improvement
-  cat("Running vectorized contest simulations...\n")
-  
-  # Pre-allocate results
   wins <- integer(n_lineups)
   total_contests <- integer(n_lineups)
   
@@ -1499,27 +1517,23 @@ simulate_double_up_contest <- function(optimal_lineups, simulation_results, plat
   completed <- 0
   
   for (s in 1:n_sims) {
-    sim_scores <- lineup_scores[, s]  # Get all lineup scores for this simulation
+    sim_scores <- lineup_scores[, s]
     
     for (contest in 1:contests_per_sim) {
-      # Generate field (49 lineups)
       field_indices <- sample(1:n_lineups, 49, prob = field_weights, replace = TRUE)
       field_scores <- sim_scores[field_indices]
       
-      # VECTORIZED: Calculate cash threshold once
-      cash_threshold <- quantile(field_scores, 0.5)  # 50th percentile for double-up
+      cash_threshold <- quantile(field_scores, 0.5, names = FALSE)
       
-      # VECTORIZED: Test all lineups at once against this threshold
       lineup_cashes <- sim_scores >= cash_threshold
       
-      # Update counts vectorized
       wins <- wins + as.integer(lineup_cashes)
       total_contests <- total_contests + 1
       
       completed <- completed + 1
-      if (completed %% 25 == 0 || completed == total_iterations) {
+      if (completed %% 50 == 0 || completed == total_iterations) {
         progress_pct <- round((completed / total_iterations) * 100, 1)
-        cat(sprintf("Contest progress: %s%% (%d/%d contests)\n", progress_pct, completed, total_iterations))
+        cat(sprintf("Contest progress: %s%% (%d/%d)\n", progress_pct, completed, total_iterations))
       }
     }
   }
@@ -1535,7 +1549,7 @@ simulate_double_up_contest <- function(optimal_lineups, simulation_results, plat
   
   setorder(final_results, -WinRate)
   
-  cat("Vectorized contest simulation completed!\n")
+  cat("Optimized contest simulation completed!\n")
   return(as.data.frame(final_results))
 }
 
