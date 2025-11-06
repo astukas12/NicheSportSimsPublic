@@ -630,6 +630,115 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
   ))
 }
 
+calculate_cut_distribution <- function(cut_probs) {
+  n_players <- length(cut_probs)
+  
+  # Calculate probability of exactly k players making cut
+  exact_probs <- numeric(n_players + 1)
+  names(exact_probs) <- paste0("Exactly_", 0:n_players)
+  
+  # Calculate probability of at least k players making cut
+  atleast_probs <- numeric(n_players + 1)
+  names(atleast_probs) <- paste0("AtLeast_", 0:n_players)
+  
+  # Use dynamic programming for efficiency
+  # dp[i][j] = probability that exactly j of first i players make cut
+  dp <- matrix(0, nrow = n_players + 1, ncol = n_players + 1)
+  dp[1, 1] <- 1  # 0 players, 0 cuts
+  
+  for (i in 1:n_players) {
+    for (j in 0:i) {
+      if (j == 0) {
+        # No cuts made
+        dp[i + 1, j + 1] <- dp[i, j + 1] * (1 - cut_probs[i])
+      } else if (j == i) {
+        # All cuts made
+        dp[i + 1, j + 1] <- dp[i, j] * cut_probs[i]
+      } else {
+        # Some cuts made
+        dp[i + 1, j + 1] <- dp[i, j + 1] * (1 - cut_probs[i]) + dp[i, j] * cut_probs[i]
+      }
+    }
+  }
+  
+  # Extract exact probabilities
+  for (k in 0:n_players) {
+    exact_probs[k + 1] <- dp[n_players + 1, k + 1]
+  }
+  
+  # Calculate at least probabilities
+  for (k in 0:n_players) {
+    atleast_probs[k + 1] <- sum(exact_probs[(k + 1):(n_players + 1)])
+  }
+  
+  return(list(exact = exact_probs, atleast = atleast_probs))
+}
+
+# -----------------------------------------------------------------------------
+# 2. ADD THIS NEW FUNCTION - Add cut metrics to lineups
+# -----------------------------------------------------------------------------
+add_cut_metrics_to_lineups <- function(lineups, player_data, platform = "dk") {
+  if(is.null(lineups) || nrow(lineups) == 0) {
+    return(lineups)
+  }
+  
+  # Ensure we have Cut column in player data
+  if(!"Cut" %in% names(player_data)) {
+    warning("No Cut column found in player data. Skipping cut metrics.")
+    lineups$ExpectedCuts <- NA
+    lineups$AtLeast6 <- NA
+    lineups$AtLeast5 <- NA
+    lineups$AtLeast4 <- NA
+    return(lineups)
+  }
+  
+  # Create lookup table for cut probabilities
+  cut_lookup <- setNames(player_data$Cut, player_data$Name)
+  
+  # Determine roster size based on platform
+  roster_size <- if(platform == "dk") 6 else 6
+  player_cols <- paste0("Player", 1:roster_size)
+  
+  # Initialize cut metric columns
+  lineups$ExpectedCuts <- 0
+  lineups$AtLeast6 <- 0
+  lineups$AtLeast5 <- 0
+  lineups$AtLeast4 <- 0
+  
+  # Calculate cut metrics for each lineup
+  for(i in 1:nrow(lineups)) {
+    # Get player names from lineup
+    lineup_players <- unlist(lineups[i, player_cols])
+    lineup_players <- lineup_players[!is.na(lineup_players)]
+    
+    # Get cut probabilities for these players
+    cut_probs <- numeric(length(lineup_players))
+    for(j in 1:length(lineup_players)) {
+      player_name <- lineup_players[j]
+      if(player_name %in% names(cut_lookup)) {
+        cut_probs[j] <- cut_lookup[player_name]
+      } else {
+        cut_probs[j] <- 0.80  # Default if not found
+      }
+    }
+    
+    # Calculate expected cuts (simple sum)
+    lineups$ExpectedCuts[i] <- sum(cut_probs)
+    
+    # Calculate exact cut distribution probabilities
+    if(length(cut_probs) > 0) {
+      cut_dist <- calculate_cut_distribution(cut_probs)
+      
+      # Extract the "at least" probabilities and convert to percentage
+      lineups$AtLeast6[i] <- cut_dist$atleast["AtLeast_6"] * 100
+      lineups$AtLeast5[i] <- cut_dist$atleast["AtLeast_5"] * 100
+      lineups$AtLeast4[i] <- cut_dist$atleast["AtLeast_4"] * 100
+    }
+  }
+  
+  return(lineups)
+}
+
 analyze_golf_finishing_positions <- function(sim_results, cut_line = 65, no_cut = FALSE) {
   setDT(sim_results)
   
@@ -1331,7 +1440,7 @@ find_fd_golf_optimal_lineups <- function(sim_data, k = 5) {
   return(lineup_results)
 }
 
-count_dk_golf_optimal_lineups <- function(sim_results) {
+count_dk_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   # Create data.table for better performance
   sim_results_dt <- as.data.table(sim_results)
   
@@ -1449,13 +1558,18 @@ count_dk_golf_optimal_lineups <- function(sim_results) {
     result$GeometricMeanOwnership <- 0
   }
   
+  # **NEW: Add cut metrics if player_data provided**
+  if(!is.null(player_data)) {
+    message("Calculating cut metrics for lineups...")
+    result <- add_cut_metrics_to_lineups(result, player_data, platform = "dk")
+  }
+  
   cat(sprintf("Generated %d total optimal lineups\n", nrow(result)))
   
   return(result)
 }
 
-# 2. Replace your count_fd_golf_optimal_lineups function with this:
-count_fd_golf_optimal_lineups <- function(sim_results) {
+count_fd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   # Create data.table for better performance
   sim_results_dt <- as.data.table(sim_results)
   sim_results_dt <- sim_results_dt[FDSalary > 0]
@@ -1546,7 +1660,7 @@ count_fd_golf_optimal_lineups <- function(sim_results) {
       .groups = 'drop'
     ) %>%
     arrange(desc(Top1Count), desc(Top5Count)) %>% 
-     slice_head(n = 10000)
+    slice_head(n = 10000)
   
   # Split lineup string into player columns
   player_cols <- do.call(rbind, strsplit(lineup_counts$Lineup, "\\|"))
@@ -1572,6 +1686,12 @@ count_fd_golf_optimal_lineups <- function(sim_results) {
   if(!"CumulativeOwnership" %in% names(result)) {
     result$CumulativeOwnership <- 0
     result$GeometricMeanOwnership <- 0
+  }
+  
+  # **NEW: Add cut metrics if player_data provided**
+  if(!is.null(player_data)) {
+    message("Calculating cut metrics for lineups...")
+    result <- add_cut_metrics_to_lineups(result, player_data, platform = "fd")
   }
   
   cat(sprintf("Generated %d total optimal lineups\n", nrow(result)))
@@ -1604,6 +1724,22 @@ calculate_golf_filtered_pool_rates <- function(optimal_lineups, filters, platfor
   if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
     filtered_lineups <- filtered_lineups[!is.na(Top5Count) & Top5Count >= filters$min_top5_count]
   }
+  
+  if (!is.null(filters$min_atleast6_prob) && filters$min_atleast6_prob > 0 && 
+           "AtLeast6" %in% names(filtered_lineups)) {
+         filtered_lineups <- filtered_lineups[!is.na(AtLeast6) & AtLeast6 >= filters$min_atleast6_prob]
+       }
+       
+       if (!is.null(filters$min_atleast5_prob) && filters$min_atleast5_prob > 0 && 
+           "AtLeast5" %in% names(filtered_lineups)) {
+         filtered_lineups <- filtered_lineups[!is.na(AtLeast5) & AtLeast5 >= filters$min_atleast5_prob]
+       }
+       
+       if (!is.null(filters$min_expected_cuts) && filters$min_expected_cuts > 0 && 
+           "ExpectedCuts" %in% names(filtered_lineups)) {
+         filtered_lineups <- filtered_lineups[!is.na(ExpectedCuts) & ExpectedCuts >= filters$min_expected_cuts]
+       }
+      
   
   if(platform == "dk") {
     if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && 
@@ -2485,6 +2621,9 @@ server <- function(input, output, session) {
     })
   })
   
+  
+  
+  
   # Upload content
   output$upload_content <- renderUI({
     if (rv$file_uploaded) {
@@ -2659,6 +2798,8 @@ server <- function(input, output, session) {
     contentType = "text/csv"
   )
   
+
+  
   output$dk_filtered_pool_size <- renderText({
     if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
       return("Number of lineups in filtered pool: 0")
@@ -2727,10 +2868,17 @@ server <- function(input, output, session) {
     
     display_data <- as.data.frame(rv$dk_optimal_lineups)
     
+    if(nrow(display_data) > 1000) {
+      display_data <- display_data %>%
+        arrange(desc(Top1Count), desc(Top5Count)) %>%
+        head(1000)
+    }
+    
     # Ensure we have all expected columns
     expected_cols <- c(paste0("Player", 1:DK_ROSTER_SIZE), 
                        "Top1Count", "Top2Count", "Top3Count", "Top5Count", 
-                       "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
+                       "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership",
+                       "ExpectedCuts", "AtLeast6", "AtLeast5", "AtLeast4")
     
     # Keep only columns that exist
     cols_to_keep <- intersect(expected_cols, names(display_data))
@@ -3758,7 +3906,8 @@ output$download_fd_random_lineups <- downloadHandler(
       # Calculate optimal lineups
       setProgress(0.2, detail = "Finding optimal lineups...")
       rv$dk_optimal_lineups <- tryCatch({
-        count_dk_golf_optimal_lineups(rv$simulation_results)
+        count_dk_golf_optimal_lineups(rv$simulation_results,
+                                      player_data = rv$processed_data$players)
       }, error = function(e) {
         message("Error finding optimal lineups: ", e$message)
         removeModal()
@@ -3857,7 +4006,8 @@ output$download_fd_random_lineups <- downloadHandler(
       
       setProgress(0.2, detail = "Finding optimal lineups...")
       rv$fd_optimal_lineups <- tryCatch({
-        count_fd_golf_optimal_lineups(rv$simulation_results)
+        count_fd_golf_optimal_lineups(rv$simulation_results,
+                                      player_data = rv$processed_data$players)
       }, error = function(e) {
         removeModal()
         showModal(modalDialog(title = "Error", paste("Error:", e$message), easyClose = TRUE))
@@ -4086,7 +4236,10 @@ output$download_fd_random_lineups <- downloadHandler(
                            if(length(geom_vals) > 0) c(min(geom_vals), max(geom_vals)) else c(0, 100)
                          } else c(0, 100)
                        },
-                       excluded_players = if(!is.null(input$dk_excluded_players)) input$dk_excluded_players else character(0)
+                       excluded_players = if(!is.null(input$dk_excluded_players)) input$dk_excluded_players else character(0),
+                       min_atleast6_prob = if(!is.null(input$dk_min_atleast6_prob)) input$dk_min_atleast6_prob else 0,
+                       min_atleast5_prob = if(!is.null(input$dk_min_atleast5_prob)) input$dk_min_atleast5_prob else 0,
+                       min_expected_cuts = if(!is.null(input$dk_min_expected_cuts)) input$dk_min_expected_cuts else 0
                      )
                      
                      # Calculate filtered pool rates
@@ -4249,6 +4402,17 @@ output$download_fd_random_lineups <- downloadHandler(
                                       min = dk_geom_range[1], max = dk_geom_range[2], 
                                       value = dk_geom_range, step = 1, post = "%"))
               ),
+              fluidRow(
+                   column(4, sliderInput("dk_min_atleast6_prob", 
+                                        "Min Prob All 6 Make Cut:", 
+                                        min = 0, max = 100, value = 0, step = 5, post = "%")),
+                   column(4, sliderInput("dk_min_atleast5_prob", 
+                                         "Min Prob At Least 5 Make Cut:", 
+                                         min = 0, max = 100, value = 0, step = 5, post = "%")),
+                   column(4, sliderInput("dk_min_expected_cuts", 
+                                         "Min Expected Cuts:", 
+                                         min = 3.0, max = 6.0, value = 4.0, step = 0.1))
+                 ),
               fluidRow(
                 column(6, selectizeInput("dk_excluded_players", "Exclude Players:", choices = NULL, multiple = TRUE,
                                          options = list(plugins = list('remove_button'), placeholder = 'Click to select players to exclude'))),
