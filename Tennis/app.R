@@ -144,6 +144,16 @@ SCORE_HISTORY <- load_historical_data()
 DK_ROSTER_SIZE <- 6
 DK_SALARY_CAP <- 50000
 
+# Detect contest format from data
+detect_contest_format <- function(data) {
+  has_showdown_cols <- all(c("CID", "AID", "PID") %in% names(data))
+  if (has_showdown_cols) {
+    return("showdown")
+  } else {
+    return("classic")
+  }
+}
+
 
 # Helper functions for odds conversion
 odds_to_probability <- function(odds) {
@@ -551,7 +561,7 @@ calculate_lineup_total_ew <- function(lineup_players, individual_ew_metrics, pla
   return(total_ew)
 }
 
-run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000) {
+run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000, contest_format = "classic") {
   # Start timing
   overall_start_time <- Sys.time()
   cat("\n=== BATCH SIMULATION STARTED ===\n")
@@ -888,6 +898,29 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
   cat(sprintf("Generated %s simulation results\n", format(nrow(final_results), big.mark = ",")))
   cat("Timestamp:", format(overall_end_time, "%Y-%m-%d %H:%M:%S"), "\n\n")
   
+  # If showdown format, expand results with position multipliers
+  if (contest_format == "showdown") {
+    cat("=== EXPANDING FOR SHOWDOWN FORMAT ===\n")
+    showdown_start <- Sys.time()
+    
+    final_results <- final_results %>%
+      crossing(Position = c("P", "ACPT", "CPT")) %>%
+      mutate(
+        Multiplier = case_when(
+          Position == "P" ~ 1.0,
+          Position == "ACPT" ~ 1.25,
+          Position == "CPT" ~ 1.5
+        ),
+        OriginalScore = Score,
+        Score = Score * Multiplier,
+        PlayerPosition = paste0(Player, "_", Position)
+      )
+    
+    showdown_elapsed <- difftime(Sys.time(), showdown_start, units = "secs")
+    cat(sprintf("Showdown expansion completed in %.2f seconds\n", as.numeric(showdown_elapsed)))
+    cat(sprintf("Expanded to %s position-specific results\n", format(nrow(final_results), big.mark = ",")))
+  }
+  
   return(final_results)
 }
 
@@ -903,32 +936,36 @@ calculate_player_exposure <- function(optimal_lineups, player_stats, random_line
   if(!is.null(player_stats)) setDT(player_stats)
   if(!is.null(random_lineups)) setDT(random_lineups)
   
-  # Determine player column naming pattern - handle both "Name1" and "Player1" formats
-  name_pattern <- if(any(grepl("^Name[1-6]$", names(optimal_lineups)))) {
-    "^Name[1-6]$"
+  # Determine player column naming pattern - handle classic and showdown formats
+  if(any(c("CPT", "ACPT", "P") %in% names(optimal_lineups))) {
+    # Showdown format
+    player_cols <- c("CPT", "ACPT", "P")
+  } else if(any(grepl("^Name[1-6]$", names(optimal_lineups)))) {
+    # Classic with Name columns
+    player_cols <- grep("^Name[1-6]$", names(optimal_lineups), value = TRUE)
   } else if(any(grepl("^Player[1-6]$", names(optimal_lineups)))) {
-    "^Player[1-6]$"
+    # Classic with Player columns
+    player_cols <- grep("^Player[1-6]$", names(optimal_lineups), value = TRUE)
   } else {
     stop("Could not find player columns in optimal lineups")
   }
-  
-  player_cols <- grep(name_pattern, names(optimal_lineups), value = TRUE)
   
   # Get all players from both optimal and random lineups
   all_players_optimal <- unique(unlist(optimal_lineups[, ..player_cols]))
   
   if(!is.null(random_lineups)) {
     # Determine player column pattern in random lineups
-    random_pattern <- if(any(grepl("^Name[1-6]$", names(random_lineups)))) {
-      "^Name[1-6]$"
+    if(any(c("CPT", "ACPT", "P") %in% names(random_lineups))) {
+      random_player_cols <- c("CPT", "ACPT", "P")
+    } else if(any(grepl("^Name[1-6]$", names(random_lineups)))) {
+      random_player_cols <- grep("^Name[1-6]$", names(random_lineups), value = TRUE)
     } else if(any(grepl("^Player[1-6]$", names(random_lineups)))) {
-      "^Player[1-6]$"
+      random_player_cols <- grep("^Player[1-6]$", names(random_lineups), value = TRUE)
     } else {
-      NULL
+      random_player_cols <- NULL
     }
     
-    if(!is.null(random_pattern)) {
-      random_player_cols <- grep(random_pattern, names(random_lineups), value = TRUE)
+    if(!is.null(random_player_cols)) {
       all_players_random <- unique(unlist(random_lineups[, ..random_player_cols]))
       all_players <- unique(c(all_players_optimal, all_players_random))
     } else {
@@ -1527,8 +1564,18 @@ analyze_player_scores <- function(simulation_results, dk_data) {
     stop("Simulation results must include Player and Score columns")
   }
   
+  # For showdown, filter to base position only to avoid triple-counting
+  if ("Position" %in% names(simulation_results)) {
+    # Showdown format - use only P (1x) scores for analysis
+    analysis_data <- simulation_results %>%
+      filter(Position == "P")
+  } else {
+    # Classic format
+    analysis_data <- simulation_results
+  }
+  
   # Analyze scores by player
-  player_stats <- simulation_results %>%
+  player_stats <- analysis_data %>%
     group_by(Player) %>%
     summarize(
       AvgScore = mean(Score, na.rm = TRUE),
@@ -1538,13 +1585,20 @@ analyze_player_scores <- function(simulation_results, dk_data) {
       Max = max(Score, na.rm = TRUE),
       n_samples = n(),
       WinPct = mean(Result == "Winner", na.rm = TRUE),
-      StraightSetsPct = mean(Result == "Winner" & Outcome == "SS", na.rm = TRUE)
+      StraightSetsPct = mean(Result == "Winner" & Outcome == "SS", na.rm = TRUE),
+      .groups = 'drop'
     )
   
-  # Add salary info
+  # Add salary info - only use columns that exist
+  dk_cols <- c("Name", "Salary", "ML")
+  
+  # Add optional columns if they exist
+  if ("ID" %in% names(dk_data)) dk_cols <- c(dk_cols, "ID")
+  if ("DKOwn" %in% names(dk_data)) dk_cols <- c(dk_cols, "DKOwn")
+  
   player_stats <- left_join(
     player_stats,
-    dk_data[, c("Name", "ID", "DKOwn","Salary", "ML")],
+    dk_data[, dk_cols],
     by = c("Player" = "Name")
   )
   
@@ -2152,6 +2206,183 @@ expand_lineup_details <- function(lineup_stats, player_data, ew_metrics = NULL) 
   
   return(expanded_lineups)
 }
+
+# Showdown-specific functions
+optimize_showdown_lineups <- function(sim_dt, dk_data, n_optimal = 5000) {
+  
+  cat("\n=== SHOWDOWN LINEUP OPTIMIZATION ===\n")
+  start_time <- Sys.time()
+  
+  # Get unique players
+  players <- unique(dk_data$Name)
+  n_players <- length(players)
+  
+  cat(sprintf("Optimizing showdown lineups from %d players\n", n_players))
+  
+  # Calculate average fantasy points per player from simulations (use base 1x scores)
+  player_avg <- sim_dt %>%
+    filter(Position == "P") %>%
+    group_by(Player) %>%
+    summarise(AvgPoints = mean(Score), .groups = 'drop')
+  
+  # Get salaries
+  player_salaries <- dk_data %>%
+    select(Name, Salary) %>%
+    distinct()
+  
+  # Combine
+  player_data <- left_join(player_avg, player_salaries, by = c("Player" = "Name"))
+  
+  # Generate ALL possible showdown combinations
+  cat("Enumerating all valid showdown lineups...\n")
+  
+  all_valid_lineups <- list()
+  
+  # For each possible CPT
+  for(i in 1:n_players) {
+    cpt_player <- players[i]
+    base_salary <- player_data$Salary[player_data$Player == cpt_player]
+    cpt_salary <- round((base_salary * 1.5) / 100) * 100  # Round to nearest 100
+    cpt_points <- player_data$AvgPoints[player_data$Player == cpt_player] * 1.5
+    
+    # For each possible ACPT (excluding CPT)
+    for(j in 1:n_players) {
+      if(i == j) next  # Same player
+      
+      acpt_player <- players[j]
+      base_salary <- player_data$Salary[player_data$Player == acpt_player]
+      acpt_salary <- round((base_salary * 1.25) / 100) * 100  # Round to nearest 100
+      acpt_points <- player_data$AvgPoints[player_data$Player == acpt_player] * 1.25
+      
+      # For each possible P (excluding CPT and ACPT)
+      for(k in 1:n_players) {
+        if(k == i || k == j) next  # Same as CPT or ACPT
+        
+        p_player <- players[k]
+        p_salary <- player_data$Salary[player_data$Player == p_player] * 1.0
+        p_points <- player_data$AvgPoints[player_data$Player == p_player] * 1.0
+        
+        # Check salary constraint
+        total_salary <- cpt_salary + acpt_salary + p_salary
+        
+        if(total_salary <= DK_SALARY_CAP) {
+          total_points <- cpt_points + acpt_points + p_points
+          
+          lineup_id <- paste(cpt_player, acpt_player, p_player, sep = "|")
+          
+          all_valid_lineups[[lineup_id]] <- list(
+            CPT = cpt_player,
+            ACPT = acpt_player,
+            P = p_player,
+            TotalSalary = total_salary,
+            TotalPoints = total_points
+          )
+        }
+      }
+    }
+  }
+  
+  cat(sprintf("Found %d valid showdown lineups under salary cap\n", length(all_valid_lineups)))
+  
+  # Sort by total points and take top n_optimal
+  lineups_df <- do.call(rbind, lapply(all_valid_lineups, function(x) {
+    data.frame(
+      CPT = x$CPT,
+      ACPT = x$ACPT,
+      P = x$P,
+      TotalSalary = x$TotalSalary,
+      TotalPoints = x$TotalPoints,
+      stringsAsFactors = FALSE
+    )
+  }))
+  
+  lineups_df <- lineups_df[order(-lineups_df$TotalPoints), ]
+  
+  # Take top n_optimal or all if fewer exist
+  n_to_keep <- min(n_optimal, nrow(lineups_df))
+  lineups_df <- lineups_df[1:n_to_keep, ]
+  
+  # Convert to data.table and add required columns
+  lineups_dt <- as.data.table(lineups_df)
+  lineups_dt[, LineupID := paste(CPT, ACPT, P, sep = "|")]
+  lineups_dt[, Top1Count := 0L]
+  lineups_dt[, Top3Count := 0L]
+  lineups_dt[, Top5Count := 0L]
+  
+  elapsed <- difftime(Sys.time(), start_time, units = "secs")
+  cat(sprintf("Showdown optimization completed in %.1f seconds\n", as.numeric(elapsed)))
+  cat(sprintf("Kept top %d lineups for analysis\n", nrow(lineups_dt)))
+  
+  return(lineups_dt)
+}
+
+analyze_showdown_lineups <- function(lineups_dt, sim_dt) {
+  
+  cat("\n=== ANALYZING SHOWDOWN LINEUPS ===\n")
+  start_time <- Sys.time()
+  
+  total_lineups <- nrow(lineups_dt)
+  total_iterations <- max(sim_dt$Iteration)
+  
+  cat(sprintf("Analyzing %d lineups across %d iterations\n", total_lineups, total_iterations))
+  
+  # Create a matrix of lineup scores for all iterations
+  lineup_scores_matrix <- matrix(0, nrow = total_lineups, ncol = total_iterations)
+  
+  # Pre-fetch all player-position scores for efficiency
+  sim_dt_wide <- sim_dt %>%
+    select(Iteration, Player, Position, Score) %>%
+    pivot_wider(names_from = c(Player, Position), 
+                values_from = Score,
+                names_sep = "_",
+                values_fill = 0)
+  
+  # For each lineup, calculate total score across all iterations
+  for(i in 1:nrow(lineups_dt)) {
+    lineup <- lineups_dt[i,]
+    
+    cpt_col <- paste0(lineup$CPT, "_CPT")
+    acpt_col <- paste0(lineup$ACPT, "_ACPT")
+    p_col <- paste0(lineup$P, "_P")
+    
+    if(all(c(cpt_col, acpt_col, p_col) %in% names(sim_dt_wide))) {
+      lineup_scores_matrix[i, ] <- sim_dt_wide[[cpt_col]] + 
+        sim_dt_wide[[acpt_col]] + 
+        sim_dt_wide[[p_col]]
+    }
+    
+    if(i %% 500 == 0) {
+      cat(sprintf("Calculated scores for %d/%d lineups (%.1f%%)\n", 
+                  i, total_lineups, (i/total_lineups)*100))
+    }
+  }
+  
+  cat("\nRanking lineups in each iteration...\n")
+  
+  # For each iteration, rank lineups and count top finishes
+  for(iter_idx in 1:total_iterations) {
+    iter_scores <- lineup_scores_matrix[, iter_idx]
+    ranks <- rank(-iter_scores, ties.method = "min")
+    
+    lineups_dt[ranks == 1, Top1Count := Top1Count + 1]
+    lineups_dt[ranks <= 3, Top3Count := Top3Count + 1]
+    lineups_dt[ranks <= 5, Top5Count := Top5Count + 1]
+    
+    if(iter_idx %% 1000 == 0) {
+      cat(sprintf("Ranked iteration %d/%d (%.1f%%)\n", 
+                  iter_idx, total_iterations, (iter_idx/total_iterations)*100))
+    }
+  }
+  
+  # Sort by Top1Count, then Top3Count, then Top5Count
+  setorder(lineups_dt, -Top1Count, -Top3Count, -Top5Count)
+  
+  elapsed <- difftime(Sys.time(), start_time, units = "secs")
+  cat(sprintf("Analysis completed in %.1f seconds\n", as.numeric(elapsed)))
+  
+  return(lineups_dt)
+}
+
 # Define UI
 ui <- dashboardPage(
   skin = "blue",
@@ -2250,39 +2481,81 @@ ui <- dashboardPage(
               # Main results section - only shown when analysis is complete
               conditionalPanel(
                 condition = "output.optimization_complete === 'true'",
-                fluidRow(
-                  box(
-                    width = 12,
-                    title = "Strategy Selection & Weighted Scoring",
-                    status = "info",
-                    solidHeader = TRUE,
-                    
-                    # Strategy preset buttons
-                    fluidRow(
-                      column(12,
-                             h4("Quick Strategy Presets:"),
-                             div(style = "margin-bottom: 15px;",
-                                 actionButton("preset_cash", "Cash Game", class = "btn-success", style = "margin-right: 10px;"),
-                                 actionButton("preset_gpp", "GPP", class = "btn-warning", style = "margin-right: 10px;"),
-                                 actionButton("preset_se", "Single Entry", class = "btn-info", style = "margin-right: 10px;"),
-                                 actionButton("preset_custom", "Custom", class = "btn-secondary")
-                             )
+                
+                # Weighting box - ONLY for classic format
+                conditionalPanel(
+                  condition = "output.is_classic_format",
+                  fluidRow(
+                    box(
+                      width = 12,
+                      title = "Strategy Selection & Weighted Scoring",
+                      status = "info",
+                      solidHeader = TRUE,
+                      
+                      # Strategy preset buttons
+                      fluidRow(
+                        column(12,
+                               h4("Quick Strategy Presets:"),
+                               div(style = "margin-bottom: 15px;",
+                                   actionButton("preset_cash", "Cash Game", class = "btn-success", style = "margin-right: 10px;"),
+                                   actionButton("preset_gpp", "GPP", class = "btn-warning", style = "margin-right: 10px;"),
+                                   actionButton("preset_se", "Single Entry", class = "btn-info", style = "margin-right: 10px;"),
+                                   actionButton("preset_custom", "Custom", class = "btn-secondary")
+                               )
+                        )
+                      ),
+                      
+                      h4("Manual Weight Adjustment (0-100 scoring system):"),
+                      fluidRow(
+                        column(2, sliderInput("weight_totalew", "TotalEW Weight:", min = 0, max = 10, value = 2, step = 1)),
+                        column(2, sliderInput("weight_medianscore", "Median Score Weight:", min = 0, max = 10, value = 0, step = 1)),
+                        column(2, sliderInput("weight_score80th", "80th %ile Score Weight:", min = 0, max = 10, value = 0, step = 1)),
+                        column(2, sliderInput("weight_win6pct", "6-Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
+                        column(2, sliderInput("weight_win5pluspct", "5+ Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
+                        column(2, sliderInput("weight_top1count", "Top 1 Count Weight:", min = 0, max = 10, value = 1, step = 1))
+                      ),
+                      
+                      fluidRow(
+                        column(4, actionButton("apply_weights", "Apply Weights & Re-score", class = "btn-primary", style = "width: 100%;")),
+                        column(4, actionButton("reset_weights", "Reset to Defaults", class = "btn-warning", style = "width: 100%;"))
                       )
-                    ),
-                    
-                    h4("Manual Weight Adjustment (0-100 scoring system):"),
-                    fluidRow(
-                      column(2, sliderInput("weight_totalew", "TotalEW Weight:", min = 0, max = 10, value = 2, step = 1)),
-                      column(2, sliderInput("weight_medianscore", "Median Score Weight:", min = 0, max = 10, value = 0, step = 1)),
-                      column(2, sliderInput("weight_score80th", "80th %ile Score Weight:", min = 0, max = 10, value = 0, step = 1)),
-                      column(2, sliderInput("weight_win6pct", "6-Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
-                      column(2, sliderInput("weight_win5pluspct", "5+ Win % Weight:", min = 0, max = 10, value = 1, step = 1)),
-                      column(2, sliderInput("weight_top1count", "Top 1 Count Weight:", min = 0, max = 10, value = 1, step = 1))
-                    ),
-                    
-                    fluidRow(
-                      column(4, actionButton("apply_weights", "Apply Weights & Re-score", class = "btn-primary", style = "width: 100%;")),
-                      column(4, actionButton("reset_weights", "Reset to Defaults", class = "btn-warning", style = "width: 100%;"))
+                    )
+                  )
+                ),
+                
+                # Random lineup selector - ONLY for showdown format
+                conditionalPanel(
+                  condition = "!output.is_classic_format",
+                  fluidRow(
+                    box(
+                      width = 12,
+                      title = "Random Lineup Selection",
+                      status = "info",
+                      solidHeader = TRUE,
+                      fluidRow(
+                        column(4,
+                               numericInput("showdown_top_n", "Select from Top X Lineups:", 
+                                            value = 100, min = 1, max = 1000, step = 10)
+                        ),
+                        column(4,
+                               numericInput("showdown_num_lineups", "Number of Lineups to Generate:", 
+                                            value = 20, min = 1, max = 150, step = 1)
+                        ),
+                        column(4,
+                               div(style = "margin-top: 25px;",
+                                   actionButton("showdown_generate", "Generate Random Lineups", 
+                                                class = "btn-primary", style = "width: 100%;")
+                               )
+                        )
+                      ),
+                      fluidRow(
+                        column(12,
+                               div(style = "margin-top: 10px;",
+                                   downloadButton("download_showdown_random", "Download Random Lineups",
+                                                  style = "width: 100%;")
+                               )
+                        )
+                      )
                     )
                   )
                 ),
@@ -2417,7 +2690,8 @@ server <- function(input, output, session) {
     dk_random_lineups = NULL,
     file_uploaded = FALSE,
     simulation_complete = FALSE,
-    optimization_complete = FALSE  # Explicitly initialize to FALSE
+    optimization_complete = FALSE,  # Explicitly initialize to FALSE
+    contest_format = "classic"  # Track contest format (classic or showdown)
   )
   
   
@@ -2465,6 +2739,11 @@ server <- function(input, output, session) {
     return(result)
   })
   outputOptions(output, "optimization_complete", suspendWhenHidden = FALSE)
+  
+  output$is_classic_format <- reactive({
+    return(is.null(rv$contest_format) || rv$contest_format == "classic")
+  })
+  outputOptions(output, "is_classic_format", suspendWhenHidden = FALSE)
   
   # Handle score history file upload if needed
   observeEvent(input$score_history, {
@@ -2534,29 +2813,24 @@ server <- function(input, output, session) {
         })
       }
       
+      # Default surface to Hard (no dialog)
       if (!"Surface" %in% colnames(dk_data)) {
-        surface_input <- showModal(modalDialog(
-          title = "Surface Information",
-          "Please select the court surface for this slate:",
-          radioButtons("surface_input", NULL, 
-                       choices = c("Hard", "Clay", "Grass"),
-                       selected = "Hard"),
-          footer = tagList(
-            actionButton("confirm_surface", "Confirm")
-          ),
-          easyClose = FALSE
-        ))
-        
-        # Wait for user to confirm
-        observeEvent(input$confirm_surface, {
-          dk_data$Surface <- input$surface_input
-          removeModal()
-        })
+        dk_data$Surface <- "Hard"
       }
       
       # Store data
       rv$dk_data <- dk_data
       rv$file_uploaded <- TRUE
+      
+      # Detect contest format
+      rv$contest_format <- detect_contest_format(dk_data)
+      
+      # Show notification with format
+      showNotification(
+        paste0("Data loaded successfully! Format: ", toupper(rv$contest_format)),
+        type = "message",
+        duration = 5
+      )
       
       # Reset simulation flags
       rv$simulation_complete <- FALSE
@@ -2712,7 +2986,7 @@ server <- function(input, output, session) {
       
       # Step 1: Run match simulations
       incProgress(0.1, detail = "Simulating matches...")
-      simulation_results <- run_batch_simulation(rv$dk_data, rv$score_history, input$n_sims)
+      simulation_results <- run_batch_simulation(rv$dk_data, rv$score_history, input$n_sims, rv$contest_format)
       
       # Step 2: Analyze player projections
       incProgress(0.3, detail = "Calculating player projections...")
@@ -2723,47 +2997,72 @@ server <- function(input, output, session) {
       rv$player_projections <- player_projections
       rv$simulation_complete <- TRUE
       
-      # Step 3: Find optimal lineups
+      # Step 3: Find optimal lineups (format-specific)
       incProgress(0.5, detail = "Finding optimal lineups...")
-      optimal_lineups <- find_all_optimal_lineups(
-        rv$simulation_results, 
-        rv$dk_data,
-        rv$dk_data
-      )
       
-      # Step 4: Expand lineup details
-      incProgress(0.7, detail = "Processing lineup details...")
-      expanded_lineups <- expand_lineup_details(
-        optimal_lineups,
-        rv$dk_data,
-        NULL
-      )
-      
-      # Step 5: Calculate scores and rankings
-      incProgress(0.8, detail = "Calculating scores and rankings...")
-      rv$dk_optimal_lineups <- expanded_lineups
-      
-      # Calculate 0-100 scores instead of simple ranks
-      scored_lineups <- calculate_lineup_scores(expanded_lineups)
-      
-      # Calculate ownership metrics if available
-      scored_lineups <- calculate_ownership_metrics(scored_lineups, rv$dk_data)
-      
-      # Store the scored version
-      rv$dk_optimal_lineups_scored <- scored_lineups
-      
-      # Apply initial weighted scoring with default weights
-      default_weights <- list(
-        weight_totalew = 2,           
-        weight_medianscore = 0,       
-        weight_score80th = 0,         
-        weight_win6pct = 1,           
-        weight_win5pluspct = 1,       
-        weight_top1count = 1        
-      )
-      
-      rv$dk_optimal_lineups_ranked <- calculate_weighted_score(scored_lineups, default_weights)
-      rv$optimization_complete <- TRUE
+      if(rv$contest_format == "showdown") {
+        # Showdown optimization
+        optimal_lineups <- optimize_showdown_lineups(
+          sim_dt = simulation_results,
+          dk_data = rv$dk_data,
+          n_optimal = 5000
+        )
+        
+        # Analyze showdown lineups
+        incProgress(0.7, detail = "Analyzing showdown lineups...")
+        optimal_lineups <- analyze_showdown_lineups(
+          lineups_dt = optimal_lineups,
+          sim_dt = simulation_results
+        )
+        
+        # For showdown, scored and ranked are the same (no additional scoring needed)
+        rv$dk_optimal_lineups <- optimal_lineups
+        rv$dk_optimal_lineups_scored <- optimal_lineups
+        rv$dk_optimal_lineups_ranked <- optimal_lineups
+        rv$optimization_complete <- TRUE
+        
+      } else {
+        # Classic optimization
+        optimal_lineups <- find_all_optimal_lineups(
+          rv$simulation_results, 
+          rv$dk_data,
+          rv$dk_data
+        )
+        
+        # Step 4: Expand lineup details
+        incProgress(0.7, detail = "Processing lineup details...")
+        expanded_lineups <- expand_lineup_details(
+          optimal_lineups,
+          rv$dk_data,
+          NULL
+        )
+        
+        # Step 5: Calculate scores and rankings
+        incProgress(0.8, detail = "Calculating scores and rankings...")
+        rv$dk_optimal_lineups <- expanded_lineups
+        
+        # Calculate 0-100 scores instead of simple ranks
+        scored_lineups <- calculate_lineup_scores(expanded_lineups)
+        
+        # Calculate ownership metrics if available
+        scored_lineups <- calculate_ownership_metrics(scored_lineups, rv$dk_data)
+        
+        # Store the scored version
+        rv$dk_optimal_lineups_scored <- scored_lineups
+        
+        # Apply initial weighted scoring with default weights
+        default_weights <- list(
+          weight_totalew = 2,           
+          weight_medianscore = 0,       
+          weight_score80th = 0,         
+          weight_win6pct = 1,           
+          weight_win5pluspct = 1,       
+          weight_top1count = 1        
+        )
+        
+        rv$dk_optimal_lineups_ranked <- calculate_weighted_score(scored_lineups, default_weights)
+        rv$optimization_complete <- TRUE
+      }
       
       # Step 6: Calculate initial player exposure
       incProgress(0.9, detail = "Calculating player exposure...")
@@ -2775,7 +3074,7 @@ server <- function(input, output, session) {
       }
       
       # Update player selection dropdown and excluded players
-      if (!is.null(expanded_lineups)) {
+      if (!is.null(rv$dk_optimal_lineups)) {
         # Update player selection dropdown
         updateSelectizeInput(
           session,
@@ -2785,20 +3084,31 @@ server <- function(input, output, session) {
         )
         
         # Get unique players from all lineups for exclusion dropdown
-        player_cols <- grep("^Name[1-6]$", names(expanded_lineups), value = TRUE)
+        if(rv$contest_format == "showdown") {
+          # Showdown format
+          player_cols <- c("CPT", "ACPT", "P")
+        } else {
+          # Classic format
+          player_cols <- grep("^Name[1-6]$", names(rv$dk_optimal_lineups), value = TRUE)
+        }
+        
         all_players <- c()
         for(col in player_cols) {
-          all_players <- c(all_players, expanded_lineups[[col]])
+          if(col %in% names(rv$dk_optimal_lineups)) {
+            all_players <- c(all_players, rv$dk_optimal_lineups[[col]])
+          }
         }
         all_players <- unique(all_players[!is.na(all_players)])
         
         # Calculate pool exposure for each player
         pool_exposure <- sapply(all_players, function(player) {
-          player_appears <- logical(nrow(expanded_lineups))
+          player_appears <- logical(nrow(rv$dk_optimal_lineups))
           for(col in player_cols) {
-            player_appears <- player_appears | (expanded_lineups[[col]] == player)
+            if(col %in% names(rv$dk_optimal_lineups)) {
+              player_appears <- player_appears | (rv$dk_optimal_lineups[[col]] == player)
+            }
           }
-          exposure_pct <- (sum(player_appears) / nrow(expanded_lineups)) * 100
+          exposure_pct <- (sum(player_appears) / nrow(rv$dk_optimal_lineups)) * 100
           return(exposure_pct)
         })
         
@@ -3074,6 +3384,60 @@ server <- function(input, output, session) {
   
   
   output$optimal_lineups_table <- renderDT({
+    # Check for showdown format
+    if (!is.null(rv$contest_format) && rv$contest_format == "showdown") {
+      # SHOWDOWN DISPLAY
+      lineup_data <- if (!is.null(rv$dk_optimal_lineups_ranked)) {
+        rv$dk_optimal_lineups_ranked
+      } else {
+        rv$dk_optimal_lineups
+      }
+      
+      if (is.null(lineup_data) || nrow(lineup_data) == 0) {
+        return(datatable(
+          data.frame(Message = "No showdown lineups available."),
+          options = list(dom = "t", ordering = FALSE),
+          rownames = FALSE
+        ))
+      }
+      
+      display_data <- as.data.frame(lineup_data) %>%
+        select(CPT, ACPT, P, Top1Count, Top3Count, Top5Count, TotalSalary) %>%
+        mutate(
+          Top1Count = as.integer(Top1Count),
+          Top3Count = as.integer(Top3Count),
+          Top5Count = as.integer(Top5Count)
+        )
+      
+      dt <- datatable(
+        display_data,
+        options = list(
+          scrollX = TRUE,
+          pageLength = 50,
+          order = list(list(3, 'desc'))  # Sort by Top1Count
+        ),
+        colnames = c("Captain", "Asst Captain", "Player", "Top 1", "Top 3", "Top 5", "Salary"),
+        class = 'cell-border stripe',
+        rownames = FALSE
+      )
+      
+      # Style count columns with gold bars
+      for(col in c("Top1Count", "Top3Count", "Top5Count")) {
+        if(col %in% names(display_data)) {
+          dt <- dt %>% formatStyle(
+            col,
+            background = styleColorBar(c(0, max(display_data[[col]], na.rm = TRUE)), '#FFD700'),
+            backgroundSize = '98% 88%',
+            backgroundRepeat = 'no-repeat',
+            backgroundPosition = 'center'
+          )
+        }
+      }
+      
+      return(dt %>% formatCurrency('TotalSalary', currency = "$", digits = 0))
+    }
+    
+    # CLASSIC DISPLAY (original code follows)
     # Use ranked data if available, otherwise fall back to unranked
     lineup_data <- if (!is.null(rv$dk_optimal_lineups_ranked)) {
       rv$dk_optimal_lineups_ranked
@@ -3350,15 +3714,21 @@ server <- function(input, output, session) {
     req(rv$dk_optimal_lineups_ranked)
     
     if (!is.null(rv$dk_optimal_lineups_ranked)) {
-      # Get unique players from all lineups
-      player_cols <- grep("^Name[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
-      if(length(player_cols) == 0) {
-        player_cols <- grep("^Player[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
+      # Get unique players from all lineups - handle both formats
+      if(rv$contest_format == "showdown") {
+        player_cols <- c("CPT", "ACPT", "P")
+      } else {
+        player_cols <- grep("^Name[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
+        if(length(player_cols) == 0) {
+          player_cols <- grep("^Player[1-6]$", names(rv$dk_optimal_lineups_ranked), value = TRUE)
+        }
       }
       
       all_players <- c()
       for(col in player_cols) {
-        all_players <- c(all_players, rv$dk_optimal_lineups_ranked[[col]])
+        if(col %in% names(rv$dk_optimal_lineups_ranked)) {
+          all_players <- c(all_players, rv$dk_optimal_lineups_ranked[[col]])
+        }
       }
       all_players <- unique(all_players[!is.na(all_players)])
       
@@ -3367,7 +3737,9 @@ server <- function(input, output, session) {
       pool_exposure <- sapply(all_players, function(player) {
         player_appears <- logical(nrow(top_pool))
         for(col in player_cols) {
-          player_appears <- player_appears | (top_pool[[col]] == player)
+          if(col %in% names(top_pool)) {
+            player_appears <- player_appears | (top_pool[[col]] == player)
+          }
         }
         exposure_pct <- (sum(player_appears) / nrow(top_pool)) * 100
         return(exposure_pct)
@@ -3411,6 +3783,66 @@ server <- function(input, output, session) {
     
     # The output$weighted_pool_stats will automatically update due to this dependency
   })
+  
+  # Showdown random lineup generation
+  observeEvent(input$showdown_generate, {
+    req(rv$dk_optimal_lineups_ranked)
+    req(rv$contest_format == "showdown")
+    
+    top_n <- min(input$showdown_top_n, nrow(rv$dk_optimal_lineups_ranked))
+    num_lineups <- min(input$showdown_num_lineups, top_n)
+    
+    # Sample randomly from top N
+    top_lineups <- head(rv$dk_optimal_lineups_ranked, top_n)
+    sampled_indices <- sample(1:nrow(top_lineups), num_lineups, replace = FALSE)
+    
+    rv$dk_random_lineups <- top_lineups[sampled_indices, ]
+    
+    showNotification(
+      sprintf("Generated %d random lineups from top %d!", num_lineups, top_n),
+      type = "message"
+    )
+  })
+  
+  # Download handler for showdown random lineups
+  output$download_showdown_random <- downloadHandler(
+    filename = function() {
+      paste0("tennis_showdown_random_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
+        write.csv(data.frame(), file, row.names = FALSE)
+        return()
+      }
+      
+      lineups_df <- as.data.frame(rv$dk_random_lineups)
+      
+      # Add IDs based on position
+      get_showdown_id <- function(name, position) {
+        player_info <- rv$dk_data[rv$dk_data$Name == name, ]
+        if (nrow(player_info) > 0) {
+          id_col <- switch(position,
+                           "CPT" = "CID",
+                           "ACPT" = "AID",
+                           "P" = "PID")
+          if (id_col %in% names(player_info)) {
+            return(paste0(name, " (", player_info[[id_col]][1], ")"))
+          }
+        }
+        return(name)
+      }
+      
+      lineups_df$CPT <- sapply(lineups_df$CPT, function(x) get_showdown_id(x, "CPT"))
+      lineups_df$ACPT <- sapply(lineups_df$ACPT, function(x) get_showdown_id(x, "ACPT"))
+      lineups_df$P <- sapply(lineups_df$P, function(x) get_showdown_id(x, "P"))
+      
+      download_data <- lineups_df %>%
+        select(CPT, ACPT, P, Top1Count, Top3Count, Top5Count, TotalSalary)
+      
+      write.csv(download_data, file, row.names = FALSE)
+    }
+  )
+  
   observeEvent(input$generate_lineups, {
     req(rv$dk_optimal_lineups_ranked)
     
@@ -3432,10 +3864,15 @@ server <- function(input, output, session) {
         
         # Apply the same player exclusions to the pool
         if (!is.null(input$excluded_players) && length(input$excluded_players) > 0) {
-          player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
-            grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
+          # Determine player columns based on format
+          if(!is.null(rv$contest_format) && rv$contest_format == "showdown") {
+            player_cols <- c("CPT", "ACPT", "P")
           } else {
-            grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
+            player_cols <- if(any(grepl("^Name[1-6]$", names(pool_lineups)))) {
+              grep("^Name[1-6]$", names(pool_lineups), value = TRUE)
+            } else {
+              grep("^Player[1-6]$", names(pool_lineups), value = TRUE)
+            }
           }
           
           if(length(player_cols) > 0) {
@@ -3708,7 +4145,8 @@ server <- function(input, output, session) {
   
   output$download_optimal_lineups <- downloadHandler(
     filename = function() {
-      paste("tennis_optimal_lineups_with_ranks_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+      format_label <- if(!is.null(rv$contest_format) && rv$contest_format == "showdown") "showdown" else "classic"
+      paste0("tennis_optimal_lineups_", format_label, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
     },
     content = function(file) {
       # Use ranked data if available
@@ -3719,16 +4157,41 @@ server <- function(input, output, session) {
       }
       
       if(is.null(lineup_data) || nrow(lineup_data) == 0) {
-        empty_data <- data.frame(matrix(ncol = DK_ROSTER_SIZE + 15, nrow = 0))
-        colnames(empty_data) <- c(paste0("Player", 1:DK_ROSTER_SIZE), "WeightedRank", "TotalEW", "TotalEW_Rank", 
-                                  "MedianScore", "MedianScore_Rank", "Score80th", "Score80th_Rank", 
-                                  "Win6Pct", "Win6Pct_Rank", "Top1Count", "Top1Count_Rank", "TotalSalary")
-        write.csv(empty_data, file, row.names = FALSE)
+        write.csv(data.frame(), file, row.names = FALSE)
         return()
       }
       
       lineups_df <- as.data.frame(lineup_data)
       
+      # Handle showdown format differently
+      if(!is.null(rv$contest_format) && rv$contest_format == "showdown") {
+        # Showdown columns - add IDs based on position
+        get_showdown_id <- function(name, position) {
+          player_info <- rv$dk_data[rv$dk_data$Name == name, ]
+          if (nrow(player_info) > 0) {
+            id_col <- switch(position,
+                             "CPT" = "CID",
+                             "ACPT" = "AID", 
+                             "P" = "PID")
+            if (id_col %in% names(player_info)) {
+              return(paste0(name, " (", player_info[[id_col]][1], ")"))
+            }
+          }
+          return(name)
+        }
+        
+        # Add IDs to each position
+        lineups_df$CPT <- sapply(lineups_df$CPT, function(x) get_showdown_id(x, "CPT"))
+        lineups_df$ACPT <- sapply(lineups_df$ACPT, function(x) get_showdown_id(x, "ACPT"))
+        lineups_df$P <- sapply(lineups_df$P, function(x) get_showdown_id(x, "P"))
+        
+        download_data <- lineups_df %>%
+          select(CPT, ACPT, P, Top1Count, Top3Count, Top5Count, TotalSalary)
+        write.csv(download_data, file, row.names = FALSE)
+        return()
+      }
+      
+      # Classic format handling (original code)
       # Determine player column pattern
       player_pattern <- if(any(grepl("^Name[1-6]$", names(lineups_df)))) {
         "^Name[1-6]$"
@@ -3793,20 +4256,27 @@ server <- function(input, output, session) {
   # Fixed download handler for generated lineups
   output$download_generated_lineups <- downloadHandler(
     filename = function() {
-      paste("tennis_generated_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+      format_label <- if(!is.null(rv$contest_format) && rv$contest_format == "showdown") "showdown" else "classic"
+      paste0("tennis_generated_lineups_", format_label, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
     },
     content = function(file) {
       if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
-        # Create an empty dataframe with appropriate columns
-        empty_data <- data.frame(matrix(ncol = DK_ROSTER_SIZE + 4, nrow = 0))
-        colnames(empty_data) <- c(paste0("Player", 1:DK_ROSTER_SIZE), "Top1Count", "TotalSalary")
-        write.csv(empty_data, file, row.names = FALSE)
+        write.csv(data.frame(), file, row.names = FALSE)
         return()
       }
       
       # Get generated lineup data
       lineups_df <- as.data.frame(rv$dk_random_lineups)
       
+      # Handle showdown format
+      if(!is.null(rv$contest_format) && rv$contest_format == "showdown") {
+        download_data <- lineups_df %>%
+          select(CPT, ACPT, P, Top1Count, Top3Count, Top5Count, TotalSalary)
+        write.csv(download_data, file, row.names = FALSE)
+        return()
+      }
+      
+      # Classic format handling (original code)
       # Determine the naming pattern used in the data
       player_pattern <- if(any(grepl("^Name[1-6]$", names(lineups_df)))) {
         "^Name[1-6]$"
