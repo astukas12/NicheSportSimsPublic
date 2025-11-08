@@ -12,12 +12,54 @@ library(lpSolve)
 library(memoise)
 library(shinyjs)
 library(shinycssloaders)
+library(shinyWidgets)
 
 # Global constants
 DK_ROSTER_SIZE <- 6
 FD_ROSTER_SIZE <- 6  
 DK_SALARY_CAP <- 50000
 FD_SALARY_CAP <- 100  
+
+# Win bonus lookup tables
+DK_WIN_BONUSES <- list(
+  "QuickWin_R1" = 115,
+  "R1" = 90,
+  "R2" = 70,
+  "R3" = 45,
+  "R4" = 40,
+  "R5" = 40,
+  "Decision_R3" = 30,
+  "Decision_R5" = 30,
+  "Decision" = 30
+)
+
+FD_WIN_BONUSES <- list(
+  "QuickWin_R1" = 100,
+  "R1" = 100,
+  "R2" = 75,
+  "R3" = 50,
+  "R4" = 35,
+  "R5" = 25,
+  "Decision_R3" = 20,
+  "Decision_R5" = 20,
+  "Decision" = 20
+)
+
+#' Get win bonus for a given outcome and platform
+#' @param outcome The outcome string (e.g., "R1", "R2", "Decision_R3")
+#' @param platform "DK" or "FD"
+#' @return Win bonus value
+get_win_bonus <- function(outcome, platform = "DK") {
+  bonuses <- if(platform == "DK") DK_WIN_BONUSES else FD_WIN_BONUSES
+  
+  # Try exact match first
+  if(outcome %in% names(bonuses)) {
+    return(bonuses[[outcome]])
+  }
+  
+  # Default to 0 if no match (for losses or unknown outcomes)
+  return(0)
+}
 
 # Set up custom CSS for black and red theme
 custom_css <- "
@@ -119,8 +161,8 @@ read_input_file <- function(file_path) {
     )
     
     # Identify available platforms based on sheets
-    has_dk <- "DKSalary" %in% colnames(sheets$Fights) && "Winner_DK_P50" %in% colnames(sheets$Scores)
-    has_fd <- "FDSalary" %in% colnames(sheets$Fights) && "Winner_FD_P50" %in% colnames(sheets$Scores)
+    has_dk <- "DKSalary" %in% colnames(sheets$Fights) && "Winner_DK_Base_P50" %in% colnames(sheets$Scores)
+    has_fd <- "FDSalary" %in% colnames(sheets$Fights) && "Winner_FD_Base_P50" %in% colnames(sheets$Scores)
     
     # Create platform info
     platform_info <- list(
@@ -163,11 +205,15 @@ process_input_data <- function(input_data) {
   
   # Convert relevant numeric columns in scores data
   numeric_cols_scores <- c(
-    "Winner_Prob", "Winner_DK_P5","Winner_FD_P5","Loser_FD_P5","Loser_FD_P5",
-    "Winner_DK_P10", "Winner_DK_P25", "Winner_DK_P50", "Winner_DK_P75", "Winner_DK_P90","Winner_DK_P95",
-    "Winner_FD_P10", "Winner_FD_P25", "Winner_FD_P50", "Winner_FD_P75", "Winner_FD_P90","Winner_FD_P95",
-    "Loser_DK_P10", "Loser_DK_P25", "Loser_DK_P50", "Loser_DK_P75", "Loser_DK_P90","Loser_DK_P95",
-    "Loser_FD_P10", "Loser_FD_P25", "Loser_FD_P50", "Loser_FD_P75", "Loser_FD_P90", "Loser_FD_P95"
+    "Winner_Prob", 
+    "Winner_DK_Base_P5", "Winner_DK_Base_P10", "Winner_DK_Base_P25", "Winner_DK_Base_P50", 
+    "Winner_DK_Base_P75", "Winner_DK_Base_P90", "Winner_DK_Base_P95",
+    "Winner_FD_Base_P5", "Winner_FD_Base_P10", "Winner_FD_Base_P25", "Winner_FD_Base_P50", 
+    "Winner_FD_Base_P75", "Winner_FD_Base_P90", "Winner_FD_Base_P95",
+    "Loser_DK_Base_P5", "Loser_DK_Base_P10", "Loser_DK_Base_P25", "Loser_DK_Base_P50", 
+    "Loser_DK_Base_P75", "Loser_DK_Base_P90", "Loser_DK_Base_P95",
+    "Loser_FD_Base_P5", "Loser_FD_Base_P10", "Loser_FD_Base_P25", "Loser_FD_Base_P50", 
+    "Loser_FD_Base_P75", "Loser_FD_Base_P90", "Loser_FD_Base_P95"
   )
   
   for(col in numeric_cols_scores) {
@@ -235,6 +281,440 @@ create_fight_pairs <- function(fights_data) {
   return(fighter_pairs)
 }
 
+generate_chalk_field <- function(optimal_lineups, n_field = 50, platform = "DK") {
+  setDT(optimal_lineups)
+  roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+  
+  if (!"CumulativeOwnership" %in% names(optimal_lineups)) {
+    return(data.table())
+  }
+  
+  setorder(optimal_lineups, -CumulativeOwnership)
+  chalk_lineups <- head(optimal_lineups, min(n_field, nrow(optimal_lineups)))
+  
+  fighter_cols <- paste0("Fighter", 1:roster_size)
+  keep_cols <- c(fighter_cols, "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
+  
+  if (platform == "FD" && "MVP" %in% names(chalk_lineups)) {
+    keep_cols <- c("MVP", keep_cols)
+  }
+  
+  keep_cols <- intersect(keep_cols, names(chalk_lineups))
+  chalk_lineups <- chalk_lineups[, ..keep_cols]
+  
+  return(chalk_lineups)
+}
+
+# Pre-compute score matrix
+create_score_matrix <- function(simulation_results, platform = "DK") {
+  fantasy_col <- if (platform == "DK") "DKFantasy" else "FDFantasy"
+  
+  fighters <- unique(simulation_results$Name)
+  sim_ids <- unique(simulation_results$SimID)
+  
+  cat("Creating score matrix:", length(fighters), "fighters x", length(sim_ids), "sims\n")
+  
+  score_matrix <- matrix(0, nrow = length(sim_ids), ncol = length(fighters))
+  rownames(score_matrix) <- sim_ids
+  colnames(score_matrix) <- fighters
+  
+  setDT(simulation_results)
+  for (i in seq_along(sim_ids)) {
+    sim_data <- simulation_results[SimID == sim_ids[i]]
+    for (j in seq_along(fighters)) {
+      fighter_score <- sim_data[Name == fighters[j]][[fantasy_col]]
+      if (length(fighter_score) > 0) {
+        score_matrix[i, j] <- fighter_score[1]
+      }
+    }
+  }
+  
+  cat("Score matrix created successfully\n")
+  return(score_matrix)
+}
+
+# Calculate lineup score
+calculate_lineup_score_fast <- function(fighters, mvp, score_matrix, sim_id_idx, platform = "DK") {
+  fighter_scores <- score_matrix[sim_id_idx, fighters]
+  
+  if (platform == "FD" && !is.null(mvp) && mvp %in% fighters) {
+    mvp_score <- score_matrix[sim_id_idx, mvp]
+    non_mvp_scores <- fighter_scores[fighters != mvp]
+    total_score <- sum(non_mvp_scores, na.rm = TRUE) + (mvp_score * 1.5)
+  } else {
+    total_score <- sum(fighter_scores, na.rm = TRUE)
+  }
+  
+  return(total_score)
+}
+
+# Pre-calculate chalk scores
+precalculate_chalk_scores <- function(chalk_field, score_matrix, sim_id_idx, platform = "DK") {
+  roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+  n_chalk <- nrow(chalk_field)
+  chalk_scores <- numeric(n_chalk)
+  
+  for (i in 1:n_chalk) {
+    fighters <- unlist(chalk_field[i, paste0("Fighter", 1:roster_size), with = FALSE])
+    mvp <- if (platform == "FD" && "MVP" %in% names(chalk_field)) {
+      chalk_field$MVP[i]
+    } else {
+      NULL
+    }
+    
+    chalk_scores[i] <- calculate_lineup_score_fast(fighters, mvp, score_matrix, sim_id_idx, platform)
+  }
+  
+  return(chalk_scores)
+}
+
+# Main contest simulator - USES ALL AVAILABLE SIMS
+run_contest_simulator_optimized <- function(optimal_lineups, simulation_results, filters,
+                                            platform = "DK", n_field = 50) {
+  
+  cat("\n=== Contest Simulator Started ===\n")
+  cat("Generating chalk field with", n_field, "highest ownership lineups...\n")
+  
+  chalk_field <- generate_chalk_field(optimal_lineups, n_field, platform)
+  
+  if (nrow(chalk_field) == 0) {
+    return(list(error = "No chalk field lineups generated"))
+  }
+  cat("??? Chalk field generated:", nrow(chalk_field), "lineups\n\n")
+  
+  cat("Applying filters to optimal lineups...\n")
+  filtered_lineups <- filter_contest_lineups(optimal_lineups, filters, platform)
+  
+  if (nrow(filtered_lineups) == 0) {
+    return(list(error = "No lineups match the current filters"))
+  }
+  
+  max_test <- 100
+  if (nrow(filtered_lineups) > max_test) {
+    cat("Limiting to", max_test, "lineups (from", nrow(filtered_lineups), "matching filters)\n")
+    filtered_lineups <- head(filtered_lineups, max_test)
+  } else {
+    cat("??? Testing", nrow(filtered_lineups), "lineups\n\n")
+  }
+  
+  cat("Pre-computing fighter score matrix...\n")
+  score_matrix <- create_score_matrix(simulation_results, platform)
+  sim_ids <- rownames(score_matrix)
+  n_sims <- length(sim_ids)
+  
+  cat("??? Using ALL", n_sims, "available simulations\n\n")
+  
+  roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+  contest_size <- nrow(chalk_field) + 1
+  
+  thresholds <- list(
+    DoubleUp = ceiling(contest_size * 0.45),
+    FiveX = ceiling(contest_size * 0.20),
+    TenX = ceiling(contest_size * 0.10)
+  )
+  
+  cat("Contest details:\n")
+  cat("  - Contest size:", contest_size, "entries\n")
+  cat("  - DoubleUp cash line: Top", thresholds$DoubleUp, "(45%)\n")
+  cat("  - 5x cash line: Top", thresholds$FiveX, "(20%)\n")
+  cat("  - 10x cash line: Top", thresholds$TenX, "(10%)\n\n")
+  
+  cat("=== Starting Contest Simulations ===\n")
+  
+  results <- data.table()
+  n_test <- nrow(filtered_lineups)
+  
+  for (lineup_idx in 1:n_test) {
+    if (lineup_idx == 1 || lineup_idx %% 10 == 0) {
+      cat("Processing lineup", lineup_idx, "of", n_test, "...\n")
+    }
+    
+    user_lineup <- filtered_lineups[lineup_idx]
+    user_fighters <- unlist(user_lineup[, paste0("Fighter", 1:roster_size), with = FALSE])
+    user_mvp <- if (platform == "FD" && "MVP" %in% names(user_lineup)) {
+      user_lineup$MVP
+    } else {
+      NULL
+    }
+    
+    cash_counts <- list(DoubleUp = 0, FiveX = 0, TenX = 0)
+    
+    # USE ALL SIMS (no sampling)
+    for (sim_idx in 1:n_sims) {
+      user_score <- calculate_lineup_score_fast(user_fighters, user_mvp, 
+                                                score_matrix, sim_idx, platform)
+      chalk_scores <- precalculate_chalk_scores(chalk_field, score_matrix, sim_idx, platform)
+      all_scores <- c(user_score, chalk_scores)
+      user_rank <- rank(-all_scores, ties.method = "min")[1]
+      
+      if (user_rank <= thresholds$DoubleUp) cash_counts$DoubleUp <- cash_counts$DoubleUp + 1
+      if (user_rank <= thresholds$FiveX) cash_counts$FiveX <- cash_counts$FiveX + 1
+      if (user_rank <= thresholds$TenX) cash_counts$TenX <- cash_counts$TenX + 1
+    }
+    
+    result_row <- data.table(
+      LineupIndex = lineup_idx,
+      DoubleUpRate = round((cash_counts$DoubleUp / n_sims) * 100, 2),
+      FiveXRate = round((cash_counts$FiveX / n_sims) * 100, 2),
+      TenXRate = round((cash_counts$TenX / n_sims) * 100, 2)
+    )
+    
+    if (platform == "FD" && "MVP" %in% names(user_lineup)) {
+      result_row$MVP <- user_lineup$MVP
+    }
+    
+    for (i in 1:roster_size) {
+      result_row[[paste0("Fighter", i)]] <- user_lineup[[paste0("Fighter", i)]]
+    }
+    
+    if ("TotalSalary" %in% names(user_lineup)) {
+      result_row$TotalSalary <- user_lineup$TotalSalary
+    }
+    if ("CumulativeOwnership" %in% names(user_lineup)) {
+      result_row$CumulativeOwnership <- user_lineup$CumulativeOwnership
+    }
+    if ("GeometricMeanOwnership" %in% names(user_lineup)) {
+      result_row$GeometricMeanOwnership <- user_lineup$GeometricMeanOwnership
+    }
+    
+    results <- rbind(results, result_row)
+  }
+  
+  setorder(results, -DoubleUpRate)
+  
+  cat("\n=== Contest Simulation Complete ===\n")
+  cat("??? Tested", nrow(results), "lineups\n")
+  cat("??? Average DoubleUp rate:", round(mean(results$DoubleUpRate), 1), "%\n")
+  cat("??? Average 5x rate:", round(mean(results$FiveXRate), 1), "%\n")
+  cat("??? Average 10x rate:", round(mean(results$TenXRate), 1), "%\n\n")
+  
+  return(list(
+    results = results,
+    chalk_field_size = nrow(chalk_field),
+    n_sims = n_sims,
+    lineups_tested = nrow(results)
+  ))
+}
+
+# Filter lineups (same as before)
+filter_contest_lineups <- function(optimal_lineups, filters, platform = "DK") {
+  filtered <- copy(optimal_lineups)
+  
+  if (!is.null(filters$min_top1_count) && "Top1Count" %in% names(filtered)) {
+    filtered <- filtered[Top1Count >= filters$min_top1_count]
+  }
+  if (!is.null(filters$min_top2_count) && "Top2Count" %in% names(filtered)) {
+    filtered <- filtered[Top2Count >= filters$min_top2_count]
+  }
+  if (!is.null(filters$min_top3_count) && "Top3Count" %in% names(filtered)) {
+    filtered <- filtered[Top3Count >= filters$min_top3_count]
+  }
+  if (!is.null(filters$min_top5_count) && "Top5Count" %in% names(filtered)) {
+    filtered <- filtered[Top5Count >= filters$min_top5_count]
+  }
+  
+  if (!is.null(filters$min_cumulative_ownership) && "CumulativeOwnership" %in% names(filtered)) {
+    filtered <- filtered[CumulativeOwnership >= filters$min_cumulative_ownership & 
+                           CumulativeOwnership <= filters$max_cumulative_ownership]
+  }
+  
+  if (!is.null(filters$min_geometric_mean) && "GeometricMeanOwnership" %in% names(filtered)) {
+    filtered <- filtered[GeometricMeanOwnership >= filters$min_geometric_mean & 
+                           GeometricMeanOwnership <= filters$max_geometric_mean]
+  }
+  
+  if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
+    roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+    for (i in 1:roster_size) {
+      fighter_col <- paste0("Fighter", i)
+      if (fighter_col %in% names(filtered)) {
+        filtered <- filtered[!(get(fighter_col) %in% filters$excluded_fighters)]
+      }
+    }
+    
+    if (platform == "FD" && "MVP" %in% names(filtered)) {
+      filtered <- filtered[!(MVP %in% filters$excluded_fighters)]
+    }
+  }
+  
+  return(filtered)
+}
+
+# COMPACT filter UI - stacked vertically
+generate_contest_filter_ui <- function(platform, optimal_data) {
+  if (is.null(optimal_data) || nrow(optimal_data) == 0) {
+    return(p("No optimal lineups available. Generate optimal lineups first."))
+  }
+  
+  ownership_range <- if ("CumulativeOwnership" %in% names(optimal_data)) {
+    c(floor(min(optimal_data$CumulativeOwnership, na.rm = TRUE)), 
+      ceiling(max(optimal_data$CumulativeOwnership, na.rm = TRUE)))
+  } else {
+    c(100, 300)
+  }
+  
+  geometric_range <- if ("GeometricMeanOwnership" %in% names(optimal_data)) {
+    c(floor(min(optimal_data$GeometricMeanOwnership, na.rm = TRUE)), 
+      ceiling(max(optimal_data$GeometricMeanOwnership, na.rm = TRUE)))
+  } else {
+    c(15, 35)
+  }
+  
+  roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+  all_fighters <- c()
+  for (i in 1:roster_size) {
+    col_name <- paste0("Fighter", i)
+    if (col_name %in% names(optimal_data)) {
+      all_fighters <- c(all_fighters, unique(optimal_data[[col_name]]))
+    }
+  }
+  if (platform == "FD" && "MVP" %in% names(optimal_data)) {
+    all_fighters <- c(all_fighters, unique(optimal_data$MVP))
+  }
+  all_fighters <- sort(unique(all_fighters))
+  
+  prefix <- "contest_sim"
+  
+  tagList(
+    # Top counts in one row
+    fluidRow(
+      column(width = 3, numericInput(paste0(prefix, "_top1_count"), "Min Top 1:", value = 0, min = 0)),
+      column(width = 3, numericInput(paste0(prefix, "_top2_count"), "Min Top 2:", value = 0, min = 0)),
+      column(width = 3, numericInput(paste0(prefix, "_top3_count"), "Min Top 3:", value = 0, min = 0)),
+      column(width = 3, numericInput(paste0(prefix, "_top5_count"), "Min Top 5:", value = 0, min = 0))
+    ),
+    
+    # Ownership sliders in one row
+    fluidRow(
+      column(width = 6, sliderInput(paste0(prefix, "_ownership_range"), "Cumulative Ownership:",
+                                    min = ownership_range[1], max = ownership_range[2], 
+                                    value = ownership_range, step = 1, post = "%")),
+      column(width = 6, sliderInput(paste0(prefix, "_geometric_range"), "Geometric Mean Ownership:",
+                                    min = geometric_range[1], max = geometric_range[2], 
+                                    value = geometric_range, step = 1, post = "%"))
+    ),
+    
+    # Exclusions
+    fluidRow(
+      column(width = 12, selectizeInput(paste0(prefix, "_excluded_fighters"), "Exclude Fighters:",
+                                        choices = all_fighters, multiple = TRUE,
+                                        options = list(plugins = list('remove_button'),
+                                                       placeholder = 'Select fighters to exclude')))
+    )
+  )
+}
+
+# COMPACT UI - tighter layout
+contest_simulator_tab_ui <- function() {
+  tabItem(
+    tabName = "contest_sim",
+    
+    fluidRow(
+      box(
+        title = "Contest Simulator",
+        status = "primary",
+        solidHeader = TRUE,
+        width = 12,
+        collapsible = TRUE,
+        
+        # Settings row - compact
+        fluidRow(
+          column(width = 3, 
+                 selectInput("contest_sim_platform", "Platform:",
+                             choices = c("DraftKings" = "DK", "FanDuel" = "FD"), 
+                             selected = "DK")),
+          column(width = 3, 
+                 numericInput("contest_chalk_field_size", "Chalk Field Size:",
+                              value = 50, min = 10, max = 100, step = 10)),
+          column(width = 6,
+                 div(style = "margin-top: 25px;",
+                     p(style = "margin: 0; font-size: 13px;",
+                       strong("Payouts:"), " Double-Up (top 45%), 5x (top 20%), 10x (top 10%)"),
+                     p(style = "margin: 0; font-size: 12px; color: #666;",
+                       "Uses all available simulations for maximum accuracy")))
+        ),
+        
+        hr(style = "margin: 10px 0;"),
+        
+        h5("Lineup Filters", style = "margin: 5px 0 10px 0;"),
+        
+        # Dynamic filters
+        uiOutput("contest_sim_filters_ui"),
+        
+        # Filtered pool count
+        fluidRow(
+          column(width = 12,
+                 div(style = "background-color: #f5f5f5; padding: 8px; border-radius: 3px; margin: 10px 0;",
+                     textOutput("contest_sim_filtered_pool_size")))
+        ),
+        
+        # Run button - centered, compact
+        fluidRow(
+          column(width = 12, align = "center",
+                 actionButton("run_contest_sim", "Run Contest Simulator",
+                              class = "btn-primary btn-lg", icon = icon("trophy"),
+                              style = "margin: 5px 0;"))
+        )
+      )
+    ),
+    
+    # Chalk field preview
+    fluidRow(
+      box(
+        title = "Chalk Field Preview",
+        status = "info",
+        solidHeader = TRUE,
+        width = 12,
+        collapsible = TRUE,
+        collapsed = TRUE,
+        
+        withSpinner(DTOutput("contest_chalk_field_table"), type = 4, color = "#FFD700")
+      )
+    ),
+    
+    # Results
+    fluidRow(
+      box(
+        title = "Contest Simulation Results",
+        status = "success",
+        solidHeader = TRUE,
+        width = 12,
+        collapsible = TRUE,
+        
+        uiOutput("contest_sim_summary"),
+        br(),
+        withSpinner(DTOutput("contest_sim_results_table"), type = 4, color = "#FFD700"),
+        br(),
+        downloadButton("download_contest_sim_results", "Download Results", class = "btn-primary")
+      )
+    )
+  )
+}
+
+
+# Helper function to sample from percentile distribution
+sample_from_base_percentiles <- function(p5, p10, p25, p50, p75, p90, p95) {
+  percentile <- runif(1, 0, 1)
+  
+  if(percentile <= 0.05) {
+    return(p5)
+  } else if(percentile <= 0.1) {
+    return(p5 + (p10 - p5) * (percentile - 0.05) / 0.05)
+  } else if(percentile <= 0.25) {
+    return(p10 + (p25 - p10) * (percentile - 0.1) / 0.15)
+  } else if(percentile <= 0.5) {
+    return(p25 + (p50 - p25) * (percentile - 0.25) / 0.25)
+  } else if(percentile <= 0.75) {
+    return(p50 + (p75 - p50) * (percentile - 0.5) / 0.25)
+  } else if(percentile <= 0.9) {
+    return(p75 + (p90 - p75) * (percentile - 0.75) / 0.15)
+  } else if(percentile <= 0.95) {
+    return(p90 + (p95 - p90) * (percentile - 0.9) / 0.05)
+  } else {
+    return(p95)
+  }
+}
+
 # Function to simulate a single iteration of all fights
 simulate_all_fights <- function(fights_data, scores_data, fight_pairs) {
   # Create results table
@@ -271,151 +751,61 @@ simulate_all_fights <- function(fights_data, scores_data, fight_pairs) {
     loser <- selected_outcome$Loser
     outcome <- selected_outcome$Outcome
     
-    # Generate fantasy scores based on percentiles
-    # For winner DK score - sample between percentiles
-    dk_winner_percentile <- runif(1, 0, 1)
-    if(dk_winner_percentile <= 0.05) {
-      # Use P5 as minimum
-      dk_winner_score <- selected_outcome$Winner_DK_P5
-    } else if(dk_winner_percentile <= 0.1) {
-      # Interpolate between P5 and P10
-      p5 <- selected_outcome$Winner_DK_P5
-      p10 <- selected_outcome$Winner_DK_P10
-      dk_winner_score <- p5 + (p10 - p5) * (dk_winner_percentile - 0.05) / 0.05
-    } else if(dk_winner_percentile <= 0.25) {
-      p10 <- selected_outcome$Winner_DK_P10
-      p25 <- selected_outcome$Winner_DK_P25
-      dk_winner_score <- p10 + (p25 - p10) * (dk_winner_percentile - 0.1) / 0.15
-    } else if(dk_winner_percentile <= 0.5) {
-      p25 <- selected_outcome$Winner_DK_P25
-      p50 <- selected_outcome$Winner_DK_P50
-      dk_winner_score <- p25 + (p50 - p25) * (dk_winner_percentile - 0.25) / 0.25
-    } else if(dk_winner_percentile <= 0.75) {
-      p50 <- selected_outcome$Winner_DK_P50
-      p75 <- selected_outcome$Winner_DK_P75
-      dk_winner_score <- p50 + (p75 - p50) * (dk_winner_percentile - 0.5) / 0.25
-    } else if(dk_winner_percentile <= 0.9) {
-      p75 <- selected_outcome$Winner_DK_P75
-      p90 <- selected_outcome$Winner_DK_P90
-      dk_winner_score <- p75 + (p90 - p75) * (dk_winner_percentile - 0.75) / 0.15
-    } else if(dk_winner_percentile <= 0.95) {
-      # Interpolate between P90 and P95
-      p90 <- selected_outcome$Winner_DK_P90
-      p95 <- selected_outcome$Winner_DK_P95
-      dk_winner_score <- p90 + (p95 - p90) * (dk_winner_percentile - 0.9) / 0.05
-    } else {
-      # Use P95 as maximum
-      dk_winner_score <- selected_outcome$Winner_DK_P95
-    }
+    # Generate BASE fantasy scores (without win bonuses)
+    # For winner DK base score
+    dk_winner_base <- sample_from_base_percentiles(
+      selected_outcome$Winner_DK_Base_P5,
+      selected_outcome$Winner_DK_Base_P10,
+      selected_outcome$Winner_DK_Base_P25,
+      selected_outcome$Winner_DK_Base_P50,
+      selected_outcome$Winner_DK_Base_P75,
+      selected_outcome$Winner_DK_Base_P90,
+      selected_outcome$Winner_DK_Base_P95
+    )
     
-    # For winner FD score - sample between percentiles
-    fd_winner_percentile <- runif(1, 0, 1)
-    if(fd_winner_percentile <= 0.05) {
-      # Use P5 as minimum
-      fd_winner_score <- selected_outcome$Winner_FD_P5
-    } else if(fd_winner_percentile <= 0.1) {
-      # Interpolate between P5 and P10
-      p5 <- selected_outcome$Winner_FD_P5
-      p10 <- selected_outcome$Winner_FD_P10
-      fd_winner_score <- p5 + (p10 - p5) * (fd_winner_percentile - 0.05) / 0.05
-    } else if(fd_winner_percentile <= 0.25) {
-      p10 <- selected_outcome$Winner_FD_P10
-      p25 <- selected_outcome$Winner_FD_P25
-      fd_winner_score <- p10 + (p25 - p10) * (fd_winner_percentile - 0.1) / 0.15
-    } else if(fd_winner_percentile <= 0.5) {
-      p25 <- selected_outcome$Winner_FD_P25
-      p50 <- selected_outcome$Winner_FD_P50
-      fd_winner_score <- p25 + (p50 - p25) * (fd_winner_percentile - 0.25) / 0.25
-    } else if(fd_winner_percentile <= 0.75) {
-      p50 <- selected_outcome$Winner_FD_P50
-      p75 <- selected_outcome$Winner_FD_P75
-      fd_winner_score <- p50 + (p75 - p50) * (fd_winner_percentile - 0.5) / 0.25
-    } else if(fd_winner_percentile <= 0.9) {
-      p75 <- selected_outcome$Winner_FD_P75
-      p90 <- selected_outcome$Winner_FD_P90
-      fd_winner_score <- p75 + (p90 - p75) * (fd_winner_percentile - 0.75) / 0.15
-    } else if(fd_winner_percentile <= 0.95) {
-      # Interpolate between P90 and P95
-      p90 <- selected_outcome$Winner_FD_P90
-      p95 <- selected_outcome$Winner_FD_P95
-      fd_winner_score <- p90 + (p95 - p90) * (fd_winner_percentile - 0.9) / 0.05
-    } else {
-      # Use P95 as maximum
-      fd_winner_score <- selected_outcome$Winner_FD_P95
-    }
+    # For winner FD base score
+    fd_winner_base <- sample_from_base_percentiles(
+      selected_outcome$Winner_FD_Base_P5,
+      selected_outcome$Winner_FD_Base_P10,
+      selected_outcome$Winner_FD_Base_P25,
+      selected_outcome$Winner_FD_Base_P50,
+      selected_outcome$Winner_FD_Base_P75,
+      selected_outcome$Winner_FD_Base_P90,
+      selected_outcome$Winner_FD_Base_P95
+    )
     
+    # For loser DK base score
+    dk_loser_base <- sample_from_base_percentiles(
+      selected_outcome$Loser_DK_Base_P5,
+      selected_outcome$Loser_DK_Base_P10,
+      selected_outcome$Loser_DK_Base_P25,
+      selected_outcome$Loser_DK_Base_P50,
+      selected_outcome$Loser_DK_Base_P75,
+      selected_outcome$Loser_DK_Base_P90,
+      selected_outcome$Loser_DK_Base_P95
+    )
     
-    # For loser DK score - sample between percentiles
-    dk_loser_percentile <- runif(1, 0, 1)
-    if(dk_loser_percentile <= 0.05) {
-      # Use P5 as minimum
-      dk_loser_score <- selected_outcome$Loser_DK_P5
-    } else if(dk_loser_percentile <= 0.1) {
-      # Interpolate between P5 and P10
-      p5 <- selected_outcome$Loser_DK_P5
-      p10 <- selected_outcome$Loser_DK_P10
-      dk_loser_score <- p5 + (p10 - p5) * (dk_loser_percentile - 0.05) / 0.05
-    } else if(dk_loser_percentile <= 0.25) {
-      p10 <- selected_outcome$Loser_DK_P10
-      p25 <- selected_outcome$Loser_DK_P25
-      dk_loser_score <- p10 + (p25 - p10) * (dk_loser_percentile - 0.1) / 0.15
-    } else if(dk_loser_percentile <= 0.5) {
-      p25 <- selected_outcome$Loser_DK_P25
-      p50 <- selected_outcome$Loser_DK_P50
-      dk_loser_score <- p25 + (p50 - p25) * (dk_loser_percentile - 0.25) / 0.25
-    } else if(dk_loser_percentile <= 0.75) {
-      p50 <- selected_outcome$Loser_DK_P50
-      p75 <- selected_outcome$Loser_DK_P75
-      dk_loser_score <- p50 + (p75 - p50) * (dk_loser_percentile - 0.5) / 0.25
-    } else if(dk_loser_percentile <= 0.9) {
-      p75 <- selected_outcome$Loser_DK_P75
-      p90 <- selected_outcome$Loser_DK_P90
-      dk_loser_score <- p75 + (p90 - p75) * (dk_loser_percentile - 0.75) / 0.15
-    } else if(dk_loser_percentile <= 0.95) {
-      # Interpolate between P90 and P95
-      p90 <- selected_outcome$Loser_DK_P90
-      p95 <- selected_outcome$Loser_DK_P95
-      dk_loser_score <- p90 + (p95 - p90) * (dk_loser_percentile - 0.9) / 0.05
-    } else {
-      # Use P95 as maximum
-      dk_loser_score <- selected_outcome$Loser_DK_P95
-    }
+    # For loser FD base score
+    fd_loser_base <- sample_from_base_percentiles(
+      selected_outcome$Loser_FD_Base_P5,
+      selected_outcome$Loser_FD_Base_P10,
+      selected_outcome$Loser_FD_Base_P25,
+      selected_outcome$Loser_FD_Base_P50,
+      selected_outcome$Loser_FD_Base_P75,
+      selected_outcome$Loser_FD_Base_P90,
+      selected_outcome$Loser_FD_Base_P95
+    )
     
-    # For loser FD score - sample between percentiles
-    fd_loser_percentile <- runif(1, 0, 1)
-    if(fd_loser_percentile <= 0.05) {
-      # Use P5 as minimum
-      fd_loser_score <- selected_outcome$Loser_FD_P5
-    } else if(fd_loser_percentile <= 0.1) {
-      # Interpolate between P5 and P10
-      p5 <- selected_outcome$Loser_FD_P5
-      p10 <- selected_outcome$Loser_FD_P10
-      fd_loser_score <- p5 + (p10 - p5) * (fd_loser_percentile - 0.05) / 0.05
-    } else if(fd_loser_percentile <= 0.25) {
-      p10 <- selected_outcome$Loser_FD_P10
-      p25 <- selected_outcome$Loser_FD_P25
-      fd_loser_score <- p10 + (p25 - p10) * (fd_loser_percentile - 0.1) / 0.15
-    } else if(fd_loser_percentile <= 0.5) {
-      p25 <- selected_outcome$Loser_FD_P25
-      p50 <- selected_outcome$Loser_FD_P50
-      fd_loser_score <- p25 + (p50 - p25) * (fd_loser_percentile - 0.25) / 0.25
-    } else if(fd_loser_percentile <= 0.75) {
-      p50 <- selected_outcome$Loser_FD_P50
-      p75 <- selected_outcome$Loser_FD_P75
-      fd_loser_score <- p50 + (p75 - p50) * (fd_loser_percentile - 0.5) / 0.25
-    } else if(fd_loser_percentile <= 0.9) {
-      p75 <- selected_outcome$Loser_FD_P75
-      p90 <- selected_outcome$Loser_FD_P90
-      fd_loser_score <- p75 + (p90 - p75) * (fd_loser_percentile - 0.75) / 0.15
-    }  else if(fd_loser_percentile <= 0.95) {
-      # Interpolate between P90 and P95
-      p90 <- selected_outcome$Loser_FD_P90
-      p95 <- selected_outcome$Loser_FD_P95
-      fd_loser_score <- p90 + (p95 - p90) * (fd_loser_percentile - 0.9) / 0.05
-    } else {
-      # Use P95 as maximum
-      fd_loser_score <- selected_outcome$Loser_FD_P95
-    }
+    # ADD WIN BONUSES TO WINNER SCORES ONLY
+    dk_winner_bonus <- get_win_bonus(outcome, "DK")
+    fd_winner_bonus <- get_win_bonus(outcome, "FD")
+    
+    dk_winner_score <- dk_winner_base + dk_winner_bonus
+    fd_winner_score <- fd_winner_base + fd_winner_bonus
+    
+    # Loser scores remain base only (no win bonus)
+    dk_loser_score <- dk_loser_base
+    fd_loser_score <- fd_loser_base
     
     # Add result for winner
     winner_result <- data.table(
@@ -2391,7 +2781,8 @@ ui <- dashboardPage(
       menuItem("Fight Analysis", tabName = "fight_analysis", icon = icon("chart-line")),
       menuItem("Fantasy Projections", tabName = "fantasy", icon = icon("calculator")),
       menuItem("Optimal Lineups", tabName = "optimal_lineups", icon = icon("trophy")),
-      menuItem("Lineup Builder", tabName = "lineup_builder", icon = icon("percentage"))
+      menuItem("Lineup Builder", tabName = "lineup_builder", icon = icon("percentage")),
+      menuItem("Contest Simulator", tabName = "contest_sim", icon = icon("trophy"))
     ),
     br(),
     fileInput("excel_file", "Upload Excel File", accept = c(".xlsx")),
@@ -2540,6 +2931,89 @@ ui <- dashboardPage(
       # Lineup Builder Tab
       tabItem(tabName = "lineup_builder",
               uiOutput("lineup_builder_ui")
+      ),
+      tabItem(
+        tabName = "contest_sim",
+        
+        fluidRow(
+          box(
+            title = "Contest Simulator",
+            status = "primary",
+            solidHeader = TRUE,
+            width = 12,
+            collapsible = TRUE,
+            
+            # Settings row - compact
+            fluidRow(
+              column(width = 3, 
+                     selectInput("contest_sim_platform", "Platform:",
+                                 choices = c("DraftKings" = "DK", "FanDuel" = "FD"), 
+                                 selected = "DK")),
+              column(width = 3, 
+                     numericInput("contest_chalk_field_size", "Chalk Field Size:",
+                                  value = 50, min = 10, max = 100, step = 10)),
+              column(width = 6,
+                     div(style = "margin-top: 25px;",
+                         p(style = "margin: 0; font-size: 13px;",
+                           strong("Payouts:"), " Double-Up (top 45%), 5x (top 20%), 10x (top 10%)"),
+                         p(style = "margin: 0; font-size: 12px; color: #666;",
+                           "Uses all available simulations for maximum accuracy")))
+            ),
+            
+            hr(style = "margin: 10px 0;"),
+            
+            h5("Lineup Filters", style = "margin: 5px 0 10px 0;"),
+            
+            # Dynamic filters
+            uiOutput("contest_sim_filters_ui"),
+            
+            # Filtered pool count
+            fluidRow(
+              column(width = 12,
+                     div(style = "background-color: #f5f5f5; padding: 8px; border-radius: 3px; margin: 10px 0;",
+                         textOutput("contest_sim_filtered_pool_size")))
+            ),
+            
+            # Run button - centered, compact
+            fluidRow(
+              column(width = 12, align = "center",
+                     actionButton("run_contest_sim", "Run Contest Simulator",
+                                  class = "btn-primary btn-lg", icon = icon("trophy"),
+                                  style = "margin: 5px 0;"))
+            )
+          )
+        ),
+        
+        # Chalk field preview
+        fluidRow(
+          box(
+            title = "Chalk Field Preview",
+            status = "info",
+            solidHeader = TRUE,
+            width = 12,
+            collapsible = TRUE,
+            collapsed = TRUE,
+            
+            withSpinner(DTOutput("contest_chalk_field_table"), type = 4, color = "#FFD700")
+          )
+        ),
+        
+        # Results
+        fluidRow(
+          box(
+            title = "Contest Simulation Results",
+            status = "success",
+            solidHeader = TRUE,
+            width = 12,
+            collapsible = TRUE,
+            
+            uiOutput("contest_sim_summary"),
+            br(),
+            withSpinner(DTOutput("contest_sim_results_table"), type = 4, color = "#FFD700"),
+            br(),
+            downloadButton("download_contest_sim_results", "Download Results", class = "btn-primary")
+          )
+        )
       )
     )
   )
@@ -2565,8 +3039,12 @@ server <- function(input, output, session) {
     dk_random_lineups = NULL,
     fd_random_lineups = NULL,
     file_uploaded = FALSE,
-    simulation_complete = FALSE
+    simulation_complete = FALSE,
+    contest_sim_results = NULL,
+    contest_chalk_field = NULL
   )
+  
+  
   
   output$has_draftkings <- reactive({
     # Convert boolean TRUE/FALSE to lowercase string "true"/"false"
@@ -3225,8 +3703,8 @@ server <- function(input, output, session) {
       )
     )
   })
-
-
+  
+  
   
   # DraftKings fantasy projections
   output$dk_fantasy_projections <- renderDT({
@@ -4046,7 +4524,7 @@ server <- function(input, output, session) {
   })
   
   
-
+  
   output$dk_filtered_pool_size <- renderText({
     # Safely handle NULL cases
     if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
@@ -4118,8 +4596,8 @@ server <- function(input, output, session) {
     paste("Number of lineups in filtered pool:", stats$count)
   })
   
-
-
+  
+  
   
   # Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
@@ -4376,7 +4854,7 @@ server <- function(input, output, session) {
               fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
               fighter_mapping$FDSalary[i] <- unique_sim_fighters$FDSalary[match_idx]
               fighter_mapping$FDOwn[i] <- unique_sim_fighters$FDOwn[match_idx]
-            
+              
               
             }
           }
@@ -4504,7 +4982,7 @@ server <- function(input, output, session) {
                    }
                  })
   
-
+  
   
   output$fd_random_lineups_table <- renderDT({
     req(rv$fd_random_lineups)
@@ -4800,7 +5278,7 @@ server <- function(input, output, session) {
       dt <- dt %>% formatRound(numeric_cols, digits = 1)
     }
     
-   
+    
     return(dt)
   })
   
@@ -5098,7 +5576,7 @@ server <- function(input, output, session) {
     contentType = "text/csv"  # Explicitly set MIME type for CSV
   )
   
-
+  
   output$download_dk_random_lineups <- downloadHandler(
     filename = function() {
       paste("dk_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
@@ -5391,13 +5869,264 @@ server <- function(input, output, session) {
     },
     contentType = "text/csv"
   )
-
+  
   
   # Memory cleanup functions
   observe({
     invalidateLater(180000) # 3 minutes
     gc(verbose = FALSE, full = TRUE)
   })
+  
+  output$contest_sim_filters_ui <- renderUI({
+    req(input$contest_sim_platform)
+    
+    platform <- input$contest_sim_platform
+    optimal_data <- if (platform == "DK") rv$dk_optimal_lineups else rv$fd_optimal_lineups
+    
+    if (is.null(optimal_data)) {
+      return(p("No optimal lineups available. Generate optimal lineups first.",
+               style = "color: #999; padding: 20px;"))
+    }
+    
+    generate_contest_filter_ui(platform, optimal_data)
+  })
+  
+  # Display filtered pool size
+  output$contest_sim_filtered_pool_size <- renderText({
+    req(input$contest_sim_platform)
+    
+    platform <- input$contest_sim_platform
+    optimal_lineups <- if (platform == "DK") {
+      req(rv$dk_optimal_lineups)
+      rv$dk_optimal_lineups
+    } else {
+      req(rv$fd_optimal_lineups)
+      rv$fd_optimal_lineups
+    }
+    
+    top1 <- input$contest_sim_top1_count
+    top2 <- input$contest_sim_top2_count
+    top3 <- input$contest_sim_top3_count
+    top5 <- input$contest_sim_top5_count
+    ownership_range <- input$contest_sim_ownership_range
+    geometric_range <- input$contest_sim_geometric_range
+    excluded <- input$contest_sim_excluded_fighters
+    
+    req(ownership_range, geometric_range)
+    
+    filters <- list(
+      min_top1_count = if(is.null(top1)) 0 else top1,
+      min_top2_count = if(is.null(top2)) 0 else top2,
+      min_top3_count = if(is.null(top3)) 0 else top3,
+      min_top5_count = if(is.null(top5)) 0 else top5,
+      min_cumulative_ownership = ownership_range[1],
+      max_cumulative_ownership = ownership_range[2],
+      min_geometric_mean = geometric_range[1],
+      max_geometric_mean = geometric_range[2],
+      excluded_fighters = excluded
+    )
+    
+    filtered <- filter_contest_lineups(optimal_lineups, filters, platform)
+    paste("Filtered Pool:", nrow(filtered), "lineups")
+  })
+  
+  # Run contest simulator - NO SIMS INPUT, USES ALL AVAILABLE
+  observeEvent(input$run_contest_sim, {
+    req(rv$simulation_results)
+    
+    platform <- input$contest_sim_platform
+    
+    optimal_lineups <- if (platform == "DK") {
+      req(rv$dk_optimal_lineups)
+      rv$dk_optimal_lineups
+    } else {
+      req(rv$fd_optimal_lineups)
+      rv$fd_optimal_lineups
+    }
+    
+    top1 <- input$contest_sim_top1_count
+    top2 <- input$contest_sim_top2_count
+    top3 <- input$contest_sim_top3_count
+    top5 <- input$contest_sim_top5_count
+    ownership_range <- input$contest_sim_ownership_range
+    geometric_range <- input$contest_sim_geometric_range
+    excluded <- input$contest_sim_excluded_fighters
+    
+    req(ownership_range, geometric_range)
+    
+    filters <- list(
+      min_top1_count = if(is.null(top1)) 0 else top1,
+      min_top2_count = if(is.null(top2)) 0 else top2,
+      min_top3_count = if(is.null(top3)) 0 else top3,
+      min_top5_count = if(is.null(top5)) 0 else top5,
+      min_cumulative_ownership = ownership_range[1],
+      max_cumulative_ownership = ownership_range[2],
+      min_geometric_mean = geometric_range[1],
+      max_geometric_mean = geometric_range[2],
+      excluded_fighters = excluded
+    )
+    
+    showNotification("Starting contest simulator... Check R console for progress", 
+                     type = "message", duration = 3)
+    
+    # Run simulator - NO n_sims parameter (uses all available)
+    sim_results <- tryCatch({
+      run_contest_simulator_optimized(
+        optimal_lineups = optimal_lineups,
+        simulation_results = rv$simulation_results,
+        filters = filters,
+        platform = platform,
+        n_field = input$contest_chalk_field_size
+      )
+    }, error = function(e) {
+      cat("\nERROR:", e$message, "\n")
+      list(error = paste("Error:", e$message))
+    })
+    
+    if (!is.null(sim_results$error)) {
+      showNotification(sim_results$error, type = "error", duration = 10)
+      return()
+    }
+    
+    # Store results
+    rv$contest_sim_results <- sim_results$results
+    rv$contest_chalk_field <- generate_chalk_field(
+      optimal_lineups, 
+      input$contest_chalk_field_size, 
+      platform
+    )
+    
+    showNotification(
+      paste("??? Complete!", sim_results$lineups_tested, "lineups tested using", 
+            sim_results$n_sims, "simulations"),
+      type = "message",
+      duration = 5
+    )
+  })
+  
+  # Display summary
+  output$contest_sim_summary <- renderUI({
+    req(rv$contest_sim_results)
+    
+    results <- rv$contest_sim_results
+    
+    tagList(
+      fluidRow(
+        column(width = 4,
+               div(style = "background-color: #f5f5f5; padding: 15px; border-radius: 5px; text-align: center;",
+                   h4("Double-Up", style = "margin-top: 0;"),
+                   h2(paste0(round(mean(results$DoubleUpRate), 1), "%"), 
+                      style = "color: #FFD700; margin: 10px 0;"),
+                   p(paste("Range:", round(min(results$DoubleUpRate), 1), "-", 
+                           round(max(results$DoubleUpRate), 1), "%"), style = "margin: 0;"))),
+        column(width = 4,
+               div(style = "background-color: #f5f5f5; padding: 15px; border-radius: 5px; text-align: center;",
+                   h4("5x Multiplier", style = "margin-top: 0;"),
+                   h2(paste0(round(mean(results$FiveXRate), 1), "%"), 
+                      style = "color: #FFD700; margin: 10px 0;"),
+                   p(paste("Range:", round(min(results$FiveXRate), 1), "-", 
+                           round(max(results$FiveXRate), 1), "%"), style = "margin: 0;"))),
+        column(width = 4,
+               div(style = "background-color: #f5f5f5; padding: 15px; border-radius: 5px; text-align: center;",
+                   h4("10x Multiplier", style = "margin-top: 0;"),
+                   h2(paste0(round(mean(results$TenXRate), 1), "%"), 
+                      style = "color: #FFD700; margin: 10px 0;"),
+                   p(paste("Range:", round(min(results$TenXRate), 1), "-", 
+                           round(max(results$TenXRate), 1), "%"), style = "margin: 0;")))
+      ),
+      br(),
+      p(class = "text-muted", align = "center",
+        paste("Tested", nrow(results), "lineups against", 
+              ifelse(!is.null(rv$contest_chalk_field), nrow(rv$contest_chalk_field), 0),
+              "chalk opponents"))
+    )
+  })
+  
+  # Display results table
+  output$contest_sim_results_table <- renderDT({
+    req(rv$contest_sim_results)
+    
+    display_data <- copy(rv$contest_sim_results)
+    platform <- input$contest_sim_platform
+    roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
+    
+    cols_to_show <- c(
+      if(platform == "FD" && "MVP" %in% names(display_data)) "MVP" else NULL,
+      paste0("Fighter", 1:roster_size),
+      "DoubleUpRate", "FiveXRate", "TenXRate",
+      "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership"
+    )
+    cols_to_show <- intersect(cols_to_show, names(display_data))
+    display_data <- display_data[, ..cols_to_show]
+    
+    dt <- datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        dom = "tip",
+        ordering = TRUE,
+        order = list(list(which(cols_to_show == "DoubleUpRate") - 1, 'desc')),
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      ),
+      class = 'cell-border stripe compact',
+      rownames = FALSE
+    ) %>%
+      formatRound(c("DoubleUpRate", "FiveXRate", "TenXRate"), digits = 1) %>%
+      formatStyle(
+        c("DoubleUpRate", "FiveXRate", "TenXRate"),
+        background = styleColorBar(c(0, 100), '#FFD700'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+    
+    if ("TotalSalary" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    if ("CumulativeOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatRound('CumulativeOwnership', digits = 1)
+    }
+    if ("GeometricMeanOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatRound('GeometricMeanOwnership', digits = 1)
+    }
+    
+    dt
+  })
+  
+  # Display chalk field
+  output$contest_chalk_field_table <- renderDT({
+    req(rv$contest_chalk_field)
+    
+    display_data <- copy(rv$contest_chalk_field)
+    
+    datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        dom = "tip",
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      ),
+      class = 'cell-border stripe compact',
+      rownames = FALSE
+    ) %>%
+      formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+      formatRound(c('CumulativeOwnership', 'GeometricMeanOwnership'), digits = 1)
+  })
+  
+  # Download handler
+  output$download_contest_sim_results <- downloadHandler(
+    filename = function() {
+      paste0("contest_sim_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      req(rv$contest_sim_results)
+      write.csv(rv$contest_sim_results, file, row.names = FALSE)
+    }
+  )
+  
+  
   
   
   # Clean up on session end
