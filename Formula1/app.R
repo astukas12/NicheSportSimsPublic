@@ -12,94 +12,290 @@ library(shinyjs)
 # Your helper functions
 setDTthreads(2)
 
+# F1 2024/2025 Team Colors
+f1_team_colors <- list(
+  "Red Bull Racing" = list(bg = "#0600EF", text = "#FFFFFF"),
+  "Ferrari" = list(bg = "#DC0000", text = "#FFFFFF"),
+  "Mercedes" = list(bg = "#00D2BE", text = "#000000"),
+  "McLaren" = list(bg = "#FF8700", text = "#000000"),
+  "Aston Martin F1 Team" = list(bg = "#006F62", text = "#FFFFFF"),
+  "Alpine F1 Team" = list(bg = "#0090FF", text = "#FFFFFF"),
+  "Williams" = list(bg = "#005AFF", text = "#FFFFFF"),
+  "Racing Bulls F1 Team" = list(bg = "#2B4562", text = "#FFFFFF"),
+  "Sauber" = list(bg = "#00E701", text = "#000000"),
+  "Haas F1 Team" = list(bg = "#808080", text = "#FFFFFF")
+)
+
+# Helper function to get team color for a driver
+get_team_color <- function(driver_name, driver_data, color_type = "bg") {
+  if (is.null(driver_data) || !("Team" %in% names(driver_data))) {
+    return(if(color_type == "bg") "#2d2d2d" else "#FFD700")
+  }
+  
+  team <- driver_data$Team[driver_data$Name == driver_name][1]
+  if (is.na(team) || is.null(team)) {
+    return(if(color_type == "bg") "#2d2d2d" else "#FFD700")
+  }
+  
+  if (team %in% names(f1_team_colors)) {
+    return(f1_team_colors[[team]][[color_type]])
+  } else {
+    return(if(color_type == "bg") "#2d2d2d" else "#FFD700")
+  }
+}
+
+
 
 # Set up custom CSS for app theme with black and gold color scheme
 custom_css <- "
-  /* Override dashboard header colors */
+  /* Main header styling - Black with Gold accents */
   .skin-blue .main-header {
-+    background-color: #000000;
-  }
-  .skin-blue .main-header .logo {
-    background-color: #000000;
-    color: #FFD700; 
-  }
-  .skin-blue .main-header .logo:hover {
-    background-color: #000000;
-  }
-  .skin-blue .main-header .navbar {
-    background-color: #000000;
+    background-color: #000000 !important;
+    border-bottom: 2px solid #FFD700 !important;
   }
   
-  /* Override dashboard sidebar colors */
-  .skin-blue .left-side, .skin-blue .main-sidebar, .skin-blue .wrapper {
-    background-color: #222222;
+  .skin-blue .main-header .logo {
+    background-color: #000000 !important;
+    color: #FFD700 !important;
+    font-weight: bold;
+    border-right: 1px solid #FFD700 !important;
   }
-  .skin-blue .sidebar a {
-    color: #FFD700; 
+  
+  .skin-blue .main-header .logo:hover {
+    background-color: #1a1a1a !important;
   }
-  .skin-blue .sidebar-menu > li.active > a, 
+  
+  .skin-blue .main-header .navbar {
+    background-color: #000000 !important;
+  }
+  
+  /* Sidebar styling */
+  .skin-blue .left-side, 
+  .skin-blue .main-sidebar, 
+  .skin-blue .wrapper {
+    background-color: #1a1a1a;
+  }
+  
+  .skin-blue .sidebar-menu > li > a {
+    color: #FFD700;
+    border-left: 3px solid transparent;
+  }
+  
+  .skin-blue .sidebar-menu > li.active > a,
   .skin-blue .sidebar-menu > li:hover > a {
     color: #ffffff;
-    background: #333333;
-    border-left-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+    background-color: #2d2d2d;
+    border-left-color: #FFD700;
   }
   
-  /* Customize box headers */
+  .skin-blue .sidebar-menu > li > a:hover {
+    background-color: #2d2d2d;
+  }
+  
+  /* Box styling */
+  .box.box-primary {
+    border-top-color: #FFD700;
+    border: 1px solid #2d2d2d;
+  }
+  
   .box.box-primary .box-header {
-    background-color: #333333;
-    color: #FFD700; /* Changed from #ff6600 to #FFD700 */
+    background-color: #2d2d2d;
+    color: #FFD700;
+    border-bottom: 1px solid #FFD700;
   }
   
-  /* Style buttons */
+  .box.box-info {
+    border-top-color: #FFD700;
+    border: 1px solid #2d2d2d;
+  }
+  
+  .box.box-info .box-header {
+    background-color: #2d2d2d;
+    color: #FFD700;
+    border-bottom: 1px solid #FFD700;
+  }
+  
+  .box-header.with-border {
+    border-bottom: 1px solid #FFD700;
+  }
+  
+  /* Button styling */
   .btn-primary {
-    background-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
-    border-color: #DAA520; /* Changed from #e65c00 to #DAA520 (darker gold) */
-    color: #000000; /* Changed text color to black for better contrast on gold */
-  }
-  .btn-primary:hover, .btn-primary:focus {
-    background-color: #DAA520; /* Changed from #e65c00 to #DAA520 */
-    border-color: #B8860B; /* Changed from #cc5200 to #B8860B (darkgoldenrod) */
-    color: #000000; /* Keep text black for contrast */
-  }
-  
-  /* Style tabs */
-  .nav-tabs-custom > .nav-tabs > li.active {
-    border-top-color: #FFD700; /* Changed from #ff6600 to #FFD700 */
-  }
-  
-  /* Additional styles for gold accents */
-  .pagination > .active > a, 
-  .pagination > .active > span, 
-  .pagination > .active > a:hover, 
-  .pagination > .active > span:hover, 
-  .pagination > .active > a:focus, 
-  .pagination > .active > span:focus {
     background-color: #FFD700;
-    border-color: #DAA520;
+    border-color: #FFD700;
+    color: #000000;
+    font-weight: bold;
+  }
+  
+  .btn-primary:hover,
+  .btn-primary:active,
+  .btn-primary:focus {
+    background-color: #FFC700;
+    border-color: #FFC700;
     color: #000000;
   }
   
-  /* Style for sliders and other inputs */
+  .btn-success {
+    background-color: #FFD700;
+    border-color: #FFD700;
+    color: #000000;
+    font-weight: bold;
+  }
+  
+  .btn-success:hover {
+    background-color: #FFC700;
+    border-color: #FFC700;
+    color: #000000;
+  }
+  
+  /* Tab styling */
+  .nav-tabs-custom {
+    background-color: #1a1a1a;
+  }
+  
+  .nav-tabs-custom > .nav-tabs {
+    border-bottom: 2px solid #FFD700;
+  }
+  
+  .nav-tabs-custom > .nav-tabs > li.active {
+    border-top-color: #FFD700;
+  }
+  
+  .nav-tabs-custom > .nav-tabs > li.active > a {
+    background-color: #2d2d2d;
+    color: #FFD700;
+    border-top: 3px solid #FFD700;
+  }
+  
+  .nav-tabs-custom > .nav-tabs > li > a {
+    color: #999999;
+  }
+  
+  .nav-tabs-custom > .nav-tabs > li > a:hover {
+    background-color: #2d2d2d;
+    color: #FFD700;
+  }
+  
+  /* Content area */
+  .content-wrapper {
+    background-color: #0d0d0d;
+  }
+  
+  /* DataTable styling */
+  .dataTables_wrapper .dataTables_length,
+  .dataTables_wrapper .dataTables_filter,
+  .dataTables_wrapper .dataTables_info,
+  .dataTables_wrapper .dataTables_processing,
+  .dataTables_wrapper .dataTables_paginate {
+    color: #FFD700;
+  }
+  
+  table.dataTable thead th {
+    background-color: #2d2d2d;
+    color: #FFD700;
+    border-bottom: 2px solid #FFD700;
+  }
+  
+  table.dataTable tbody tr:hover {
+    background-color: #2d2d2d !important;
+  }
+  
+  table.dataTable tbody tr:hover td {
+    color: #FFD700 !important;
+  }
+  
+  /* Pagination */
+  .pagination > .active > a,
+  .pagination > .active > span,
+  .pagination > .active > a:hover,
+  .pagination > .active > span:hover,
+  .pagination > .active > a:focus,
+  .pagination > .active > span:focus {
+    background-color: #FFD700;
+    border-color: #FFD700;
+    color: #000000;
+  }
+  
+  .pagination > li > a,
+  .pagination > li > span {
+    background-color: #2d2d2d;
+    border-color: #FFD700;
+    color: #FFD700;
+  }
+  
+  .pagination > li > a:hover {
+    background-color: #3d3d3d;
+    color: #FFC700;
+  }
+  
+  /* Input styling */
+  .form-control {
+    background-color: #2d2d2d;
+    border-color: #FFD700;
+    color: #ffffff;
+  }
+  
+  .form-control:focus {
+    border-color: #FFC700;
+    box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+  }
+  
+  /* Slider styling */
   .irs-bar,
-  .irs-bar-edge,
+  .irs-bar-edge {
+    background: #FFD700;
+    border-color: #FFD700;
+  }
+  
   .irs-single,
   .irs-from,
   .irs-to {
     background: #FFD700;
-    border-color: #DAA520;
     color: #000000;
   }
   
-  /* Style for checkboxes and radio buttons */
-  input[type='checkbox']:checked, 
-  input[type='radio']:checked {
-    background-color: #FFD700;
-    border-color: #DAA520;
+  .irs-line {
+    background: #2d2d2d;
+    border-color: #2d2d2d;
   }
   
-  /* Style loader spinners */
+  .irs-grid-text {
+    color: #999999;
+  }
+  
+  /* Loading spinner */
   .shiny-spinner .load-container .loader {
     border-top-color: #FFD700;
+  }
+  
+  /* Info boxes */
+  .info-box {
+    background-color: #2d2d2d;
+    border: 1px solid #FFD700;
+  }
+  
+  .info-box-icon {
+    background-color: #FFD700 !important;
+    color: #000000 !important;
+  }
+  
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: #1a1a1a;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: #FFD700;
+    border-radius: 6px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: #FFC700;
   }
 "
 
@@ -1925,7 +2121,7 @@ estimate_remaining_time <- function(current_sim, total_sims, start_time) {
 
 # UI Definition
 ui <- dashboardPage(
-  skin = "black",
+  skin = "blue",
   dashboardHeader(title = "F1 Fantasy Simulator"),
   
   dashboardSidebar(
@@ -1968,6 +2164,7 @@ ui <- dashboardPage(
   ),
   
   dashboardBody(
+    tags$head(tags$style(HTML(custom_css))),
     tabItems(
       # Upload Tab
       tabItem(tabName = "upload", box(
@@ -2024,10 +2221,15 @@ ui <- dashboardPage(
         fluidRow(
           box(
             width = 12,
+            title = "Download Lineups",
+            downloadButton("downloadOptimalFrequency", "Download All Optimal Lineups", class = "btn-success")
+          )
+        ),
+        fluidRow(
+          box(
+            width = 12,
             title = "Optimal Lineups",
-            DTOutput("optimal_lineup_frequency"),
-            br(),
-            downloadButton("downloadOptimalFrequency", "Download Optimal Lineups", class = "btn-success")
+            DTOutput("optimal_lineup_frequency")
           )
         ),
         fluidRow(
@@ -2047,12 +2249,6 @@ ui <- dashboardPage(
       # Lineup Builder Tab
       tabItem(
         tabName = "lineup_builder",
-        fluidRow(
-          box(width = 12,
-              title = "Lineup Count Thresholds",
-              DTOutput("lineup_count_thresholds")
-          )
-        ),
         fluidRow(
           box(
             width = 12,
@@ -2459,21 +2655,40 @@ server <- function(input, output, session) {
   output$position_dist <- renderPlotly({
     req(rv$simulation_results)
     
-    # Extract the raw finishing positions
+    # Extract the raw finishing positions (Team already included)
     driver_finishes <- rv$simulation_results$driver_results
     
-    # Create box plot
+    # Get starting positions for ordering
+    driver_starts <- driver_finishes[, .(Starting = first(Starting)), by = Name]
+    
+    # Create color mapping based on teams
+    team_colors_map <- sapply(unique(driver_finishes$Team), function(t) {
+      if (t %in% names(f1_team_colors)) f1_team_colors[[t]]$bg else "#808080"
+    })
+    names(team_colors_map) <- unique(driver_finishes$Team)
+    
+    # Create vertical violin plot with team colors, ordered by starting position
     p <- ggplot(driver_finishes,
                 aes(
-                  x = reorder(Name, FinishPosition, median),
+                  x = factor(Name, levels = driver_starts[order(Starting)]$Name),
                   y = FinishPosition,
-                  fill = Name
+                  fill = Team
                 )) +
-      geom_boxplot(alpha = 0.7) +
-      coord_flip() +
+      geom_violin(alpha = 0.8, trim = FALSE, width = 0.9, scale = "width") +
+      geom_boxplot(width = 0.15, alpha = 0.5, outlier.shape = NA, color = "white") +
+      scale_fill_manual(values = team_colors_map) +
+      scale_y_reverse() +
       theme_minimal() +
       labs(x = "Driver", y = "Finishing Position", title = "Finishing Position Distribution") +
-      theme(legend.position = "none")
+      theme(
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+        axis.text.y = element_text(size = 10),
+        panel.grid.major.x = element_line(color = "gray90"),
+        panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white"),
+        panel.background = element_rect(fill = "white")
+      )
     
     ggplotly(p)
   })
@@ -2482,24 +2697,39 @@ server <- function(input, output, session) {
   output$fp_dist <- renderPlotly({
     req(rv$simulation_results)
     
-    # Extract the driver results data
+    # Extract the driver results data (Team already included)
     driver_fp <- rv$simulation_results$driver_results
     
     # Get unique driver salaries for sorting
     driver_salaries <- driver_fp[, .(Salary = first(DriverSalary)), by = Name]
     
-    # Create box plot with sorting by salary
+    # Create color mapping based on teams
+    team_colors_map <- sapply(unique(driver_fp$Team), function(t) {
+      if (t %in% names(f1_team_colors)) f1_team_colors[[t]]$bg else "#808080"
+    })
+    names(team_colors_map) <- unique(driver_fp$Team)
+    
+    # Create vertical violin plot with team colors and sorting by salary (highest first)
     p <- ggplot(driver_fp,
                 aes(
-                  x = factor(Name, levels = driver_salaries[order(Salary)]$Name),
+                  x = factor(Name, levels = driver_salaries[order(-Salary)]$Name),
                   y = FantasyPoints,
-                  fill = Name
+                  fill = Team
                 )) +
-      geom_boxplot(alpha = 0.7) +
-      coord_flip() +
+      geom_violin(alpha = 0.8, trim = FALSE, width = 0.9, scale = "width") +
+      geom_boxplot(width = 0.15, alpha = 0.5, outlier.shape = NA, color = "white") +
+      scale_fill_manual(values = team_colors_map) +
       theme_minimal() +
       labs(x = "Driver", y = "Fantasy Points", title = "Fantasy Points Distribution") +
-      theme(legend.position = "none")
+      theme(
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+        axis.text.y = element_text(size = 10),
+        panel.grid.major.x = element_line(color = "gray90"),
+        panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white"),
+        panel.background = element_rect(fill = "white")
+      )
     
     ggplotly(p)
   })
@@ -2574,18 +2804,33 @@ server <- function(input, output, session) {
     constructor_points <- rv$simulation_results$constructor_results
     
     
-    # Create box plot
+    # Create color mapping for constructors (same as team colors)
+    constructor_colors_map <- sapply(unique(constructor_points$Name), function(t) {
+      if (t %in% names(f1_team_colors)) f1_team_colors[[t]]$bg else "#808080"
+    })
+    names(constructor_colors_map) <- unique(constructor_points$Name)
+    
+    # Create vertical violin plot with team colors
     p <- ggplot(constructor_points,
                 aes(
                   x = reorder(Name, FantasyPoints, median),
                   y = FantasyPoints,
                   fill = Name
                 )) +
-      geom_boxplot(alpha = 0.7) +
-      coord_flip() +
+      geom_violin(alpha = 0.8, trim = FALSE, width = 0.9, scale = "width") +
+      geom_boxplot(width = 0.15, alpha = 0.5, outlier.shape = NA, color = "white") +
+      scale_fill_manual(values = constructor_colors_map) +
       theme_minimal() +
       labs(x = "Constructor", y = "Fantasy Points", title = "Fantasy Points Distribution") +
-      theme(legend.position = "none")
+      theme(
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+        axis.text.y = element_text(size = 10),
+        panel.grid.major.x = element_line(color = "gray90"),
+        panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white"),
+        panel.background = element_rect(fill = "white")
+      )
     
     ggplotly(p)
   })
@@ -2623,15 +2868,28 @@ server <- function(input, output, session) {
         pageLength = 25,
         scrollX = TRUE,
         searching = FALSE,
+        autoWidth = TRUE,
+        scrollCollapse = TRUE,
         order = list(list(7, 'desc')),  # Sort by OptimalCount
         columnDefs = list(list(
           className = 'dt-center', targets = "_all"
         )),
-        dom = 'tp'
+        dom = 'tp',
+        initComplete = JS(
+          "function(settings, json) {",
+          "  this.api().columns.adjust();",
+          "}"
+        ),
+        drawCallback = JS(
+          "function(settings) {",
+          "  this.api().columns.adjust();",
+          "}"
+        )
       ),
       rownames = FALSE,
       selection = 'none'
-    )
+    ) %>%
+      formatStyle(columns = colnames(lineup_data[, keep_cols]), width = 'auto')
     
     # Format TotalSalary column if it exists
     if ("TotalSalary" %in% keep_cols) {
@@ -2653,6 +2911,48 @@ server <- function(input, output, session) {
           backgroundPosition = 'center'
         )
       }
+    }
+    
+    # Add team color styling to driver columns
+    driver_cols <- c("Captain", "Driver1", "Driver2", "Driver3", "Driver4")
+    for (col in driver_cols) {
+      if (col %in% keep_cols) {
+        dt <- dt %>% formatStyle(
+          col,
+          backgroundColor = styleEqual(
+            levels = unique(unlist(lineup_data[, col])),
+            values = sapply(unique(unlist(lineup_data[, col])), function(driver) {
+              get_team_color(driver, rv$input_data$drivers, "bg")
+            })
+          ),
+          color = styleEqual(
+            levels = unique(unlist(lineup_data[, col])),
+            values = sapply(unique(unlist(lineup_data[, col])), function(driver) {
+              get_team_color(driver, rv$input_data$drivers, "text")
+            })
+          )
+        )
+      }
+    }
+    
+    # Add team color styling to Constructor column
+    if ("Constructor" %in% keep_cols) {
+      constructor_teams <- unique(lineup_data$Constructor)
+      dt <- dt %>% formatStyle(
+        "Constructor",
+        backgroundColor = styleEqual(
+          levels = constructor_teams,
+          values = sapply(constructor_teams, function(team) {
+            if (team %in% names(f1_team_colors)) f1_team_colors[[team]]$bg else "#808080"
+          })
+        ),
+        color = styleEqual(
+          levels = constructor_teams,
+          values = sapply(constructor_teams, function(team) {
+            if (team %in% names(f1_team_colors)) f1_team_colors[[team]]$text else "#FFFFFF"
+          })
+        )
+      )
     }
     
     return(dt)
@@ -2856,7 +3156,7 @@ server <- function(input, output, session) {
   output$driver_freq_plot <- renderPlotly({
     req(rv$simulation_results$optimal_lineup_frequency)
     
-    # Extract the top 500 lineups sorted by OptimalCount
+    # Extract the top 200 lineups sorted by OptimalCount
     lineup_data <- rv$simulation_results$optimal_lineup_frequency
     
     # Make sure we have the required columns for sorting
@@ -2867,8 +3167,8 @@ server <- function(input, output, session) {
       lineup_data <- lineup_data[order(-lineup_data$Count),]
     }
     
-    # Take only the top 500 or all if less than 500
-    lineup_data <- head(lineup_data, min(500, nrow(lineup_data)))
+    # Take only the top 200 or all if less than 200
+    lineup_data <- head(lineup_data, min(200, nrow(lineup_data)))
     
     # Get all driver columns
     driver_cols <- grep("^Driver", names(lineup_data), value = TRUE)
@@ -2928,6 +3228,17 @@ server <- function(input, output, session) {
     # Calculate total percentage
     driver_data$Total <- driver_data$AsDriver + driver_data$AsCaptain
     
+    # Add Team information to driver_data
+    driver_data$Team <- sapply(driver_data$Driver, function(d) {
+      team_info <- rv$input_data$drivers$Team[rv$input_data$drivers$Name == d]
+      if (length(team_info) > 0) team_info[1] else "Unknown"
+    })
+    
+    # Create team colors for drivers
+    driver_data$TeamColor <- sapply(driver_data$Team, function(t) {
+      if (t %in% names(f1_team_colors)) f1_team_colors[[t]]$bg else "#808080"
+    })
+    
     # Sort by total percentage
     driver_data <- driver_data[order(-driver_data$Total), ]
     
@@ -2936,21 +3247,24 @@ server <- function(input, output, session) {
       Driver = rep(driver_data$Driver, 2),
       Position = c(rep("Driver", nrow(driver_data)), rep("Captain", nrow(driver_data))),
       Percentage = c(driver_data$AsDriver, driver_data$AsCaptain),
+      Team = rep(driver_data$Team, 2),
       Total = rep(driver_data$Total, 2),
       stringsAsFactors = FALSE
     )
     
-    # Create stacked bar plot
+    # Create stacked bar plot with position colors
     p <- ggplot(plot_data, aes(x = reorder(Driver, Total), y = Percentage, fill = Position)) +
       geom_bar(stat = "identity") +
+      scale_fill_manual(values = c("Driver" = "#FFD700", "Captain" = "#FF8700")) +
       coord_flip() +
       theme_minimal() +
       labs(
-        title = "Drivers in Top 500 Lineups",
-        y = "Percentage",
+        title = "Drivers in Top 200 Lineups (Captain Stacked on Driver)",
+        y = "Percentage (%)",
+        x = "Driver",
         fill = "Position"
       ) +
-      scale_fill_manual(values = c("Driver" = "pink", "Captain" = "red"))
+      theme(legend.position = "right")
     
     ggplotly(p)
   })
@@ -2959,7 +3273,7 @@ server <- function(input, output, session) {
   output$constructor_freq_plot <- renderPlotly({
     req(rv$simulation_results$optimal_lineup_frequency)
     
-    # Extract the top 500 lineups sorted by OptimalCount
+    # Extract the top 200 lineups sorted by OptimalCount
     lineup_data <- rv$simulation_results$optimal_lineup_frequency
     
     # Make sure we have the required columns for sorting
@@ -2971,8 +3285,8 @@ server <- function(input, output, session) {
       lineup_data <- lineup_data[order(-lineup_data$Count),]
     }
     
-    # Take only the top 500 or all if less than 500
-    lineup_data <- head(lineup_data, min(500, nrow(lineup_data)))
+    # Take only the top 200 or all if less than 200
+    lineup_data <- head(lineup_data, min(200, nrow(lineup_data)))
     
     # Get weight column for calculations
     weight_col <- if ("OptimalCount" %in% names(lineup_data)) "OptimalCount" else "Count"
@@ -2994,15 +3308,27 @@ server <- function(input, output, session) {
     # Sort by percentage
     constructor_data <- constructor_data[order(-constructor_data$Percentage), ]
     
-    # Create horizontal bar plot with simplified colors and no y-axis label
-    p <- ggplot(constructor_data, aes(x = reorder(Constructor, Percentage), y = Percentage)) +
-      geom_bar(stat = "identity", fill = "darkgreen") +  # Simplified to a single green color
+    # Add team colors to constructors
+    constructor_data$TeamColor <- sapply(constructor_data$Constructor, function(c) {
+      if (c %in% names(f1_team_colors)) f1_team_colors[[c]]$bg else "#808080"
+    })
+    
+    # Create team color mapping
+    team_color_map <- setNames(constructor_data$TeamColor, constructor_data$Constructor)
+    
+    # Create horizontal bar plot with team colors
+    p <- ggplot(constructor_data, aes(x = reorder(Constructor, Percentage), y = Percentage, fill = Constructor)) +
+      geom_bar(stat = "identity") +
+      scale_fill_manual(values = team_color_map) +
       coord_flip() +
       theme_minimal() +
-      theme(axis.title.y = element_blank()) +  # Remove y-axis label
+      theme(
+        axis.title.y = element_blank(),
+        legend.position = "none"
+      ) +
       labs(
-        title = "Constructors in Top 500 Lineups"
-        # Removed y-axis label
+        title = "Constructors in Top 200 Lineups",
+        y = "Percentage (%)"
       )
     
     ggplotly(p)
@@ -3249,6 +3575,48 @@ server <- function(input, output, session) {
           backgroundPosition = 'center'
         )
       }
+    }
+    
+    # Add team color styling to driver columns
+    driver_cols <- c("Captain", "Driver1", "Driver2", "Driver3", "Driver4")
+    for (col in driver_cols) {
+      if (col %in% keep_cols) {
+        dt <- dt %>% formatStyle(
+          col,
+          backgroundColor = styleEqual(
+            levels = unique(unlist(lineups[, col])),
+            values = sapply(unique(unlist(lineups[, col])), function(driver) {
+              get_team_color(driver, rv$input_data$drivers, "bg")
+            })
+          ),
+          color = styleEqual(
+            levels = unique(unlist(lineups[, col])),
+            values = sapply(unique(unlist(lineups[, col])), function(driver) {
+              get_team_color(driver, rv$input_data$drivers, "text")
+            })
+          )
+        )
+      }
+    }
+    
+    # Add team color styling to Constructor column
+    if ("Constructor" %in% keep_cols) {
+      constructor_teams <- unique(lineups$Constructor)
+      dt <- dt %>% formatStyle(
+        "Constructor",
+        backgroundColor = styleEqual(
+          levels = constructor_teams,
+          values = sapply(constructor_teams, function(team) {
+            if (team %in% names(f1_team_colors)) f1_team_colors[[team]]$bg else "#808080"
+          })
+        ),
+        color = styleEqual(
+          levels = constructor_teams,
+          values = sapply(constructor_teams, function(team) {
+            if (team %in% names(f1_team_colors)) f1_team_colors[[team]]$text else "#FFFFFF"
+          })
+        )
+      )
     }
     
     return(dt)
