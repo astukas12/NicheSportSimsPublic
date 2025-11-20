@@ -1267,7 +1267,14 @@ calculate_golf_lineup_ownership_stats <- function(lineup_data, player_ownership_
       
       # Calculate geometric mean (ownership is already in percentage format)
       ownership_decimals <- ownership_values / 100
-      geometric_mean <- exp(mean(log(ownership_decimals[ownership_decimals > 0])))
+      
+      # If any player has 0% ownership, geometric mean is 0%
+      if(any(ownership_decimals == 0)) {
+        geometric_mean <- 0
+      } else {
+        geometric_mean <- exp(mean(log(ownership_decimals)))
+      }
+      
       lineup_data$GeometricMeanOwnership[i] <- geometric_mean * 100
     }
   }
