@@ -309,29 +309,31 @@ generate_chalk_field <- function(optimal_lineups, n_field = 50, platform = "DK")
   return(chalk_lineups)
 }
 
-# Pre-compute score matrix
+# Pre-compute score matrix - OPTIMIZED VERSION
 create_score_matrix <- function(simulation_results, platform = "DK") {
-  fantasy_col <- if (platform == "DK") "DKFantasy" else "FDFantasy"
+  fantasy_col <- if (platform == "DK") "DKScore" else "FDScore"
   
+  setDT(simulation_results)
+  
+  # Get unique fighters and sim IDs
   fighters <- unique(simulation_results$Name)
   sim_ids <- unique(simulation_results$SimID)
   
   cat("Creating score matrix:", length(fighters), "fighters x", length(sim_ids), "sims\n")
   
-  score_matrix <- matrix(0, nrow = length(sim_ids), ncol = length(fighters))
-  rownames(score_matrix) <- sim_ids
-  colnames(score_matrix) <- fighters
+  # Use data.table's dcast for much faster matrix creation
+  score_matrix <- dcast(
+    simulation_results[, c("SimID", "Name", fantasy_col), with = FALSE],
+    SimID ~ Name,
+    value.var = fantasy_col,
+    fill = 0
+  )
   
-  setDT(simulation_results)
-  for (i in seq_along(sim_ids)) {
-    sim_data <- simulation_results[SimID == sim_ids[i]]
-    for (j in seq_along(fighters)) {
-      fighter_score <- sim_data[Name == fighters[j]][[fantasy_col]]
-      if (length(fighter_score) > 0) {
-        score_matrix[i, j] <- fighter_score[1]
-      }
-    }
-  }
+  # Extract the matrix part (remove SimID column)
+  sim_id_col <- score_matrix$SimID
+  score_matrix[, SimID := NULL]
+  score_matrix <- as.matrix(score_matrix)
+  rownames(score_matrix) <- sim_id_col
   
   cat("Score matrix created successfully\n")
   return(score_matrix)
@@ -352,24 +354,36 @@ calculate_lineup_score_fast <- function(fighters, mvp, score_matrix, sim_id_idx,
   return(total_score)
 }
 
-# Pre-calculate chalk scores
-precalculate_chalk_scores <- function(chalk_field, score_matrix, sim_id_idx, platform = "DK") {
+# Pre-calculate ALL chalk scores for ALL simulations - VECTORIZED
+precalculate_all_chalk_scores <- function(chalk_field, score_matrix, platform = "DK") {
   roster_size <- if (platform == "DK") DK_ROSTER_SIZE else FD_ROSTER_SIZE
   n_chalk <- nrow(chalk_field)
-  chalk_scores <- numeric(n_chalk)
+  n_sims <- nrow(score_matrix)
   
+  # Pre-allocate result matrix: rows = sims, cols = chalk lineups
+  chalk_scores_matrix <- matrix(0, nrow = n_sims, ncol = n_chalk)
+  
+  # Calculate scores for all simulations at once for each chalk lineup
   for (i in 1:n_chalk) {
     fighters <- unlist(chalk_field[i, paste0("Fighter", 1:roster_size), with = FALSE])
-    mvp <- if (platform == "FD" && "MVP" %in% names(chalk_field)) {
-      chalk_field$MVP[i]
-    } else {
-      NULL
+    
+    # Vectorized: get scores for all sims at once
+    lineup_scores <- rowSums(score_matrix[, fighters, drop = FALSE])
+    
+    # Handle FanDuel MVP multiplier if needed
+    if (platform == "FD" && "MVP" %in% names(chalk_field)) {
+      mvp <- chalk_field$MVP[i]
+      if (!is.null(mvp) && mvp %in% fighters) {
+        mvp_scores <- score_matrix[, mvp]
+        # Add 0.5x multiplier to MVP (already counted once, add 0.5 more)
+        lineup_scores <- lineup_scores + (mvp_scores * 0.5)
+      }
     }
     
-    chalk_scores[i] <- calculate_lineup_score_fast(fighters, mvp, score_matrix, sim_id_idx, platform)
+    chalk_scores_matrix[, i] <- lineup_scores
   }
   
-  return(chalk_scores)
+  return(chalk_scores_matrix)
 }
 
 # Main contest simulator - USES ALL AVAILABLE SIMS
@@ -393,13 +407,8 @@ run_contest_simulator_optimized <- function(optimal_lineups, simulation_results,
     return(list(error = "No lineups match the current filters"))
   }
   
-  max_test <- 100
-  if (nrow(filtered_lineups) > max_test) {
-    cat("Limiting to", max_test, "lineups (from", nrow(filtered_lineups), "matching filters)\n")
-    filtered_lineups <- head(filtered_lineups, max_test)
-  } else {
-    cat("??? Testing", nrow(filtered_lineups), "lineups\n\n")
-  }
+  
+  cat("Testing", nrow(filtered_lineups), "lineups...\n\n")
   
   cat("Pre-computing fighter score matrix...\n")
   score_matrix <- create_score_matrix(simulation_results, platform)
@@ -423,6 +432,11 @@ run_contest_simulator_optimized <- function(optimal_lineups, simulation_results,
   cat("  - 5x cash line: Top", thresholds$FiveX, "(20%)\n")
   cat("  - 10x cash line: Top", thresholds$TenX, "(10%)\n\n")
   
+  # OPTIMIZATION: Pre-calculate ALL chalk scores for ALL simulations ONCE
+  cat("Pre-calculating chalk field scores for all simulations...\n")
+  chalk_scores_matrix <- precalculate_all_chalk_scores(chalk_field, score_matrix, platform)
+  cat("✓ Chalk scores pre-calculated\n\n")
+  
   cat("=== Starting Contest Simulations ===\n")
   
   results <- data.table()
@@ -441,15 +455,26 @@ run_contest_simulator_optimized <- function(optimal_lineups, simulation_results,
       NULL
     }
     
+    # OPTIMIZATION: Vectorized user score calculation for all sims at once
+    user_scores_all_sims <- rowSums(score_matrix[, user_fighters, drop = FALSE])
+    
+    # Handle FanDuel MVP multiplier
+    if (platform == "FD" && !is.null(user_mvp) && user_mvp %in% user_fighters) {
+      mvp_scores <- score_matrix[, user_mvp]
+      user_scores_all_sims <- user_scores_all_sims + (mvp_scores * 0.5)
+    }
+    
+    # OPTIMIZATION: Vectorized ranking for all simulations at once
+    # For each simulation, combine user score with chalk scores and rank
     cash_counts <- list(DoubleUp = 0, FiveX = 0, TenX = 0)
     
-    # USE ALL SIMS (no sampling)
     for (sim_idx in 1:n_sims) {
-      user_score <- calculate_lineup_score_fast(user_fighters, user_mvp, 
-                                                score_matrix, sim_idx, platform)
-      chalk_scores <- precalculate_chalk_scores(chalk_field, score_matrix, sim_idx, platform)
-      all_scores <- c(user_score, chalk_scores)
-      user_rank <- rank(-all_scores, ties.method = "min")[1]
+      user_score <- user_scores_all_sims[sim_idx]
+      chalk_scores <- chalk_scores_matrix[sim_idx, ]
+      
+      # Count how many chalk lineups beat the user
+      n_better <- sum(chalk_scores > user_score)
+      user_rank <- n_better + 1
       
       if (user_rank <= thresholds$DoubleUp) cash_counts$DoubleUp <- cash_counts$DoubleUp + 1
       if (user_rank <= thresholds$FiveX) cash_counts$FiveX <- cash_counts$FiveX + 1
@@ -6251,10 +6276,10 @@ server <- function(input, output, session) {
         }
       }
       
-      # Keep only fighter columns, TopX Count columns, and TotalSalary
+      # Keep fighter columns, TopX Count columns, TotalSalary, and ownership metrics
       cols_to_keep <- c(paste0("Fighter", 1:DK_ROSTER_SIZE), 
                         grep("^Top[0-9]+Count$", names(download_data), value = TRUE),
-                        "TotalSalary")
+                        "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
       cols_to_keep <- intersect(cols_to_keep, names(download_data))
       download_data <- download_data[, cols_to_keep, drop = FALSE]
       
