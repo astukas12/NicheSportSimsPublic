@@ -2868,28 +2868,35 @@ server <- function(input, output, session) {
         pageLength = 25,
         scrollX = TRUE,
         searching = FALSE,
-        autoWidth = TRUE,
+        autoWidth = FALSE,  # Changed from TRUE to FALSE
         scrollCollapse = TRUE,
         order = list(list(7, 'desc')),  # Sort by OptimalCount
-        columnDefs = list(list(
-          className = 'dt-center', targets = "_all"
-        )),
+        columnDefs = list(
+          list(className = 'dt-center', targets = "_all"),
+          list(width = '12%', targets = 0:4),  # Driver columns
+          list(width = '12%', targets = 5),     # Constructor
+          list(width = '10%', targets = 6),     # TotalSalary
+          list(width = '10%', targets = 7)      # OptimalCount
+        ),
         dom = 'tp',
-        initComplete = JS(
-          "function(settings, json) {",
-          "  this.api().columns.adjust();",
+        preDrawCallback = JS(
+          "function(settings) {",
+          "  return true;",
           "}"
         ),
         drawCallback = JS(
           "function(settings) {",
-          "  this.api().columns.adjust();",
+          "  var api = this.api();",
+          "  api.columns.adjust().draw(false);",
           "}"
         )
       ),
       rownames = FALSE,
       selection = 'none'
-    ) %>%
-      formatStyle(columns = colnames(lineup_data[, keep_cols]), width = 'auto')
+    )
+    
+    # Remove this line - it conflicts with columnDefs
+    # %>% formatStyle(columns = colnames(lineup_data[, keep_cols]), width = 'auto')
     
     # Format TotalSalary column if it exists
     if ("TotalSalary" %in% keep_cols) {
@@ -2957,8 +2964,6 @@ server <- function(input, output, session) {
     
     return(dt)
   })
-  
-  
   
   
   output$downloadOptimalFrequency <- downloadHandler(
