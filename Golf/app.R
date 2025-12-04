@@ -106,8 +106,10 @@ custom_css <- "
 # Global constants
 DK_ROSTER_SIZE <- 6
 FD_ROSTER_SIZE <- 6
+SD_ROSTER_SIZE <- 6
 DK_SALARY_CAP <- 50000
 FD_SALARY_CAP <- 60000
+SD_SALARY_CAP <- 50000
 
 
 
@@ -136,6 +138,14 @@ read_golf_input_file <- function(file_path) {
       message("FDPts sheet not found - running DraftKings only")
     }
     
+    # Try to read Showdown points (optional)
+    if ("SDPts" %in% sheet_names) {
+      sheets$SDPts <- read_excel(file_path, sheet = "SDPts")
+    } else {
+      sheets$SDPts <- NULL
+      message("SDPts sheet not found - Showdown not available")
+    }
+    
     # Try to read Tiers (optional)
     if ("Tiers" %in% sheet_names) {
       sheets$Tiers <- read_excel(file_path, sheet = "Tiers")
@@ -147,12 +157,14 @@ read_golf_input_file <- function(file_path) {
     # Identify available platforms based on columns
     has_dk <- "DKSalary" %in% colnames(sheets$Player)
     has_fd <- "FDSalary" %in% colnames(sheets$Player) && !is.null(sheets$FDPts)
+    has_sd <- "SDSal" %in% colnames(sheets$Player) && !is.null(sheets$SDPts)
     has_tiers <- !is.null(sheets$Tiers)
     
     # Create platform info
     platform_info <- list(
       has_draftkings = has_dk, 
       has_fanduel = has_fd,
+      has_showdown = has_sd,
       has_tiers = has_tiers
     )
     
@@ -167,12 +179,13 @@ process_golf_input_data <- function(input_data) {
   player_data <- input_data$sheets$Player
   dk_pts_data <- input_data$sheets$DKPts
   fd_pts_data <- input_data$sheets$FDPts  # This could be NULL now
+  sd_pts_data <- input_data$sheets$SDPts  # This could be NULL now
   
   # Process player data
   processed_players <- as.data.table(player_data)
   
   # Convert relevant numeric columns efficiently - updated with new columns
-  numeric_cols <- c("W", "T5", "T10", "T20", "T30", "T40", "Cut", "DKSalary", "FDSalary", "DKOP", "FDOP")
+  numeric_cols <- c("W", "T5", "T10", "T20", "T30", "T40", "Cut", "DKSalary", "FDSalary", "SDSal")
   
   for (col in numeric_cols) {
     if (col %in% names(processed_players)) {
@@ -180,13 +193,29 @@ process_golf_input_data <- function(input_data) {
     }
   }
   
-  # Process scoring tables
+  # Handle ownership percentages (they may have % signs)
+  ownership_cols <- c("DKOP", "FDOP", "SDOP")
+  for (col in ownership_cols) {
+    if (col %in% names(processed_players)) {
+      # Remove % sign if present and convert to numeric
+      processed_players[, (col) := as.numeric(gsub("%", "", as.character(get(col))))]
+    }
+  }
+  
+  # Process scoring tables - store all score columns
   processed_dk_pts <- if (!is.null(dk_pts_data)) {
     dk_dt <- as.data.table(dk_pts_data)
+    # Identify score columns (all except Rank)
+    score_cols <- setdiff(names(dk_dt), "Rank")
+    # Convert all columns to numeric
     dk_dt[, Rank := as.numeric(Rank)]
-    dk_dt[, Score := as.numeric(Score)]
-    dk_dt <- dk_dt[!is.na(Rank) & !is.na(Score)]
+    for (col in score_cols) {
+      dk_dt[, (col) := as.numeric(get(col))]
+    }
+    dk_dt <- dk_dt[!is.na(Rank)]
     setkey(dk_dt, Rank)
+    # Store the score column names for later random selection
+    attr(dk_dt, "score_columns") <- score_cols
     dk_dt
   } else {
     data.table()
@@ -194,20 +223,46 @@ process_golf_input_data <- function(input_data) {
   
   processed_fd_pts <- if (!is.null(fd_pts_data)) {
     fd_dt <- as.data.table(fd_pts_data)
+    # Identify score columns (all except Rank)
+    score_cols <- setdiff(names(fd_dt), "Rank")
+    # Convert all columns to numeric
     fd_dt[, Rank := as.numeric(Rank)]
-    fd_dt[, Score := as.numeric(Score)]
-    fd_dt <- fd_dt[!is.na(Rank) & !is.na(Score)]
+    for (col in score_cols) {
+      fd_dt[, (col) := as.numeric(get(col))]
+    }
+    fd_dt <- fd_dt[!is.na(Rank)]
     setkey(fd_dt, Rank)
+    # Store the score column names for later random selection
+    attr(fd_dt, "score_columns") <- score_cols
     fd_dt
   } else {
     data.table()  # Empty table if no FD data
+  }
+  
+  processed_sd_pts <- if (!is.null(sd_pts_data)) {
+    sd_dt <- as.data.table(sd_pts_data)
+    # Identify score columns (all except Rank)
+    score_cols <- setdiff(names(sd_dt), "Rank")
+    # Convert all columns to numeric
+    sd_dt[, Rank := as.numeric(Rank)]
+    for (col in score_cols) {
+      sd_dt[, (col) := as.numeric(get(col))]
+    }
+    sd_dt <- sd_dt[!is.na(Rank)]
+    setkey(sd_dt, Rank)
+    # Store the score column names for later random selection
+    attr(sd_dt, "score_columns") <- score_cols
+    sd_dt
+  } else {
+    data.table()  # Empty table if no SD data
   }
   
   # Return processed data
   list(
     players = processed_players,
     dk_points = processed_dk_pts,
-    fd_points = processed_fd_pts
+    fd_points = processed_fd_pts,
+    sd_points = processed_sd_pts
   )
 }
 
@@ -495,7 +550,19 @@ create_points_cache <- function(points_table) {
   setDT(points_table)
   setkey(points_table, Rank)
   
-  # Create a fast lookup vector
+  # Randomly select one score column for this simulation run
+  score_cols <- attr(points_table, "score_columns")
+  if (is.null(score_cols) || length(score_cols) == 0) {
+    # Fallback to "Score" column if no score_columns attribute
+    if ("Score" %in% names(points_table)) {
+      score_cols <- "Score"
+    } else {
+      stop("No score columns found in points table")
+    }
+  }
+  selected_col <- sample(score_cols, 1)
+  
+  # Create a fast lookup vector using the randomly selected column
   max_rank <- max(points_table$Rank, na.rm = TRUE)
   points_lookup <- numeric(max_rank)
   
@@ -503,7 +570,7 @@ create_points_cache <- function(points_table) {
     # Find closest rank
     closest_rank <- points_table[Rank <= i]
     if (nrow(closest_rank) > 0) {
-      points_lookup[i] <- closest_rank$Score[nrow(closest_rank)]
+      points_lookup[i] <- closest_rank[[selected_col]][nrow(closest_rank)]
     } else {
       points_lookup[i] <- 0
     }
@@ -527,12 +594,13 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
   players_dt <- as.data.table(input_data$players)
   n_players <- nrow(players_dt)
   
-  # Platform detection - updated to handle missing FD
+  # Platform detection - updated to handle missing FD and SD
   has_dk <- "DKSalary" %in% names(players_dt) && nrow(input_data$dk_points) > 0
   has_fd <- "FDSalary" %in% names(players_dt) && nrow(input_data$fd_points) > 0
+  has_sd <- "SDSal" %in% names(players_dt) && nrow(input_data$sd_points) > 0
   
   cat("Starting golf simulation with", format(n_sims, big.mark = ","), "iterations\n")
-  cat("Players:", n_players, "| DK:", has_dk, "| FD:", has_fd)
+  cat("Players:", n_players, "| DK:", has_dk, "| FD:", has_fd, "| SD:", has_sd)
   if (!no_cut) cat("| Cut line:", cut_line, "+ ties")
   cat("\n")
   
@@ -540,20 +608,6 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
   start_time <- Sys.time()
   cat("Pre-computing player distributions...\n")
   player_distributions <- precompute_golf_distributions(players_dt, cut_line, no_cut)
-  
-  # Create fast points caches
-  dk_points_cache <- NULL
-  fd_points_cache <- NULL
-  
-  if (has_dk) {
-    cat("Creating DraftKings points cache...\n")
-    dk_points_cache <- create_points_cache(input_data$dk_points)
-  }
-  
-  if (has_fd) {
-    cat("Creating FanDuel points cache...\n")
-    fd_points_cache <- create_points_cache(input_data$fd_points)
-  }
   
   # Extract static data once (updated to handle missing FD)
   static_data <- list(names = players_dt$Name)
@@ -571,6 +625,15 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
       salary = players_dt$FDSalary,
       op = players_dt$FDOP,
       name = if("FDName" %in% names(players_dt)) players_dt$FDName else players_dt$Name
+    )
+  }
+  
+  if (has_sd) {
+    static_data$sd <- list(
+      salary = players_dt$SDSal,
+      op = players_dt$SDOP,
+      id = players_dt$SDID,
+      name = players_dt$Name
     )
   }
   
@@ -600,6 +663,21 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
     end_sim <- min(batch * batch_size, n_sims)
     batch_sims <- start_sim:end_sim
     
+    # Create points caches for this batch with random score column selection
+    batch_dk_cache <- NULL
+    batch_fd_cache <- NULL
+    batch_sd_cache <- NULL
+    
+    if (has_dk) {
+      batch_dk_cache <- create_points_cache(input_data$dk_points)
+    }
+    if (has_fd) {
+      batch_fd_cache <- create_points_cache(input_data$fd_points)
+    }
+    if (has_sd) {
+      batch_sd_cache <- create_points_cache(input_data$sd_points)
+    }
+    
     # Process batch
     for (sim_idx in seq_along(batch_sims)) {
       sim <- batch_sims[sim_idx]
@@ -612,7 +690,7 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
       
       if (has_dk) {
         # Fast DK points calculation using cached lookup
-        dk_points <- get_points_fast(all_finish_positions[, sim], dk_points_cache)
+        dk_points <- get_points_fast(all_finish_positions[, sim], batch_dk_cache)
         
         sim_result[, `:=`(
           DKSalary = static_data$dk$salary,
@@ -624,13 +702,25 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
       
       if (has_fd) {
         # Fast FD points calculation using cached lookup
-        fd_points <- get_points_fast(all_finish_positions[, sim], fd_points_cache)
+        fd_points <- get_points_fast(all_finish_positions[, sim], batch_fd_cache)
         
         sim_result[, `:=`(
           FDSalary = static_data$fd$salary,
           FDOP = static_data$fd$op,
           FDName = static_data$fd$name,
           FDFantasyPoints = fd_points
+        )]
+      }
+      
+      if (has_sd) {
+        # Fast Showdown points calculation using cached lookup
+        sd_points <- get_points_fast(all_finish_positions[, sim], batch_sd_cache)
+        
+        sim_result[, `:=`(
+          SDSal = static_data$sd$salary,
+          SDOP = static_data$sd$op,
+          SDID = static_data$sd$id,
+          SDFantasyPoints = sd_points
         )]
       }
       
@@ -665,7 +755,8 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
   return(list(
     results = combined_results,
     has_dk = has_dk,
-    has_fd = has_fd
+    has_fd = has_fd,
+    has_sd = has_sd
   ))
 }
 
@@ -853,6 +944,29 @@ analyze_fd_golf_fantasy_points <- function(sim_results, cut_line = 65) {
   # Multiply FDOP by 100 to convert to percentage if it's a proportion
   if (max(results$FDOP, na.rm = TRUE) <= 1) {
     results[, FDOP := round(as.numeric(FDOP) * 100, 1)]
+  }
+  
+  return(results)
+}
+
+# Showdown fantasy point projections for golf
+analyze_sd_golf_fantasy_points <- function(sim_results, cut_line = 65) {
+  setDT(sim_results)
+  
+  results <- sim_results[, .(
+    SDSal = first(SDSal),
+    SDOP = first(SDOP),
+    Median_Fantasy_Pts = round(median(SDFantasyPoints), 1),
+    FP_90thPct = round(quantile(SDFantasyPoints, 0.9), 1),
+    Made_Cut_Pct = round(mean(FinishPosition <= cut_line, na.rm = TRUE) * 100, 1)
+  ), by = .(Name)]
+  
+  # Add PPD calculation
+  results[, PPD := round(Median_Fantasy_Pts / (SDSal / 1000), 1)]
+  
+  # Multiply SDOP by 100 to convert to percentage if it's a proportion
+  if (max(results$SDOP, na.rm = TRUE) <= 1) {
+    results[, SDOP := round(as.numeric(SDOP) * 100, 1)]
   }
   
   return(results)
@@ -1221,6 +1335,103 @@ calculate_fd_golf_player_exposure <- function(optimal_lineups, fantasy_analysis,
   return(metrics_data)
 }
 
+# Showdown player exposure calculation
+calculate_sd_golf_player_exposure <- function(optimal_lineups, fantasy_analysis, random_lineups = NULL) {
+  if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
+    return(data.frame(Message = "No optimal lineups available."))
+  }
+  
+  # Get all players from the optimal lineups
+  player_cols <- paste0("Player", 1:SD_ROSTER_SIZE)
+  all_players <- c()
+  for(col in player_cols) {
+    if(col %in% names(optimal_lineups)) {
+      all_players <- c(all_players, optimal_lineups[[col]])
+    }
+  }
+  all_players <- unique(all_players[!is.na(all_players)])
+  
+  if(length(all_players) == 0) {
+    return(data.frame(Message = "No players found in lineups."))
+  }
+  
+  # Initialize metrics data frame
+  metrics_data <- data.frame(
+    Name = all_players,
+    SDSal = NA_real_,
+    SDOP = NA_real_,
+    OptimalRate = 0,
+    FilteredPoolRate = 0,
+    Exposure = 0,
+    Leverage = 0,
+    stringsAsFactors = FALSE
+  )
+  
+  # Match with fantasy analysis data
+  if(!is.null(fantasy_analysis) && nrow(fantasy_analysis) > 0) {
+    for(i in 1:nrow(metrics_data)) {
+      player_name <- metrics_data$Name[i]
+      matches <- which(fantasy_analysis$Name == player_name)
+      
+      if(length(matches) > 0) {
+        match_idx <- matches[1]
+        if("SDSal" %in% names(fantasy_analysis)) {
+          metrics_data$SDSal[i] <- fantasy_analysis$SDSal[match_idx]
+        }
+        if("SDOP" %in% names(fantasy_analysis)) {
+          metrics_data$SDOP[i] <- fantasy_analysis$SDOP[match_idx]
+        }
+      }
+    }
+  }
+  
+  # Calculate OptimalRate
+  total_top1 <- sum(optimal_lineups$Top1Count, na.rm = TRUE)
+  if(total_top1 > 0) {
+    for(player in all_players) {
+      player_appears <- logical(nrow(optimal_lineups))
+      for(col in player_cols) {
+        if(col %in% names(optimal_lineups)) {
+          player_appears <- player_appears | (optimal_lineups[[col]] == player)
+        }
+      }
+      player_matches <- which(player_appears)
+      
+      if(length(player_matches) > 0) {
+        player_total <- sum(optimal_lineups$Top1Count[player_matches], na.rm = TRUE)
+        metrics_data[metrics_data$Name == player, "OptimalRate"] <- (player_total / total_top1) * 100
+      }
+    }
+  }
+  
+  # Calculate Exposure from random lineups (only if provided)
+  if(!is.null(random_lineups) && nrow(random_lineups) > 0) {
+    for(player in all_players) {
+      player_appears <- logical(nrow(random_lineups))
+      for(col in player_cols) {
+        if(col %in% names(random_lineups)) {
+          player_appears <- player_appears | (random_lineups[[col]] == player)
+        }
+      }
+      metrics_data[metrics_data$Name == player, "Exposure"] <- (sum(player_appears) / nrow(random_lineups)) * 100
+    }
+  }
+  
+  # Calculate leverage (only if we have ownership data and exposure)
+  for(i in 1:nrow(metrics_data)) {
+    if(!is.na(metrics_data$SDOP[i]) && !is.na(metrics_data$Exposure[i])) {
+      # Convert SDOP to percentage if it's a decimal
+      ownership_pct <- if(metrics_data$SDOP[i] <= 1) metrics_data$SDOP[i] * 100 else metrics_data$SDOP[i]
+      metrics_data$Leverage[i] <- metrics_data$Exposure[i] - ownership_pct
+    }
+  }
+  
+  # Sort by OptimalRate
+  metrics_data <- metrics_data[order(-metrics_data$OptimalRate), ]
+  
+  return(metrics_data)
+}
+
 # Function to calculate cumulative ownership and geometric mean for lineups
 calculate_golf_lineup_ownership_stats <- function(lineup_data, player_ownership_map, platform = "dk") {
   if(is.null(lineup_data) || nrow(lineup_data) == 0) return(lineup_data)
@@ -1230,6 +1441,10 @@ calculate_golf_lineup_ownership_stats <- function(lineup_data, player_ownership_
     roster_size <- DK_ROSTER_SIZE
     player_cols <- paste0("Player", 1:roster_size)
     ownership_col <- "DKOP"
+  } else if(platform == "sd") {
+    roster_size <- SD_ROSTER_SIZE
+    player_cols <- paste0("Player", 1:roster_size)
+    ownership_col <- "SDOP"
   } else {
     roster_size <- FD_ROSTER_SIZE
     player_cols <- paste0("Player", 1:roster_size)
@@ -1744,6 +1959,136 @@ count_fd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   return(result)
 }
 
+# Showdown golf optimal lineups
+count_sd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
+  # Create data.table for better performance
+  sim_results_dt <- as.data.table(sim_results)
+  
+  # Extract only necessary columns
+  sim_results_dt <- sim_results_dt[, .(
+    SimID, Name, SDSal, SDFantasyPoints, SDOP
+  )]
+  
+  # Split by simulation ID
+  all_sim_ids <- unique(sim_results_dt$SimID)
+  n_sims <- length(all_sim_ids)
+  
+  # Initialize lineup storage
+  all_lineups <- list()
+  
+  # Process simulations in smaller batches
+  batch_size <- 25
+  chunks <- ceiling(n_sims / batch_size)
+  
+  for(chunk in 1:chunks) {
+    start_idx <- (chunk-1) * batch_size + 1
+    end_idx <- min(chunk * batch_size, n_sims)
+    chunk_sim_ids <- all_sim_ids[start_idx:end_idx]
+    
+    message(sprintf("Processing chunk %d/%d (simulations %d to %d)", 
+                    chunk, chunks, start_idx, end_idx))
+    
+    for(sim_id in chunk_sim_ids) {
+      sim_data <- sim_results_dt[SimID == sim_id]
+      
+      # Simple optimization: just get top lineups by total score
+      sim_data[, PPD := SDFantasyPoints / (SDSal/1000)]
+      
+      # Get top candidates
+      top_candidates <- sim_data[order(-SDFantasyPoints)][1:min(15, nrow(sim_data))]
+      
+      if(nrow(top_candidates) >= SD_ROSTER_SIZE) {
+        # Generate ALL possible lineups for this simulation (up to 10 per sim)
+        for(rank in 1:10) {  # Generate more lineups per simulation
+          # Simple greedy selection with some variation
+          selected_players <- top_candidates[1:SD_ROSTER_SIZE]
+          total_salary <- sum(selected_players$SDSal)
+          
+          if(total_salary <= SD_SALARY_CAP) {
+            lineup_str <- paste(sort(selected_players$Name), collapse = "|")
+            
+            lineup_result <- data.frame(
+              Lineup = lineup_str,
+              Rank = rank,
+              SimID = sim_id,
+              TotalScore = sum(selected_players$SDFantasyPoints),
+              TotalSalary = total_salary,
+              stringsAsFactors = FALSE
+            )
+            
+            all_lineups[[length(all_lineups) + 1]] <- lineup_result
+          }
+          
+          # Shuffle top candidates for next iteration
+          if(nrow(top_candidates) > SD_ROSTER_SIZE) {
+            top_candidates <- top_candidates[sample(nrow(top_candidates))]
+          }
+        }
+      }
+    }
+    
+    # Progress reporting
+    cat(sprintf("Processed %d/%d simulations (%.1f%%)\n", 
+                min(end_idx, n_sims), n_sims, 
+                min(end_idx, n_sims) / n_sims * 100))
+  }
+  
+  if(length(all_lineups) == 0) return(NULL)
+  
+  # Combine all results
+  combined_lineups <- do.call(rbind, all_lineups)
+  
+  # Count lineup appearances by rank - KEEP ALL LINEUPS
+  lineup_counts <- combined_lineups %>%
+    group_by(Lineup) %>%
+    summarise(
+      Top1Count = sum(Rank == 1),
+      Top10Count = sum(Rank <= 10),
+      Top50Count = sum(Rank <= 50),
+      Top100Count = sum(Rank <= 100),
+      TotalSalary = first(TotalSalary),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(Top100Count), desc(Top10Count), desc(Top1Count)) %>%
+    slice_head(n = 10000) 
+  
+  # Split lineup string into player columns
+  player_cols <- do.call(rbind, strsplit(lineup_counts$Lineup, "\\|"))
+  colnames(player_cols) <- paste0("Player", 1:SD_ROSTER_SIZE)
+  
+  # Create final result with ALL lineups
+  result <- cbind(
+    as.data.frame(player_cols),
+    lineup_counts[, c("Top1Count", "Top10Count", "Top50Count", "Top100Count", "TotalSalary")]
+  )
+  
+  # Calculate ownership statistics for ALL lineups
+  ownership_map <- NULL
+  if("SDOP" %in% names(sim_results)) {
+    ownership_data <- unique(sim_results[!is.na(sim_results$SDOP), c("Name", "SDOP")])
+    if(nrow(ownership_data) > 0) {
+      ownership_map <- setNames(ownership_data$SDOP, ownership_data$Name)
+      result <- calculate_golf_lineup_ownership_stats(result, ownership_map, "sd")
+    }
+  }
+  
+  # Add default ownership columns if no ownership data
+  if(!"CumulativeOwnership" %in% names(result)) {
+    result$CumulativeOwnership <- 0
+    result$GeometricMeanOwnership <- 0
+  }
+  
+  # **NEW: Add cut metrics if player_data provided**
+  if(!is.null(player_data)) {
+    message("Calculating cut metrics for lineups...")
+    result <- add_cut_metrics_to_lineups(result, player_data, platform = "sd")
+  }
+  
+  cat(sprintf("Generated %d total optimal lineups\n", nrow(result)))
+  
+  return(result)
+}
+
 # Function to calculate filtered pool rates for player exposure
 calculate_golf_filtered_pool_rates <- function(optimal_lineups, filters, platform = "dk") {
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -1832,6 +2177,8 @@ calculate_golf_filtered_pool_rates <- function(optimal_lineups, filters, platfor
   if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
     if(platform == "dk") {
       player_cols <- paste0("Player", 1:DK_ROSTER_SIZE)
+    } else if(platform == "sd") {
+      player_cols <- paste0("Player", 1:SD_ROSTER_SIZE)
     } else {
       player_cols <- paste0("Player", 1:FD_ROSTER_SIZE)
     }
@@ -1980,6 +2327,58 @@ calculate_fd_filtered_pool_stats <- function(optimal_lineups, filters) {
     
     for(col in player_cols) {
       to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_players
+    }
+    filtered_lineups <- filtered_lineups[!to_exclude]
+  }
+  
+  return(list(count = nrow(filtered_lineups), thresholds = NULL))
+}
+
+# Showdown filtered pool stats (no cut filters for single-round)
+calculate_sd_filtered_pool_stats <- function(optimal_lineups, filters) {
+  if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
+    return(list(count = 0, thresholds = NULL))
+  }
+  
+  filtered_lineups <- as.data.table(optimal_lineups)
+  
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
+    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+  }
+  if (!is.null(filters$min_top10_count) && filters$min_top10_count > 0) {
+    filtered_lineups <- filtered_lineups[Top10Count >= filters$min_top10_count]
+  }
+  if (!is.null(filters$min_top50_count) && filters$min_top50_count > 0) {
+    filtered_lineups <- filtered_lineups[Top50Count >= filters$min_top50_count]
+  }
+  if (!is.null(filters$min_top100_count) && filters$min_top100_count > 0) {
+    filtered_lineups <- filtered_lineups[Top100Count >= filters$min_top100_count]
+  }
+  
+  if (!is.null(filters$cumulative_ownership_range) && "CumulativeOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$cumulative_ownership_range[1] & 
+                                           CumulativeOwnership <= filters$cumulative_ownership_range[2]]
+  }
+  
+  if (!is.null(filters$geometric_mean_range) && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filters$geometric_mean_range[1] & 
+                                           GeometricMeanOwnership <= filters$geometric_mean_range[2]]
+  }
+  
+  # Apply minimum salary filter
+  if (!is.null(filters$min_salary) && filters$min_salary > 0 && 
+      "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[!is.na(TotalSalary) & TotalSalary >= filters$min_salary]
+  }
+  
+  if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
+    player_cols <- paste0("Player", 1:SD_ROSTER_SIZE)
+    to_exclude <- rep(FALSE, nrow(filtered_lineups))
+    
+    for(col in player_cols) {
+      if(col %in% names(filtered_lineups)) {
+        to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_players
+      }
     }
     filtered_lineups <- filtered_lineups[!to_exclude]
   }
@@ -2251,6 +2650,118 @@ generate_random_fd_golf_lineups <- function(optimal_lineups, filters) {
   return(as.data.frame(selected_lineups))
 }
 
+# Showdown random lineup generation (no cut filters for single-round)
+generate_random_sd_golf_lineups <- function(optimal_lineups, filters) {
+  # Convert to data.table for efficiency
+  setDT(optimal_lineups)
+  filtered_lineups <- copy(optimal_lineups)
+  
+  # Apply filters
+  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
+    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+  }
+  
+  if (!is.null(filters$min_top10_count) && filters$min_top10_count > 0) {
+    filtered_lineups <- filtered_lineups[Top10Count >= filters$min_top10_count]
+  }
+  
+  if (!is.null(filters$min_top50_count) && filters$min_top50_count > 0) {
+    filtered_lineups <- filtered_lineups[Top50Count >= filters$min_top50_count]
+  }
+  
+  if (!is.null(filters$min_top100_count) && filters$min_top100_count > 0) {
+    filtered_lineups <- filtered_lineups[Top100Count >= filters$min_top100_count]
+  }
+  
+  # Apply ownership range filters
+  if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && "CumulativeOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$cumulative_ownership_range[1] & 
+                                           CumulativeOwnership <= filters$cumulative_ownership_range[2]]
+  }
+  
+  if (!is.null(filters$geometric_mean_range) && length(filters$geometric_mean_range) == 2 && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filters$geometric_mean_range[1] & 
+                                           GeometricMeanOwnership <= filters$geometric_mean_range[2]]
+  }
+  
+  # Apply minimum salary filter
+  if (!is.null(filters$min_salary) && filters$min_salary > 0 && 
+      "TotalSalary" %in% names(filtered_lineups)) {
+    filtered_lineups <- filtered_lineups[!is.na(TotalSalary) & TotalSalary >= filters$min_salary]
+  }
+  
+  # Check if any lineups match filters
+  if (nrow(filtered_lineups) == 0) {
+    return(NULL)
+  }
+  
+  # Prepare for tracking
+  player_cols <- paste0("Player", 1:SD_ROSTER_SIZE)
+  all_players <- unique(unlist(filtered_lineups[, ..player_cols]))
+  player_counts <- setNames(numeric(length(all_players)), all_players)
+  
+  # Sample lineups using Top1Count as weight
+  weight_col <- "Top1Count"
+  selected_lineups <- data.table()
+  selected_indices <- integer(0)
+  
+  # Sampling with minimal attempt tracking
+  attempts <- 0
+  max_attempts <- filters$num_lineups * 10
+  
+  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
+    attempts <- attempts + 1
+    
+    # Available lineups
+    available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
+    if (length(available_indices) == 0) break
+    
+    # Sample based on weights
+    weights <- filtered_lineups[[weight_col]][available_indices]
+    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
+    
+    selected_idx <- tryCatch({
+      sample(available_indices, 1, prob = weights)
+    }, error = function(e) {
+      sample(available_indices, 1)
+    })
+    
+    # Add lineup immediately
+    selected_lineups <- rbind(selected_lineups, filtered_lineups[selected_idx])
+    selected_indices <- c(selected_indices, selected_idx)
+    
+    # Update player counts for exposure calculation
+    candidates_players <- unlist(filtered_lineups[selected_idx, ..player_cols])
+    player_counts[candidates_players] <- player_counts[candidates_players] + 1
+  }
+  
+  if (nrow(selected_lineups) == 0) return(NULL)
+  
+  # Calculate exposure for attribute
+  final_exposure <- (player_counts / nrow(selected_lineups)) * 100
+  attr(selected_lineups, "exposure") <- final_exposure
+  
+  # Keep only needed columns
+  keep_cols <- c(player_cols, "Top1Count", "Top10Count", "Top50Count", "Top100Count", "TotalSalary")
+  keep_cols <- intersect(keep_cols, names(selected_lineups))
+  
+  if(!is.null(selected_lineups) && nrow(selected_lineups) > 0) {
+    # Create ownership mapping from player_counts attribute or calculate from filtered_lineups
+    ownership_map <- NULL
+    if(!is.null(filtered_lineups) && "SDOP" %in% names(filtered_lineups)) {
+      # Get ownership data from the first occurrence of each player
+      ownership_data <- filtered_lineups[, .(SDOP = first(SDOP)), by = Name]
+      ownership_map <- setNames(ownership_data$SDOP, ownership_data$Name)
+    }
+    
+    if(!is.null(ownership_map)) {
+      selected_lineups <- calculate_golf_lineup_ownership_stats(selected_lineups, ownership_map, "sd")
+    }
+  }
+  
+  return(as.data.frame(selected_lineups[, ..keep_cols]))
+}
+
 # Define UI
 ui <- dashboardPage(
   skin = "blue",
@@ -2360,6 +2871,7 @@ ui <- dashboardPage(
                     choices = list(
                       "DraftKings" = "dk",
                       "FanDuel" = "fd",
+                      "DK Showdown" = "showdown",
                       "DK Tiers" = "tiers"
                     ),
                     selected = "dk",
@@ -2397,6 +2909,24 @@ ui <- dashboardPage(
                              div(
                                style = "margin-top: 10px;",
                                uiOutput("fd_optimization_status")
+                             )
+                      )
+                    )
+                  ),
+                  
+                  # Conditional panel for Showdown options
+                  conditionalPanel(
+                    condition = "input.platform_selection == 'showdown' && output.has_showdown == 'true'",
+                    fluidRow(
+                      column(6,
+                             actionButton("run_sd_optimization", "Calculate Showdown Lineups",
+                                          class = "btn-primary", 
+                                          style = "width: 100%; margin-top: 10px;")
+                      ),
+                      column(6,
+                             div(
+                               style = "margin-top: 10px;",
+                               uiOutput("sd_optimization_status")
                              )
                       )
                     )
@@ -2476,6 +3006,23 @@ ui <- dashboardPage(
                   )
                 )
               ),
+              
+              # Showdown results section - only shown when Showdown selected and lineups available
+              conditionalPanel(
+                condition = "input.platform_selection == 'showdown' && output.has_sd_lineups == 'true'",
+                fluidRow(
+                  box(
+                    width = 12,
+                    title = "DK Showdown Optimal Lineups",
+                    div(
+                      style = "text-align: right; margin-bottom: 10px;",
+                      downloadButton('download_sd_optimal_lineups', 'Download All Showdown Lineups',
+                                     style = "margin-top: 10px;")
+                    ),
+                    DTOutput("sd_optimal_lineups_table")
+                  )
+                )
+              ),
               # Tiers results section - only shown when Tiers selected and lineups available
               conditionalPanel(
                 condition = "input.platform_selection == 'tiers' && output.has_tiers_lineups == 'true'",
@@ -2511,18 +3058,23 @@ server <- function(input, output, session) {
     simulation_results = NULL,
     has_draftkings = FALSE,
     has_fanduel = FALSE,
+    has_showdown = FALSE,
     has_tiers = FALSE,  # ADD THIS
     tiers_data = NULL,  # ADD THIS
     finishing_analysis = NULL,
     dk_fantasy_analysis = NULL,
     fd_fantasy_analysis = NULL,
+    sd_fantasy_analysis = NULL,
     dk_optimal_lineups = NULL,
     fd_optimal_lineups = NULL,
+    sd_optimal_lineups = NULL,
     tiers_optimal_lineups = NULL,  # ADD THIS
     dk_player_exposure = NULL,
     fd_player_exposure = NULL,
+    sd_player_exposure = NULL,
     dk_random_lineups = NULL,
     fd_random_lineups = NULL,
+    sd_random_lineups = NULL,
     file_uploaded = FALSE,
     simulation_complete = FALSE
   )
@@ -2545,11 +3097,13 @@ server <- function(input, output, session) {
         rv$finishing_analysis <- NULL
         rv$dk_fantasy_analysis <- NULL
         rv$fd_fantasy_analysis <- NULL
+        rv$sd_fantasy_analysis <- NULL
         rv$simulation_complete <- FALSE
         
         # Store platform availability
         rv$has_draftkings <- rv$input_data$platform_info$has_draftkings
         rv$has_fanduel <- rv$input_data$platform_info$has_fanduel
+        rv$has_showdown <- rv$input_data$platform_info$has_showdown
         rv$has_tiers <- rv$input_data$platform_info$has_tiers 
         
         # Process tiers data if available
@@ -2655,6 +3209,7 @@ server <- function(input, output, session) {
     rv$finishing_analysis <- NULL
     rv$dk_fantasy_analysis <- NULL
     rv$fd_fantasy_analysis <- NULL
+    rv$sd_fantasy_analysis <- NULL
     
     # Get cut configuration from inputs
     cut_line <- if(!is.null(input$cut_line)) input$cut_line else 65
@@ -2678,6 +3233,7 @@ server <- function(input, output, session) {
       # Update platform availability
       rv$has_draftkings <- "DKFantasyPoints" %in% names(rv$simulation_results)
       rv$has_fanduel <- "FDFantasyPoints" %in% names(rv$simulation_results)
+      rv$has_showdown <- "SDFantasyPoints" %in% names(rv$simulation_results)
       
       # Process finish position analysis with cut configuration
       setProgress(0.7, detail = "Analyzing finishing positions...")
@@ -2695,6 +3251,10 @@ server <- function(input, output, session) {
       
       if (rv$has_fanduel) {
         rv$fd_fantasy_analysis <- analyze_fd_golf_fantasy_points(rv$simulation_results, cut_line)
+      }
+      
+      if (rv$has_showdown) {
+        rv$sd_fantasy_analysis <- analyze_sd_golf_fantasy_points(rv$simulation_results, cut_line)
       }
       
       # Mark simulation as complete
@@ -2948,11 +3508,57 @@ server <- function(input, output, session) {
       min_top10_count = if(!is.null(input$fd_min_top10_count)) input$fd_min_top10_count else 0,
       min_top50_count = if(!is.null(input$fd_min_top50_count)) input$fd_min_top50_count else 0,
       min_top100_count = if(!is.null(input$fd_min_top100_count)) input$fd_min_top100_count else 0,
+      cumulative_ownership_range = if(!is.null(input$fd_cumulative_ownership_range)) input$fd_cumulative_ownership_range else c(0, 1000),
+      geometric_mean_range = if(!is.null(input$fd_geometric_mean_range)) input$fd_geometric_mean_range else c(0, 100),
+      min_atleast6_prob = if(!is.null(input$fd_min_atleast6_prob)) input$fd_min_atleast6_prob else 0,
+      min_atleast5_prob = if(!is.null(input$fd_min_atleast5_prob)) input$fd_min_atleast5_prob else 0,
+      min_expected_cuts = if(!is.null(input$fd_min_expected_cuts)) input$fd_min_expected_cuts else 0,
+      min_salary = if(!is.null(input$fd_min_salary)) input$fd_min_salary else 0,
       excluded_players = if(!is.null(input$fd_excluded_players)) input$fd_excluded_players else character(0)
     )
     
     stats <- tryCatch({
       calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
+    }, error = function(e) {
+      list(count = 0, thresholds = NULL)
+    })
+    
+    paste("Number of lineups in filtered pool:", stats$count)
+  })
+  
+  # Showdown filtered pool size display
+  output$sd_filtered_pool_size <- renderText({
+    if(is.null(rv$sd_optimal_lineups) || nrow(rv$sd_optimal_lineups) == 0) {
+      return("Number of lineups in filtered pool: 0")
+    }
+    
+    filters <- list(
+      min_top1_count = if(!is.null(input$sd_min_top1_count)) input$sd_min_top1_count else 0,
+      min_top10_count = if(!is.null(input$sd_min_top10_count)) input$sd_min_top10_count else 0,
+      min_top50_count = if(!is.null(input$sd_min_top50_count)) input$sd_min_top50_count else 0,
+      min_top100_count = if(!is.null(input$sd_min_top100_count)) input$sd_min_top100_count else 0,
+      cumulative_ownership_range = if(!is.null(input$sd_cumulative_ownership_range)) {
+        input$sd_cumulative_ownership_range
+      } else {
+        if("CumulativeOwnership" %in% names(rv$sd_optimal_lineups)) {
+          cum_vals <- rv$sd_optimal_lineups$CumulativeOwnership[!is.na(rv$sd_optimal_lineups$CumulativeOwnership)]
+          if(length(cum_vals) > 0) c(min(cum_vals), max(cum_vals)) else c(0, 100)
+        } else c(0, 100)
+      },
+      geometric_mean_range = if(!is.null(input$sd_geometric_mean_range)) {
+        input$sd_geometric_mean_range
+      } else {
+        if("GeometricMeanOwnership" %in% names(rv$sd_optimal_lineups)) {
+          geom_vals <- rv$sd_optimal_lineups$GeometricMeanOwnership[!is.na(rv$sd_optimal_lineups$GeometricMeanOwnership)]
+          if(length(geom_vals) > 0) c(min(geom_vals), max(geom_vals)) else c(0, 100)
+        } else c(0, 100)
+      },
+      min_salary = if(!is.null(input$sd_min_salary)) input$sd_min_salary else 0,
+      excluded_players = if(!is.null(input$sd_excluded_players)) input$sd_excluded_players else character(0)
+    )
+    
+    stats <- tryCatch({
+      calculate_sd_filtered_pool_stats(rv$sd_optimal_lineups, filters)
     }, error = function(e) {
       list(count = 0, thresholds = NULL)
     })
@@ -3105,6 +3711,75 @@ server <- function(input, output, session) {
     dt
   })
   
+  output$sd_optimal_lineups_table <- renderDT({
+    req(rv$sd_optimal_lineups)
+    
+    display_data <- as.data.frame(rv$sd_optimal_lineups)
+    
+    if(nrow(display_data) > 1000) {
+      display_data <- display_data %>%
+        arrange(desc(Top100Count), desc(Top10Count), desc(Top1Count)) %>%
+        head(1000)
+    }
+    
+    # Ensure we have all expected columns
+    expected_cols <- c(paste0("Player", 1:SD_ROSTER_SIZE), 
+                       "Top1Count", "Top10Count", "Top50Count", "Top100Count", 
+                       "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership",
+                       "ExpectedCuts", "AtLeast6", "AtLeast5")
+    
+    # Keep only columns that exist
+    cols_to_keep <- intersect(expected_cols, names(display_data))
+    display_data <- display_data[, cols_to_keep, drop = FALSE]
+    
+    dt <- datatable(
+      display_data,
+      caption = htmltools::tags$caption(
+        style = "caption-side: top; text-align: center; color: #FFD700; font-weight: bold;",
+        sprintf("Showing Top %d Optimal Lineups", nrow(display_data))
+      ),
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        rownames = FALSE,
+        dom = "ftp",
+        ordering = TRUE,
+        processing = TRUE,
+        serverSide = FALSE,
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      ),
+      class = 'cell-border stripe compact',
+      rownames = FALSE
+    )
+    
+    # Format columns
+    if("TotalSalary" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    if("CumulativeOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatRound('CumulativeOwnership', digits = 1)
+    }
+    
+    if("GeometricMeanOwnership" %in% names(display_data)) {
+      dt <- dt %>% formatRound('GeometricMeanOwnership', digits = 2)
+    }
+    
+    if("ExpectedCuts" %in% names(display_data)) {
+      dt <- dt %>% formatRound('ExpectedCuts', digits = 2)
+    }
+    
+    if("AtLeast6" %in% names(display_data)) {
+      dt <- dt %>% formatRound('AtLeast6', digits = 1)
+    }
+    
+    if("AtLeast5" %in% names(display_data)) {
+      dt <- dt %>% formatRound('AtLeast5', digits = 1)
+    }
+    
+    dt
+  })
+  
   output$player_stats <- renderDT({
     req(rv$finishing_analysis)
     
@@ -3245,9 +3920,8 @@ server <- function(input, output, session) {
     
     # Create appropriate UI based on available platforms
     if (rv$has_draftkings && rv$has_fanduel) {
-      # Both platforms available - use tabs
-      tabsetPanel(
-        id = "fantasy_tabs",
+      # Multiple platforms available - use tabs
+      tab_list <- list(
         tabPanel(
           "DraftKings",
           fluidRow(
@@ -3299,9 +3973,26 @@ server <- function(input, output, session) {
           )
         )
       )
+      
+      # Add Showdown tab if available
+      if (rv$has_showdown) {
+        tab_list[[length(tab_list) + 1]] <- tabPanel(
+          "DK Showdown",
+          fluidRow(
+            box(
+              width = 12,
+              title = "DK Showdown Fantasy Point Projections",
+              DTOutput("sd_fantasy_projections") %>% withSpinner(color = "#FFD700"),
+              downloadButton('download_sd_fantasy_projections', 'Download Projections')
+            )
+          )
+        )
+      }
+      
+      do.call(tabsetPanel, c(list(id = "fantasy_tabs"), tab_list))
     } else if (rv$has_draftkings) {
-      # Only DraftKings available
-      tagList(
+      # Only DraftKings available - check for Showdown
+      ui_elements <- list(
         fluidRow(
           box(
             width = 12,
@@ -3325,6 +4016,20 @@ server <- function(input, output, session) {
           )
         )
       )
+      
+      # Add Showdown if available
+      if (rv$has_showdown) {
+        ui_elements[[length(ui_elements) + 1]] <- fluidRow(
+          box(
+            width = 12,
+            title = "DK Showdown Fantasy Point Projections",
+            DTOutput("sd_fantasy_projections") %>% withSpinner(color = "#ff6600"),
+            downloadButton('download_sd_fantasy_projections', 'Download Projections')
+          )
+        )
+      }
+      
+      tagList(ui_elements)
     } else if (rv$has_fanduel) {
       # Only FanDuel available
       tagList(
@@ -3408,6 +4113,30 @@ server <- function(input, output, session) {
       class = 'cell-border stripe'
     ) %>%
       formatCurrency('FDSalary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+      formatRound(c('Median_Fantasy_Pts', 'FP_90thPct', 'PPD'), digits = 1)
+    
+    dt
+  })
+  
+  output$sd_fantasy_projections <- renderDT({
+    req(rv$sd_fantasy_analysis)
+    
+    dt <- datatable(
+      rv$sd_fantasy_analysis,
+      options = list(
+        scrollX = TRUE,
+        pageLength = 25,
+        dom = "ftp",
+        order = list(list(3, 'desc')), # Sort by median
+        processing = TRUE,
+        columnDefs = list(list(
+          targets = "_all", className = 'dt-center'
+        ))
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe'
+    ) %>%
+      formatCurrency('SDSal', currency = "$", interval = 3, mark = ",", digits = 0) %>%
       formatRound(c('Median_Fantasy_Pts', 'FP_90thPct', 'PPD'), digits = 1)
     
     dt
@@ -3586,6 +4315,12 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "has_fanduel", suspendWhenHidden = FALSE)
   
+  output$has_showdown <- reactive({
+    result <- tolower(as.character(rv$has_showdown))
+    return(result)
+  })
+  outputOptions(output, "has_showdown", suspendWhenHidden = FALSE)
+  
   output$has_dk_lineups <- reactive({
     result <- tolower(as.character(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0))
     return(result)
@@ -3597,6 +4332,12 @@ server <- function(input, output, session) {
     return(result)
   })
   outputOptions(output, "has_fd_lineups", suspendWhenHidden = FALSE)
+  
+  output$has_sd_lineups <- reactive({
+    result <- tolower(as.character(!is.null(rv$sd_optimal_lineups) && nrow(rv$sd_optimal_lineups) > 0))
+    return(result)
+  })
+  outputOptions(output, "has_sd_lineups", suspendWhenHidden = FALSE)
   
   
   output$dk_random_lineups_table <- renderDT({
@@ -3662,6 +4403,48 @@ server <- function(input, output, session) {
     )
     
     # Format columns (same as before)
+    if("TotalSalary" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    count_cols <- c("Top1Count", "Top10Count", "Top50Count", "Top100Count")
+    count_cols <- intersect(count_cols, names(display_data))
+    for(col in count_cols) {
+      if(any(!is.na(display_data[[col]]))) {
+        dt <- dt %>% formatStyle(
+          col,
+          background = styleColorBar(c(0, max(display_data[[col]], na.rm = TRUE)), 'lightblue'),
+          backgroundSize = '98% 88%',
+          backgroundRepeat = 'no-repeat',
+          backgroundPosition = 'center'
+        )
+      }
+    }
+    
+    dt
+  })
+  
+  output$sd_random_lineups_table <- renderDT({
+    req(rv$sd_random_lineups)
+    
+    display_data <- as.data.frame(rv$sd_random_lineups)
+    
+    dt <- datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        rownames = FALSE,
+        dom = "ftp",
+        ordering = TRUE,
+        processing = TRUE,
+        columnDefs = list(list(className = 'dt-center', targets = "_all"))
+      ),
+      class = 'cell-border stripe compact',
+      rownames = FALSE
+    )
+    
+    # Format columns
     if("TotalSalary" %in% names(display_data)) {
       dt <- dt %>% formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0)
     }
@@ -3781,6 +4564,54 @@ server <- function(input, output, session) {
     return(dt)
   })
   
+  output$sd_player_exposure_table <- renderDT({
+    req(rv$sd_player_exposure)
+    
+    # Check if it's an error message
+    if("Message" %in% names(rv$sd_player_exposure)) {
+      return(datatable(rv$sd_player_exposure, options = list(dom = "t"), rownames = FALSE))
+    }
+    
+    display_data <- rv$sd_player_exposure
+    has_random_lineups <- !is.null(rv$sd_random_lineups) && nrow(rv$sd_random_lineups) > 0
+    
+    # Remove columns if no random lineups
+    if(!has_random_lineups) {
+      display_data$Exposure <- NULL
+      display_data$Leverage <- NULL
+    }
+    
+    dt <- datatable(
+      display_data,
+      options = list(
+        pageLength = 25,
+        dom = "ftp",
+        scrollX = TRUE,
+        order = list(list(3, 'desc')),  # Sort by OptimalRate
+        processing = TRUE,
+        rownames = FALSE
+      ),
+      rownames = FALSE
+    )
+    
+    # Format columns
+    if("SDSal" %in% names(display_data)) {
+      dt <- dt %>% formatCurrency('SDSal', currency = "$", interval = 3, mark = ",", digits = 0)
+    }
+    
+    if("SDOP" %in% names(display_data)) {
+      dt <- dt %>% formatRound('SDOP', digits = 1)
+    }
+    
+    # Format numeric columns
+    numeric_cols <- intersect(c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'), names(display_data))
+    if(length(numeric_cols) > 0) {
+      dt <- dt %>% formatRound(numeric_cols, digits = 1)
+    }
+    
+    return(dt)
+  })
+  
   output$download_dk_optimal_lineups <- downloadHandler(
     filename = function() {
       paste("dk_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
@@ -3798,7 +4629,7 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Create download data with DKName substitution
+      # Create download data with Name (ID) format
       download_data <- as.data.frame(rv$dk_optimal_lineups)
       keep_cols <- c(paste0("Player", 1:DK_ROSTER_SIZE), 
                      "Top1Count", "Top10Count", "Top50Count", "Top100Count", 
@@ -3806,25 +4637,25 @@ server <- function(input, output, session) {
       keep_cols <- intersect(keep_cols, names(download_data))
       download_data <- download_data[, keep_cols, drop = FALSE]
       
-      # Replace player names with DKName if available
-      if(!is.null(rv$simulation_results) && "DKName" %in% names(rv$simulation_results)) {
-        # Create name mapping from simulation results
-        name_mapping <- unique(rv$simulation_results[, c("Name", "DKName")])
-        name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$DKName), ]
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
         
-        if(nrow(name_mapping) > 0) {
-          # Create lookup table
-          lookup <- setNames(name_mapping$DKName, name_mapping$Name)
-          
-          # Replace names in each player column
-          for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
-            if(col %in% names(download_data)) {
-              download_data[[col]] <- ifelse(
-                download_data[[col]] %in% names(lookup),
-                lookup[download_data[[col]]],
-                download_data[[col]]
-              )
-            }
+        # Create lookup: Name -> "DKName (DKID)"
+        name_col <- if("DKName" %in% names(players_dt)) "DKName" else "Name"
+        lookup <- setNames(
+          paste0(players_dt[[name_col]], " (", players_dt$DKID, ")"),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "Name (ID)" format
+        for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
           }
         }
       }
@@ -3852,7 +4683,7 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Create download data with FDName substitution
+      # Create download data with ID:Name format
       download_data <- as.data.frame(rv$fd_optimal_lineups)
       keep_cols <- c(paste0("Player", 1:FD_ROSTER_SIZE), 
                      "Top1Count", "Top10Count", "Top50Count", "Top100Count", 
@@ -3860,25 +4691,78 @@ server <- function(input, output, session) {
       keep_cols <- intersect(keep_cols, names(download_data))
       download_data <- download_data[, keep_cols, drop = FALSE]
       
-      # Replace player names with FDName if available
-      if(!is.null(rv$simulation_results) && "FDName" %in% names(rv$simulation_results)) {
-        # Create name mapping from simulation results
-        name_mapping <- unique(rv$simulation_results[, c("Name", "FDName")])
-        name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$FDName), ]
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
         
-        if(nrow(name_mapping) > 0) {
-          # Create lookup table
-          lookup <- setNames(name_mapping$FDName, name_mapping$Name)
-          
-          # Replace names in each player column
-          for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
-            if(col %in% names(download_data)) {
-              download_data[[col]] <- ifelse(
-                download_data[[col]] %in% names(lookup),
-                lookup[download_data[[col]]],
-                download_data[[col]]
-              )
-            }
+        # Create lookup: Name -> "FDID:Name"
+        name_col <- if("FDName" %in% names(players_dt)) "FDName" else "Name"
+        lookup <- setNames(
+          paste0(players_dt$FDID, ":", players_dt[[name_col]]),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "ID:Name" format
+        for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+      
+      write.csv(download_data, file, row.names = FALSE)
+    },
+    contentType = "text/csv"
+  )
+  
+  # 2b. Showdown optimal lineups download handler
+  output$download_sd_optimal_lineups <- downloadHandler(
+    filename = function() {
+      paste("sd_golf_optimal_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+    },
+    content = function(file) {
+      if(is.null(rv$sd_optimal_lineups) || nrow(rv$sd_optimal_lineups) == 0) {
+        empty_data <- data.frame(
+          Player1 = character(0), Player2 = character(0), Player3 = character(0),
+          Player4 = character(0), Player5 = character(0), Player6 = character(0),
+          Top1Count = integer(0), Top2Count = integer(0), Top3Count = integer(0), 
+          Top5Count = integer(0), TotalSalary = integer(0),
+          CumulativeOwnership = numeric(0), GeometricMeanOwnership = numeric(0)
+        )
+        write.csv(empty_data, file, row.names = FALSE)
+        return()
+      }
+      
+      # Create download data with Name (ID) format
+      download_data <- as.data.frame(rv$sd_optimal_lineups)
+      keep_cols <- c(paste0("Player", 1:SD_ROSTER_SIZE), 
+                     "Top1Count", "Top10Count", "Top50Count", "Top100Count", 
+                     "TotalSalary", "CumulativeOwnership", "GeometricMeanOwnership")
+      keep_cols <- intersect(keep_cols, names(download_data))
+      download_data <- download_data[, keep_cols, drop = FALSE]
+      
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
+        
+        # Create lookup: Name -> "Name (SDID)"
+        lookup <- setNames(
+          paste0(players_dt$Name, " (", players_dt$SDID, ")"),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "Name (ID)" format
+        for(col in paste0("Player", 1:SD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
           }
         }
       }
@@ -3903,28 +4787,28 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Create download data with DKName substitution
+      # Create download data with Name (ID) format
       download_data <- as.data.frame(rv$dk_random_lineups)
       
-      # Replace player names with DKName if available
-      if(!is.null(rv$simulation_results) && "DKName" %in% names(rv$simulation_results)) {
-        # Create name mapping from simulation results
-        name_mapping <- unique(rv$simulation_results[, c("Name", "DKName")])
-        name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$DKName), ]
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
         
-        if(nrow(name_mapping) > 0) {
-          # Create lookup table
-          lookup <- setNames(name_mapping$DKName, name_mapping$Name)
-          
-          # Replace names in each player column
-          for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
-            if(col %in% names(download_data)) {
-              download_data[[col]] <- ifelse(
-                download_data[[col]] %in% names(lookup),
-                lookup[download_data[[col]]],
-                download_data[[col]]
-              )
-            }
+        # Create lookup: Name -> "DKName (DKID)"
+        name_col <- if("DKName" %in% names(players_dt)) "DKName" else "Name"
+        lookup <- setNames(
+          paste0(players_dt[[name_col]], " (", players_dt$DKID, ")"),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "Name (ID)" format
+        for(col in paste0("Player", 1:DK_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
           }
         }
       }
@@ -3949,28 +4833,73 @@ server <- function(input, output, session) {
         return()
       }
       
-      # Create download data with FDName substitution
+      # Create download data with ID:Name format
       download_data <- as.data.frame(rv$fd_random_lineups)
       
-      # Replace player names with FDName if available
-      if(!is.null(rv$simulation_results) && "FDName" %in% names(rv$simulation_results)) {
-        # Create name mapping from simulation results
-        name_mapping <- unique(rv$simulation_results[, c("Name", "FDName")])
-        name_mapping <- name_mapping[!is.na(name_mapping$Name) & !is.na(name_mapping$FDName), ]
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
         
-        if(nrow(name_mapping) > 0) {
-          # Create lookup table
-          lookup <- setNames(name_mapping$FDName, name_mapping$Name)
-          
-          # Replace names in each player column
-          for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
-            if(col %in% names(download_data)) {
-              download_data[[col]] <- ifelse(
-                download_data[[col]] %in% names(lookup),
-                lookup[download_data[[col]]],
-                download_data[[col]]
-              )
-            }
+        # Create lookup: Name -> "FDID:Name"
+        name_col <- if("FDName" %in% names(players_dt)) "FDName" else "Name"
+        lookup <- setNames(
+          paste0(players_dt$FDID, ":", players_dt[[name_col]]),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "ID:Name" format
+        for(col in paste0("Player", 1:FD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
+          }
+        }
+      }
+      
+      write.csv(download_data, file, row.names = FALSE)
+    },
+    contentType = "text/csv"
+  )
+  
+  # 4b. Showdown random lineups download handler
+  output$download_sd_random_lineups <- downloadHandler(
+    filename = function() {
+      paste("sd_golf_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+    },
+    content = function(file) {
+      if(is.null(rv$sd_random_lineups) || nrow(rv$sd_random_lineups) == 0) {
+        empty_data <- data.frame(
+          Player1 = character(0), Player2 = character(0), Player3 = character(0),
+          Player4 = character(0), Player5 = character(0), Player6 = character(0)
+        )
+        write.csv(empty_data, file, row.names = FALSE)
+        return()
+      }
+      
+      # Create download data with Name (ID) format
+      download_data <- as.data.frame(rv$sd_random_lineups)
+      
+      # Create name to ID mapping from processed data
+      if(!is.null(rv$processed_data) && !is.null(rv$processed_data$players)) {
+        players_dt <- as.data.table(rv$processed_data$players)
+        
+        # Create lookup: Name -> "Name (SDID)"
+        lookup <- setNames(
+          paste0(players_dt$Name, " (", players_dt$SDID, ")"),
+          players_dt$Name
+        )
+        
+        # Replace names in each player column with "Name (ID)" format
+        for(col in paste0("Player", 1:SD_ROSTER_SIZE)) {
+          if(col %in% names(download_data)) {
+            download_data[[col]] <- ifelse(
+              download_data[[col]] %in% names(lookup),
+              lookup[download_data[[col]]],
+              download_data[[col]]
+            )
           }
         }
       }
@@ -4197,6 +5126,111 @@ server <- function(input, output, session) {
     })
   })
   
+  # Showdown optimization
+  observeEvent(input$run_sd_optimization, {
+    req(rv$simulation_results, rv$has_showdown)
+    
+    # Clear previous analysis results but keep simulation data
+    rv$sd_optimal_lineups <- NULL
+    rv$sd_player_exposure <- NULL
+    rv$sd_random_lineups <- NULL
+    
+    gc(verbose = FALSE, full = TRUE)
+    
+    # Show progress dialog
+    withProgress(message = 'Calculating Showdown optimal lineups...', value = 0, {
+      # Show a specific modal
+      showModal(modalDialog(
+        title = "Processing Showdown Optimal Lineups",
+        "Finding optimal lineups using all simulations. This may take a few minutes.",
+        footer = NULL,
+        easyClose = FALSE
+      ))
+      
+      # Calculate optimal lineups
+      setProgress(0.2, detail = "Finding optimal lineups...")
+      rv$sd_optimal_lineups <- tryCatch({
+        count_sd_golf_optimal_lineups(rv$simulation_results,
+                                      player_data = rv$processed_data$players)
+      }, error = function(e) {
+        message("Error finding optimal lineups: ", e$message)
+        removeModal()
+        showModal(modalDialog(
+          title = "Error Finding Optimal Lineups",
+          paste("There was an error:", e$message),
+          easyClose = TRUE
+        ))
+        NULL
+      })
+      
+      gc(verbose = FALSE, full = TRUE)
+      
+      # Create player mapping and calculate exposure
+      setProgress(0.7, detail = "Creating player mapping...")
+      if(!is.null(rv$sd_optimal_lineups)) {
+        # Use the fantasy analysis data if available, otherwise create from simulation results
+        if(!is.null(rv$sd_fantasy_analysis)) {
+          player_mapping <- rv$sd_fantasy_analysis[, c("Name", "SDSal", "SDOP")]
+        } else {
+          # Get unique players from simulation results
+          unique_sim_players <- unique(rv$simulation_results[, c("Name", "SDSal", "SDOP")])
+          player_mapping <- unique_sim_players[!is.na(unique_sim_players$Name), ]
+        }
+        
+        # UPDATE SLIDERS WITH ACTUAL DATA
+        if("CumulativeOwnership" %in% names(rv$sd_optimal_lineups)) {
+          cum_values <- rv$sd_optimal_lineups$CumulativeOwnership[!is.na(rv$sd_optimal_lineups$CumulativeOwnership)]
+          if(length(cum_values) > 0) {
+            cum_min <- floor(min(cum_values))
+            cum_max <- ceiling(max(cum_values))
+            
+            updateSliderInput(session, "sd_cumulative_ownership_range",
+                              min = cum_min, max = cum_max, value = c(cum_min, cum_max))
+          }
+        }
+        
+        if("GeometricMeanOwnership" %in% names(rv$sd_optimal_lineups)) {
+          geom_values <- rv$sd_optimal_lineups$GeometricMeanOwnership[!is.na(rv$sd_optimal_lineups$GeometricMeanOwnership)]
+          if(length(geom_values) > 0) {
+            geom_min <- floor(min(geom_values))
+            geom_max <- ceiling(max(geom_values))
+            
+            updateSliderInput(session, "sd_geometric_mean_range",
+                              min = geom_min, max = geom_max, value = c(geom_min, geom_max))
+          }
+        }
+        
+        # Calculate initial player exposure
+        setProgress(0.8, detail = "Calculating player exposure...")
+        rv$sd_player_exposure <- calculate_sd_golf_player_exposure(
+          rv$sd_optimal_lineups, 
+          player_mapping
+        )
+        
+        if(!is.null(rv$sd_player_exposure) && !"Message" %in% names(rv$sd_player_exposure)) {
+          rv$sd_player_exposure$FilteredPoolRate <- rv$sd_player_exposure$OptimalRate
+          
+          # Update player choices for exclusion dropdown
+          player_data <- rv$sd_player_exposure
+          player_names <- player_data$Name
+          player_labels <- paste0(player_names, " (", round(player_data$OptimalRate, 1), "%)")
+          player_choices <- setNames(player_names, player_labels)
+          
+          updateSelectizeInput(session, "sd_excluded_players", choices = player_choices)
+        }
+      }
+      
+      removeModal()
+      
+      showModal(modalDialog(
+        title = "Success",
+        HTML(sprintf("Successfully generated <b>%d</b> optimal lineups for DK Showdown!", 
+                     if(!is.null(rv$sd_optimal_lineups)) nrow(rv$sd_optimal_lineups) else 0)),
+        easyClose = TRUE
+      ))
+    })
+  })
+  
   
   # 3. Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
@@ -4267,6 +5301,12 @@ server <- function(input, output, session) {
       min_top10_count = if(!is.null(input$fd_min_top10_count)) input$fd_min_top10_count else 0,
       min_top50_count = if(!is.null(input$fd_min_top50_count)) input$fd_min_top50_count else 0,
       min_top100_count = if(!is.null(input$fd_min_top100_count)) input$fd_min_top100_count else 0,
+      cumulative_ownership_range = if(!is.null(input$fd_cumulative_ownership_range)) input$fd_cumulative_ownership_range else c(0, 1000),
+      geometric_mean_range = if(!is.null(input$fd_geometric_mean_range)) input$fd_geometric_mean_range else c(0, 100),
+      min_atleast6_prob = if(!is.null(input$fd_min_atleast6_prob)) input$fd_min_atleast6_prob else 0,
+      min_atleast5_prob = if(!is.null(input$fd_min_atleast5_prob)) input$fd_min_atleast5_prob else 0,
+      min_expected_cuts = if(!is.null(input$fd_min_expected_cuts)) input$fd_min_expected_cuts else 0,
+      min_salary = if(!is.null(input$fd_min_salary)) input$fd_min_salary else 0,
       excluded_players = if(!is.null(input$fd_excluded_players)) input$fd_excluded_players else character(0),
       num_lineups = if(!is.null(input$fd_num_random_lineups)) input$fd_num_random_lineups else 20
     )
@@ -4300,6 +5340,63 @@ server <- function(input, output, session) {
         showModal(modalDialog(
           title = "Success",
           sprintf("Generated %d FanDuel lineups successfully!", nrow(rv$fd_random_lineups)),
+          easyClose = TRUE
+        ))
+      } else {
+        showModal(modalDialog(
+          title = "Error",
+          "No lineups match the selected filters. Try adjusting your criteria.",
+          easyClose = TRUE
+        ))
+      }
+    })
+  })
+  
+  # 4b. Generate random Showdown lineups (no cut filters)
+  observeEvent(input$generate_sd_lineups, {
+    req(rv$sd_optimal_lineups)
+    
+    filters <- list(
+      min_top1_count = if(!is.null(input$sd_min_top1_count)) input$sd_min_top1_count else 0,
+      min_top10_count = if(!is.null(input$sd_min_top10_count)) input$sd_min_top10_count else 0,
+      min_top50_count = if(!is.null(input$sd_min_top50_count)) input$sd_min_top50_count else 0,
+      min_top100_count = if(!is.null(input$sd_min_top100_count)) input$sd_min_top100_count else 0,
+      cumulative_ownership_range = if(!is.null(input$sd_cumulative_ownership_range)) input$sd_cumulative_ownership_range else c(0, 1000),
+      geometric_mean_range = if(!is.null(input$sd_geometric_mean_range)) input$sd_geometric_mean_range else c(0, 100),
+      min_salary = if(!is.null(input$sd_min_salary)) input$sd_min_salary else 0,
+      excluded_players = if(!is.null(input$sd_excluded_players)) input$sd_excluded_players else character(0),
+      num_lineups = if(!is.null(input$sd_num_random_lineups)) input$sd_num_random_lineups else 20
+    )
+    
+    withProgress(message = 'Generating Showdown lineups...', value = 0, {
+      rv$sd_random_lineups <- generate_random_sd_golf_lineups(rv$sd_optimal_lineups, filters)
+      
+      if(!is.null(rv$sd_random_lineups)) {
+        # Update player exposure with random lineups
+        if(!is.null(rv$sd_player_exposure) && !"Message" %in% names(rv$sd_player_exposure)) {
+          # Use existing mapping data
+          existing_mapping <- rv$sd_player_exposure[, c("Name", "SDSal", "SDOP")]
+          rv$sd_player_exposure <- calculate_sd_golf_player_exposure(
+            rv$sd_optimal_lineups, existing_mapping, rv$sd_random_lineups)
+          
+          # Update filtered pool rates
+          filtered_rates <- calculate_golf_filtered_pool_rates(rv$sd_optimal_lineups, filters, "sd")
+          if(!is.null(filtered_rates) && nrow(filtered_rates) > 0) {
+            for(i in 1:nrow(rv$sd_player_exposure)) {
+              player_name <- rv$sd_player_exposure$Name[i]
+              rate_match <- filtered_rates[filtered_rates$Name == player_name, ]
+              if(nrow(rate_match) > 0) {
+                rv$sd_player_exposure$FilteredPoolRate[i] <- rate_match$FilteredPoolRate[1]
+              } else {
+                rv$sd_player_exposure$FilteredPoolRate[i] <- 0
+              }
+            }
+          }
+        }
+        
+        showModal(modalDialog(
+          title = "Success",
+          sprintf("Generated %d Showdown lineups successfully!", nrow(rv$sd_random_lineups)),
           easyClose = TRUE
         ))
       } else {
@@ -4366,13 +5463,22 @@ server <- function(input, output, session) {
   
   # 6. FD filter change observer for real-time updates
   observeEvent(c(input$fd_min_top1_count, input$fd_min_top10_count, input$fd_min_top50_count, 
-                 input$fd_min_top100_count, input$fd_excluded_players), {
+                 input$fd_min_top100_count, input$fd_cumulative_ownership_range, 
+                 input$fd_geometric_mean_range, input$fd_min_atleast6_prob,
+                 input$fd_min_atleast5_prob, input$fd_min_expected_cuts,
+                 input$fd_min_salary, input$fd_excluded_players), {
                    if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$fd_player_exposure) && !"Message" %in% names(rv$fd_player_exposure)) {
                      filters <- list(
                        min_top1_count = if(!is.null(input$fd_min_top1_count)) input$fd_min_top1_count else 0,
                        min_top10_count = if(!is.null(input$fd_min_top10_count)) input$fd_min_top10_count else 0,
                        min_top50_count = if(!is.null(input$fd_min_top50_count)) input$fd_min_top50_count else 0,
                        min_top100_count = if(!is.null(input$fd_min_top100_count)) input$fd_min_top100_count else 0,
+                       cumulative_ownership_range = if(!is.null(input$fd_cumulative_ownership_range)) input$fd_cumulative_ownership_range else c(0, 1000),
+                       geometric_mean_range = if(!is.null(input$fd_geometric_mean_range)) input$fd_geometric_mean_range else c(0, 100),
+                       min_atleast6_prob = if(!is.null(input$fd_min_atleast6_prob)) input$fd_min_atleast6_prob else 0,
+                       min_atleast5_prob = if(!is.null(input$fd_min_atleast5_prob)) input$fd_min_atleast5_prob else 0,
+                       min_expected_cuts = if(!is.null(input$fd_min_expected_cuts)) input$fd_min_expected_cuts else 0,
+                       min_salary = if(!is.null(input$fd_min_salary)) input$fd_min_salary else 0,
                        excluded_players = if(!is.null(input$fd_excluded_players)) input$fd_excluded_players else character(0)
                      )
                      
@@ -4408,9 +5514,10 @@ server <- function(input, output, session) {
     # Check if any optimal lineups exist
     has_dk_lineups <- !is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0
     has_fd_lineups <- !is.null(rv$fd_optimal_lineups) && nrow(rv$fd_optimal_lineups) > 0
+    has_sd_lineups <- !is.null(rv$sd_optimal_lineups) && nrow(rv$sd_optimal_lineups) > 0
     
-    # If neither platform has lineups, show a message
-    if(!has_dk_lineups && !has_fd_lineups) {
+    # If no platform has lineups, show a message
+    if(!has_dk_lineups && !has_fd_lineups && !has_sd_lineups) {
       return(
         box(
           width = 12,
@@ -4439,6 +5546,42 @@ server <- function(input, output, session) {
       }
     }
     
+    # Calculate actual ranges for FD sliders if we have data
+    fd_cum_range <- c(100, 300)  # Default range for cumulative ownership
+    fd_geom_range <- c(15, 35)   # Default range for geometric mean
+    
+    if(has_fd_lineups && "CumulativeOwnership" %in% names(rv$fd_optimal_lineups)) {
+      cum_vals <- rv$fd_optimal_lineups$CumulativeOwnership[!is.na(rv$fd_optimal_lineups$CumulativeOwnership)]
+      if(length(cum_vals) > 0) {
+        fd_cum_range <- c(floor(min(cum_vals)), ceiling(max(cum_vals)))
+      }
+    }
+    
+    if(has_fd_lineups && "GeometricMeanOwnership" %in% names(rv$fd_optimal_lineups)) {
+      geom_vals <- rv$fd_optimal_lineups$GeometricMeanOwnership[!is.na(rv$fd_optimal_lineups$GeometricMeanOwnership)]
+      if(length(geom_vals) > 0) {
+        fd_geom_range <- c(floor(min(geom_vals)), ceiling(max(geom_vals)))
+      }
+    }
+    
+    # Calculate actual ranges for SD sliders if we have data
+    sd_cum_range <- c(100, 300)  # Default range for cumulative ownership
+    sd_geom_range <- c(15, 35)   # Default range for geometric mean
+    
+    if(has_sd_lineups && "CumulativeOwnership" %in% names(rv$sd_optimal_lineups)) {
+      cum_vals <- rv$sd_optimal_lineups$CumulativeOwnership[!is.na(rv$sd_optimal_lineups$CumulativeOwnership)]
+      if(length(cum_vals) > 0) {
+        sd_cum_range <- c(floor(min(cum_vals)), ceiling(max(cum_vals)))
+      }
+    }
+    
+    if(has_sd_lineups && "GeometricMeanOwnership" %in% names(rv$sd_optimal_lineups)) {
+      geom_vals <- rv$sd_optimal_lineups$GeometricMeanOwnership[!is.na(rv$sd_optimal_lineups$GeometricMeanOwnership)]
+      if(length(geom_vals) > 0) {
+        sd_geom_range <- c(floor(min(geom_vals)), ceiling(max(geom_vals)))
+      }
+    }
+    
     # Generate UI for both platforms
     tagList(
       # Platform selection
@@ -4448,40 +5591,19 @@ server <- function(input, output, session) {
           title = "Select Fantasy Platform",
           status = "primary",
           solidHeader = TRUE,
-          conditionalPanel(
-            condition = "output.has_dk_lineups == 'true' && output.has_fd_lineups == 'true'",
-            radioButtons(
-              "lineup_builder_platform", 
-              "Platform:",
-              choices = list(
-                "DraftKings" = "dk",
-                "FanDuel" = "fd"
-              ),
-              selected = if(has_dk_lineups) "dk" else "fd",
-              inline = TRUE
-            )
-          ),
-          conditionalPanel(
-            condition = "output.has_dk_lineups == 'true' && output.has_fd_lineups != 'true'",
-            radioButtons(
-              "lineup_builder_platform", 
-              "Platform:",
-              choices = list("DraftKings" = "dk"),
-              selected = "dk",
-              inline = TRUE
-            ),
-            h4("Using DraftKings lineups")
-          ),
-          conditionalPanel(
-            condition = "output.has_dk_lineups != 'true' && output.has_fd_lineups == 'true'",
-            radioButtons(
-              "lineup_builder_platform", 
-              "Platform:",
-              choices = list("FanDuel" = "fd"),
-              selected = "fd",
-              inline = TRUE
-            ),
-            h4("Using FanDuel lineups")
+          # Build choices dynamically based on available platforms
+          radioButtons(
+            "lineup_builder_platform", 
+            "Platform:",
+            choices = {
+              choices_list <- list()
+              if(has_dk_lineups) choices_list[["DraftKings"]] <- "dk"
+              if(has_fd_lineups) choices_list[["FanDuel"]] <- "fd"
+              if(has_sd_lineups) choices_list[["DK Showdown"]] <- "showdown"
+              choices_list
+            },
+            selected = if(has_dk_lineups) "dk" else if(has_fd_lineups) "fd" else "showdown",
+            inline = TRUE
           )
         )
       ),
@@ -4557,6 +5679,28 @@ server <- function(input, output, session) {
                 column(3, numericInput("fd_min_top100_count", "Min Top 100 Count:", value = 0, min = 0))
               ),
               fluidRow(
+                column(6, sliderInput("fd_cumulative_ownership_range", "Cumulative Ownership Range:",
+                                      min = fd_cum_range[1], max = fd_cum_range[2], 
+                                      value = fd_cum_range, step = 1, post = "%")),
+                column(6, sliderInput("fd_geometric_mean_range", "Geometric Mean Ownership Range:",
+                                      min = fd_geom_range[1], max = fd_geom_range[2], 
+                                      value = fd_geom_range, step = 1, post = "%"))
+              ),
+              fluidRow(
+                column(3, numericInput("fd_min_atleast6_prob", 
+                                       "Min Prob All 6 Make Cut (%):", 
+                                       value = 0, min = 0, max = 100, step = 1)),
+                column(3, numericInput("fd_min_atleast5_prob", 
+                                       "Min Prob At Least 5 Make Cut (%):", 
+                                       value = 0, min = 0, max = 100, step = 1)),
+                column(3, numericInput("fd_min_expected_cuts", 
+                                       "Min Expected Cuts:", 
+                                       value = 0, min = 0, max = 6, step = 0.1)),
+                column(3, numericInput("fd_min_salary", 
+                                       "Min Total Lineup Salary:", 
+                                       value = 59000, min = 0, max = 60000, step = 100))
+              ),
+              fluidRow(
                 column(6, selectizeInput("fd_excluded_players", "Exclude Players:", choices = NULL, multiple = TRUE,
                                          options = list(plugins = list('remove_button'), placeholder = 'Click to select players to exclude'))),
                 column(6, numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
@@ -4577,6 +5721,55 @@ server <- function(input, output, session) {
         fluidRow(
           box(width = 12, title = "Generated FanDuel Lineups",
               DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
+        )
+      ),
+      
+      # Showdown UI
+      conditionalPanel(
+        condition = "input.lineup_builder_platform == 'showdown' && output.has_sd_lineups == 'true'",
+        fluidRow(
+          box(width = 12,
+              title = "DK Showdown Lineup Filters",
+              fluidRow(
+                column(3, numericInput("sd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
+                column(3, numericInput("sd_min_top10_count", "Min Top 10 Count:", value = 0, min = 0)),
+                column(3, numericInput("sd_min_top50_count", "Min Top 50 Count:", value = 0, min = 0)),
+                column(3, numericInput("sd_min_top100_count", "Min Top 100 Count:", value = 0, min = 0))
+              ),
+              fluidRow(
+                column(6, sliderInput("sd_cumulative_ownership_range", "Cumulative Ownership Range:",
+                                      min = sd_cum_range[1], max = sd_cum_range[2], 
+                                      value = sd_cum_range, step = 1, post = "%")),
+                column(6, sliderInput("sd_geometric_mean_range", "Geometric Mean Ownership Range:",
+                                      min = sd_geom_range[1], max = sd_geom_range[2], 
+                                      value = sd_geom_range, step = 1, post = "%"))
+              ),
+              fluidRow(
+                column(6, numericInput("sd_min_salary", 
+                                       "Min Total Lineup Salary:", 
+                                       value = 49000, min = 0, max = 50000, step = 100)),
+                column(6, selectizeInput("sd_excluded_players", "Exclude Players:", choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select players to exclude')))
+              ),
+              fluidRow(
+                column(6, numericInput("sd_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150)),
+                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("sd_filtered_pool_size")))
+              ),
+              fluidRow(
+                column(12, div(style = "margin-top: 10px;",
+                               actionButton("generate_sd_lineups", "Randomize Showdown Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                               br(), br(),
+                               downloadButton("download_sd_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
+              )
+          )
+        ),
+        fluidRow(
+          box(width = 12, title = "DK Showdown Player Exposure Analysis",
+              DTOutput("sd_player_exposure_table") %>% withSpinner(color = "#FFD700"))
+        ),
+        fluidRow(
+          box(width = 12, title = "Generated Showdown Lineups",
+              DTOutput("sd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       )
     )
