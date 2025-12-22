@@ -16,6 +16,9 @@ library(data.table)
 library(shinyjs)
 library(shinycssloaders)
 library(lpSolve)
+# Source lineup builder functions
+source("cfb_lineup_builder_functions.R")
+
 
 # Constants
 DK_SALARY_CAP <- 50000
@@ -23,20 +26,8 @@ ROSTER_SIZE <- 6  # 1 CPT + 5 FLEX
 
 # Team colors for common CFB teams
 TEAM_COLORS <- list(
-  "Texas A&M" = "#500000",
-  "Texas_A&M" = "#500000", 
-  "Miami" = "#F47321",
-  "Alabama" = "#9E1B32",
-  "Georgia" = "#BA0C2F",
-  "Ohio State" = "#BB0000",
-  "Michigan" = "#00274C",
-  "USC" = "#990000",
-  "Notre Dame" = "#0C2340",
-  "Clemson" = "#F66733",
-  "LSU" = "#461D7C",
-  "Florida" = "#0021A5",
-  "Penn State" = "#041E42",
-  "Oregon" = "#154733"
+  "Utah State" = "navyblue",
+  "Washington State" = "darkred"
 )
 
 # Function to get team color
@@ -613,15 +604,31 @@ run_simulations <- function(input_data, n_sims) {
 }
 
 # Analyze fantasy scoring
-analyze_fantasy_scoring <- function(sim_results) {
+analyze_fantasy_scoring <- function(sim_results, dk_salaries = NULL) {
   setDT(sim_results)
   
   scoring_stats <- sim_results[, .(
-    Sims = .N,
     AvgPts = mean(TotalPts, na.rm = TRUE),
     MedianPts = median(TotalPts, na.rm = TRUE),
     MaxPts = max(TotalPts, na.rm = TRUE)
   ), by = .(Player, Team)]
+  
+  # Add salary if available
+  if (!is.null(dk_salaries)) {
+    setDT(dk_salaries)
+    scoring_stats <- merge(scoring_stats, 
+                           dk_salaries[, .(Name, Salary, Team)], 
+                           by.x = c("Player", "Team"), 
+                           by.y = c("Name", "Team"), 
+                           all.x = TRUE)
+  }
+  
+  # Convert team names to abbreviations
+  scoring_stats[, TeamAbbr := ifelse(grepl("Texas", Team), "TA&M",
+                                     ifelse(grepl("Miami", Team), "MIA",
+                                            ifelse(grepl("Utah State", Team), "USU",
+                                                   ifelse(grepl("Washington State", Team), "WSU",
+                                                          Team))))]
   
   setorder(scoring_stats, -AvgPts)
   
@@ -905,6 +912,229 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
               format(nrow(result), big.mark = ","), total_time))
   
   return(as.data.frame(result))
+  
+  # CFB SHOWDOWN LINEUP BUILDER FUNCTIONS
+  # Functions for filtering and randomizing optimal lineups
+  
+  # Calculate filtered pool statistics
+  calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
+    if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
+      return(list(count = 0))
+    }
+    
+    filtered_lineups <- as.data.table(optimal_lineups)
+    
+    # Apply Top Count filters
+    if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+    }
+    
+    if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+    }
+    
+    if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+    }
+    
+    if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+    }
+    
+    # Apply ownership filters (if available)
+    if (!is.null(filters$cumulative_ownership_range) && "CumulativeOwnership" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[
+        CumulativeOwnership >= filters$cumulative_ownership_range[1] &
+          CumulativeOwnership <= filters$cumulative_ownership_range[2]
+      ]
+    }
+    
+    if (!is.null(filters$geometric_mean_range) && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[
+        GeometricMeanOwnership >= filters$geometric_mean_range[1] &
+          GeometricMeanOwnership <= filters$geometric_mean_range[2]
+      ]
+    }
+    
+    # Apply player exclusion filter
+    if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
+      player_cols <- c("Captain", paste0("Player", 1:5))
+      to_exclude <- rep(FALSE, nrow(filtered_lineups))
+      
+      for(col in player_cols) {
+        if(col %in% names(filtered_lineups)) {
+          to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_players
+        }
+      }
+      
+      filtered_lineups <- filtered_lineups[!to_exclude]
+    }
+    
+    return(list(count = nrow(filtered_lineups)))
+  }
+  
+  # Generate random lineups from filtered pool
+  generate_random_lineups <- function(optimal_lineups, filters) {
+    setDT(optimal_lineups)
+    filtered_lineups <- copy(optimal_lineups)
+    
+    # Apply filters
+    if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
+      filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+    }
+    
+    if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
+      filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+    }
+    
+    if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
+      filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+    }
+    
+    if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
+      filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+    }
+    
+    # Apply ownership filters (if available)
+    if (!is.null(filters$cumulative_ownership_range) && "CumulativeOwnership" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[
+        CumulativeOwnership >= filters$cumulative_ownership_range[1] &
+          CumulativeOwnership <= filters$cumulative_ownership_range[2]
+      ]
+    }
+    
+    if (!is.null(filters$geometric_mean_range) && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+      filtered_lineups <- filtered_lineups[
+        GeometricMeanOwnership >= filters$geometric_mean_range[1] &
+          GeometricMeanOwnership <= filters$geometric_mean_range[2]
+      ]
+    }
+    
+    # Apply player exclusion filter
+    if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
+      player_cols <- c("Captain", paste0("Player", 1:5))
+      to_exclude <- rep(FALSE, nrow(filtered_lineups))
+      
+      for(col in player_cols) {
+        if(col %in% names(filtered_lineups)) {
+          to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_players
+        }
+      }
+      
+      filtered_lineups <- filtered_lineups[!to_exclude]
+    }
+    
+    # Check if any lineups match filters
+    if (nrow(filtered_lineups) == 0) {
+      return(NULL)
+    }
+    
+    # Sample lineups using Top1Count as weight
+    weight_col <- "Top1Count"
+    selected_lineups <- data.table()
+    selected_indices <- integer(0)
+    
+    attempts <- 0
+    max_attempts <- filters$num_lineups * 10
+    
+    while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
+      attempts <- attempts + 1
+      
+      # Available lineups
+      available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
+      if (length(available_indices) == 0) break
+      
+      # Sample based on weights
+      weights <- filtered_lineups[[weight_col]][available_indices]
+      if (sum(weights) == 0) weights <- rep(1, length(available_indices))
+      
+      selected_idx <- tryCatch({
+        sample(available_indices, 1, prob = weights)
+      }, error = function(e) {
+        sample(available_indices, 1)
+      })
+      
+      selected_indices <- c(selected_indices, selected_idx)
+      selected_lineups <- rbind(selected_lineups, filtered_lineups[selected_idx])
+    }
+    
+    if (nrow(selected_lineups) == 0) {
+      return(NULL)
+    }
+    
+    # Add lineup number
+    selected_lineups[, LineupNum := 1:.N]
+    
+    return(as.data.frame(selected_lineups))
+  }
+  
+  # Calculate player exposure from generated lineups
+  calculate_player_exposure <- function(optimal_lineups, player_mapping, generated_lineups) {
+    if(is.null(generated_lineups) || nrow(generated_lineups) == 0) {
+      return(NULL)
+    }
+    
+    setDT(generated_lineups)
+    
+    # Get all unique players
+    all_players <- unique(c(
+      generated_lineups$Captain,
+      unlist(generated_lineups[, paste0("Player", 1:5), with = FALSE])
+    ))
+    
+    all_players <- all_players[!is.na(all_players)]
+    
+    # Calculate exposure for each player
+    exposure_data <- lapply(all_players, function(player) {
+      # Count captain appearances
+      captain_count <- sum(generated_lineups$Captain == player, na.rm = TRUE)
+      
+      # Count flex appearances
+      flex_count <- 0
+      for(i in 1:5) {
+        col_name <- paste0("Player", i)
+        if(col_name %in% names(generated_lineups)) {
+          flex_count <- flex_count + sum(generated_lineups[[col_name]] == player, na.rm = TRUE)
+        }
+      }
+      
+      total_appearances <- captain_count + flex_count
+      exposure_pct <- (total_appearances / nrow(generated_lineups)) * 100
+      captain_pct <- (captain_count / nrow(generated_lineups)) * 100
+      
+      # Get salary and projection from mapping
+      salary <- NA
+      proj <- NA
+      
+      if(!is.null(player_mapping)) {
+        match_idx <- which(player_mapping$Name == player)
+        if(length(match_idx) > 0) {
+          salary <- player_mapping$Salary[match_idx[1]]
+          if("Proj" %in% names(player_mapping)) {
+            proj <- player_mapping$Proj[match_idx[1]]
+          }
+        }
+      }
+      
+      data.frame(
+        Player = player,
+        Salary = salary,
+        Proj = proj,
+        Exposure = round(exposure_pct, 1),
+        CaptainPct = round(captain_pct, 1),
+        TotalAppearances = total_appearances,
+        CaptainAppearances = captain_count,
+        stringsAsFactors = FALSE
+      )
+    })
+    
+    exposure_df <- rbindlist(exposure_data)
+    setorder(exposure_df, -Exposure)
+    
+    return(as.data.frame(exposure_df))
+  }
+  
+  
 }
 
 # UI
@@ -983,10 +1213,19 @@ ui <- dashboardPage(
         fluidRow(
           box(
             width = 12,
-            title = "Fantasy Points Distribution",
+            title = uiOutput("team1_violin_title"),
+            status = "primary",
+            solidHeader = TRUE,
+            plotlyOutput("team1_violin", height = "600px") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        fluidRow(
+          box(
+            width = 12,
+            title = uiOutput("team2_violin_title"),
             status = "info",
             solidHeader = TRUE,
-            plotlyOutput("fantasy_violin") %>% withSpinner(color = "#FFD700")
+            plotlyOutput("team2_violin", height = "600px") %>% withSpinner(color = "#FFD700")
           )
         )
       ),
@@ -1062,31 +1301,87 @@ ui <- dashboardPage(
       # LINEUP BUILDER TAB
       tabItem(
         tabName = "builder",
-        fluidRow(
+        
+        # Check if optimal lineups exist
+        conditionalPanel(
+          condition = "!output.has_optimal_lineups",
           box(
-            width = 4,
-            title = "Build Your Lineup",
-            status = "primary",
-            solidHeader = TRUE,
-            selectInput("cpt_select", "Select Captain:", choices = NULL),
-            selectInput("flex1_select", "FLEX 1:", choices = NULL),
-            selectInput("flex2_select", "FLEX 2:", choices = NULL),
-            selectInput("flex3_select", "FLEX 3:", choices = NULL),
-            selectInput("flex4_select", "FLEX 4:", choices = NULL),
-            selectInput("flex5_select", "FLEX 5:", choices = NULL),
-            br(),
-            actionButton("calculate_lineup", "Calculate Lineup Stats", 
-                         class = "btn-primary btn-block")
+            width = 12,
+            status = "warning",
+            title = "No Optimal Lineups Available",
+            "Please calculate optimal lineups in the Optimal Lineups tab first."
+          )
+        ),
+        
+        # Show lineup builder when lineups exist
+        conditionalPanel(
+          condition = "output.has_optimal_lineups",
+          
+          # Filters Box
+          fluidRow(
+            box(
+              width = 12,
+              title = "Lineup Filters",
+              status = "primary",
+              solidHeader = TRUE,
+              
+              fluidRow(
+                column(3, numericInput("min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
+                column(3, numericInput("min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
+                column(3, numericInput("min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
+                column(3, numericInput("min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
+              ),
+              
+              fluidRow(
+                column(6, sliderInput("cumulative_ownership_range", "Cumulative Ownership Range:",
+                                      min = 0, max = 600, value = c(0, 600), step = 10, post = "%")),
+                column(6, sliderInput("geometric_mean_range", "Geometric Mean Ownership Range:",
+                                      min = 0, max = 100, value = c(0, 100), step = 1, post = "%"))
+              ),
+              
+              fluidRow(
+                column(6, selectizeInput("excluded_players", "Exclude Players:", 
+                                         choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Click to select players to exclude'))),
+                column(6, numericInput("num_random_lineups", "Number of Lineups to Generate:", 
+                                       value = 20, min = 1, max = 150))
+              ),
+              
+              fluidRow(
+                column(6, div(class = "well well-sm", 
+                              h4("Filtered Pool Statistics:", style = "color: #FFD700;"), 
+                              textOutput("filtered_pool_size"))),
+                column(6, div(style = "margin-top: 20px;",
+                              actionButton("generate_lineups", "Randomize Lineups", 
+                                           class = "btn-primary btn-lg", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_random_lineups", "Download Selected Lineups", 
+                                             style = "width: 100%;")))
+              )
+            )
           ),
-          box(
-            width = 8,
-            title = "Lineup Summary",
-            status = "success",
-            solidHeader = TRUE,
-            uiOutput("lineup_summary"),
-            br(),
-            h4("Lineup Scoring Distribution"),
-            plotlyOutput("lineup_dist_plot") %>% withSpinner(color = "#FFD700")
+          
+          # Player Exposure Analysis
+          fluidRow(
+            box(
+              width = 12, 
+              title = "Player Exposure Analysis",
+              status = "info",
+              solidHeader = TRUE,
+              DTOutput("player_exposure_table") %>% withSpinner(color = "#FFD700")
+            )
+          ),
+          
+          # Generated Lineups
+          fluidRow(
+            box(
+              width = 12, 
+              title = "Generated Lineups",
+              status = "success",
+              solidHeader = TRUE,
+              DTOutput("random_lineups_table") %>% withSpinner(color = "#FFD700")
+            )
           )
         )
       )
@@ -1102,6 +1397,8 @@ server <- function(input, output, session) {
     input_data = NULL,
     simulation_results = NULL,
     optimal_lineups = NULL,
+    random_lineups = NULL,
+    player_exposure = NULL,
     file_uploaded = FALSE,
     simulation_complete = FALSE
   )
@@ -1195,18 +1492,21 @@ server <- function(input, output, session) {
   output$player_projections <- renderDT({
     req(rv$simulation_complete)
     
-    projections <- analyze_fantasy_scoring(rv$simulation_results)
-    
-    # Join with DK salaries to get ETR and Saber projections
     dk_data <- rv$input_data$dk_salaries
+    projections <- analyze_fantasy_scoring(rv$simulation_results, dk_data)
+    
+    # Join with ETR and Saber projections if available
     if (!is.null(dk_data)) {
       projections <- projections %>%
         left_join(dk_data %>% select(Name, ETR_DK_Pts, Saber_Proj), 
                   by = c("Player" = "Name"))
       
-      # Reorder columns to show projections side by side
+      # Reorder columns
       projections <- projections %>%
-        select(Player, Team, Sims, AvgPts, ETR_DK_Pts, Saber_Proj, MedianPts, MaxPts)
+        select(Player, TeamAbbr, Salary, AvgPts, ETR_DK_Pts, Saber_Proj, MedianPts, MaxPts)
+    } else {
+      projections <- projections %>%
+        select(Player, TeamAbbr, Salary, AvgPts, MedianPts, MaxPts)
     }
     
     datatable(
@@ -1216,12 +1516,14 @@ server <- function(input, output, session) {
         scrollX = TRUE,
         order = list(list(3, 'desc')),  # Sort by AvgPts
         columnDefs = list(
-          list(className = 'dt-center', targets = 2:7)
+          list(className = 'dt-center', targets = 2:ncol(projections)-1)
         )
       ),
       rownames = FALSE,
-      caption = "Simulated vs ETR vs Saber Projections"
+      caption = "Simulated vs ETR vs Saber Projections",
+      colnames = c('Player', 'Team', 'Salary', 'Avg Pts', 'ETR Proj', 'Saber Proj', 'Median Pts', 'Max Pts')
     ) %>%
+      formatCurrency('Salary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
       formatRound(c('AvgPts', 'ETR_DK_Pts', 'Saber_Proj', 'MedianPts', 'MaxPts'), 2) %>%
       formatStyle(
         'AvgPts',
@@ -1232,107 +1534,120 @@ server <- function(input, output, session) {
       )
   })
   
-  # Fantasy points violin plot - Team colored violins
-  output$fantasy_violin <- renderPlotly({
+  # Team 1 violin plot title
+  output$team1_violin_title <- renderUI({
+    req(rv$simulation_complete)
+    teams <- unique(rv$simulation_results$Team)
+    if (length(teams) > 0) {
+      h4(paste(teams[1], "- Fantasy Points Distribution"), style = "color: #FFD700;")
+    }
+  })
+  
+  # Team 2 violin plot title
+  output$team2_violin_title <- renderUI({
+    req(rv$simulation_complete)
+    teams <- unique(rv$simulation_results$Team)
+    if (length(teams) > 1) {
+      h4(paste(teams[2], "- Fantasy Points Distribution"), style = "color: #FFD700;")
+    }
+  })
+  
+  # Team 1 violin plot
+  output$team1_violin <- renderPlotly({
     req(rv$simulation_complete)
     
     plot_data <- rv$simulation_results
     setDT(plot_data)
     
-    # Get team colors
     teams <- unique(plot_data$Team)
-    team_color_vals <- sapply(teams, get_team_color)
-    names(team_color_vals) <- teams
+    if (length(teams) == 0) return(NULL)
     
-    # Get top 10 players per team by average points
-    top_players_per_team <- plot_data[, .(AvgPts = mean(TotalPts)), by = .(Player, Team)][
-      order(Team, -AvgPts)
-    ][, head(.SD, 10), by = Team]
+    team_name <- teams[1]
+    team_color <- get_team_color(team_name)
+    team_data <- plot_data[Team == team_name]
     
-    plot_data <- plot_data[Player %in% top_players_per_team$Player]
+    # Get top 10 players by average points
+    top_players <- team_data[, .(AvgPts = mean(TotalPts)), by = Player][
+      order(-AvgPts)
+    ][1:min(10, .N)]
     
-    # Create separate plot for each team
-    team_list <- unique(plot_data$Team)
+    team_data <- team_data[Player %in% top_players$Player]
     
-    if (length(team_list) == 2) {
-      # Two teams - create subplots
-      plots <- lapply(team_list, function(tm) {
-        team_data <- plot_data[Team == tm]
-        team_color <- team_color_vals[tm]
-        
-        # Order players by median
-        player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][order(MedianPts)]$Player
-        
-        p <- plot_ly(team_data, 
-                     y = ~factor(Player, levels = player_order),
-                     x = ~TotalPts,
-                     type = "violin",
-                     box = list(visible = TRUE),
-                     meanline = list(visible = TRUE),
-                     fillcolor = paste0(team_color, "80"),
-                     line = list(color = team_color, width = 2),
-                     name = tm,
-                     showlegend = FALSE) %>%
-          layout(
-            xaxis = list(title = "Fantasy Points", gridcolor = "#333333"),
-            yaxis = list(title = "", gridcolor = "#333333"),
-            plot_bgcolor = "#222222",
-            paper_bgcolor = "#222222",
-            font = list(color = "#FFD700", size = 12),
-            margin = list(l = 150, r = 20, t = 40, b = 40),
-            annotations = list(
-              list(x = 0.5, y = 1.05, text = tm,
-                   xref = "paper", yref = "paper",
-                   xanchor = "center", yanchor = "bottom",
-                   showarrow = FALSE,
-                   font = list(size = 16, color = team_color, family = "Arial Black"))
-            )
-          )
-        
-        return(p)
-      })
-      
-      subplot(plots, nrows = 1, shareX = TRUE, titleX = TRUE) %>%
-        layout(
-          plot_bgcolor = "#222222",
-          paper_bgcolor = "#222222",
-          font = list(color = "#FFD700"),
-          height = 600
-        )
-    } else {
-      # Single team or fallback
-      p <- plot_ly()
-      for (tm in team_list) {
-        team_data <- plot_data[Team == tm]
-        team_color <- team_color_vals[tm]
-        
-        player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][order(MedianPts)]$Player
-        
-        p <- p %>%
-          add_trace(
-            data = team_data,
-            y = ~factor(Player, levels = player_order),
-            x = ~TotalPts,
-            type = "violin",
-            box = list(visible = TRUE),
-            meanline = list(visible = TRUE),
-            fillcolor = paste0(team_color, "80"),
-            line = list(color = team_color, width = 2),
-            name = tm
-          )
-      }
-      
-      p %>%
-        layout(
-          xaxis = list(title = "Fantasy Points", gridcolor = "#333333"),
-          yaxis = list(title = "", gridcolor = "#333333"),
-          plot_bgcolor = "#222222",
-          paper_bgcolor = "#222222",
-          font = list(color = "#FFD700", size = 12),
-          height = 600,
-          margin = list(l = 150)
-        )
-    }
+    # Order players by median
+    player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
+      order(MedianPts)
+    ]$Player
+    
+    p <- plot_ly(team_data, 
+                 y = ~factor(Player, levels = player_order),
+                 x = ~TotalPts,
+                 type = "violin",
+                 box = list(visible = TRUE),
+                 meanline = list(visible = TRUE),
+                 fillcolor = paste0(team_color, "80"),
+                 line = list(color = team_color, width = 2),
+                 showlegend = FALSE) %>%
+      layout(
+        xaxis = list(title = "Fantasy Points", gridcolor = "#333333", 
+                     titlefont = list(color = "#FFD700", size = 14)),
+        yaxis = list(title = "", gridcolor = "#333333",
+                     tickfont = list(color = "#FFD700", size = 12)),
+        plot_bgcolor = "#222222",
+        paper_bgcolor = "#222222",
+        font = list(color = "#FFD700", size = 12),
+        margin = list(l = 150, r = 20, t = 20, b = 60)
+      )
+    
+    p
+  })
+  
+  # Team 2 violin plot
+  output$team2_violin <- renderPlotly({
+    req(rv$simulation_complete)
+    
+    plot_data <- rv$simulation_results
+    setDT(plot_data)
+    
+    teams <- unique(plot_data$Team)
+    if (length(teams) < 2) return(NULL)
+    
+    team_name <- teams[2]
+    team_color <- get_team_color(team_name)
+    team_data <- plot_data[Team == team_name]
+    
+    # Get top 10 players by average points
+    top_players <- team_data[, .(AvgPts = mean(TotalPts)), by = Player][
+      order(-AvgPts)
+    ][1:min(10, .N)]
+    
+    team_data <- team_data[Player %in% top_players$Player]
+    
+    # Order players by median
+    player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
+      order(MedianPts)
+    ]$Player
+    
+    p <- plot_ly(team_data, 
+                 y = ~factor(Player, levels = player_order),
+                 x = ~TotalPts,
+                 type = "violin",
+                 box = list(visible = TRUE),
+                 meanline = list(visible = TRUE),
+                 fillcolor = paste0(team_color, "80"),
+                 line = list(color = team_color, width = 2),
+                 showlegend = FALSE) %>%
+      layout(
+        xaxis = list(title = "Fantasy Points", gridcolor = "#333333",
+                     titlefont = list(color = "#FFD700", size = 14)),
+        yaxis = list(title = "", gridcolor = "#333333",
+                     tickfont = list(color = "#FFD700", size = 12)),
+        plot_bgcolor = "#222222",
+        paper_bgcolor = "#222222",
+        font = list(color = "#FFD700", size = 12),
+        margin = list(l = 150, r = 20, t = 20, b = 60)
+      )
+    
+    p
   })
   
   # Team stats
@@ -1693,6 +2008,167 @@ server <- function(input, output, session) {
       layout(paper_bgcolor = "#222222", plot_bgcolor = "#222222",
              font = list(color = "#FFD700"))
   })
+  
+  
+  # ===== LINEUP BUILDER LOGIC =====
+  
+  # Output to check if optimal lineups exist
+  output$has_optimal_lineups <- reactive({
+    !is.null(rv$optimal_lineups) && nrow(rv$optimal_lineups) > 0
+  })
+  outputOptions(output, "has_optimal_lineups", suspendWhenHidden = FALSE)
+  
+  # Update player exclusion choices when optimal lineups are calculated
+  observeEvent(rv$optimal_lineups, {
+    if(!is.null(rv$optimal_lineups)) {
+      all_players <- unique(c(
+        rv$optimal_lineups$Captain,
+        unlist(rv$optimal_lineups[, paste0("Player", 1:5)])
+      ))
+      all_players <- sort(all_players[!is.na(all_players)])
+      
+      updateSelectizeInput(session, "excluded_players", 
+                           choices = all_players, 
+                           server = TRUE)
+    }
+  })
+  
+  # Real-time filtered pool size calculation
+  observeEvent(c(input$min_top1_count, input$min_top2_count, input$min_top3_count,
+                 input$min_top5_count, input$cumulative_ownership_range,
+                 input$geometric_mean_range, input$excluded_players), {
+                   if(!is.null(rv$optimal_lineups)) {
+                     filters <- list(
+                       min_top1_count = if(!is.null(input$min_top1_count)) input$min_top1_count else 0,
+                       min_top2_count = if(!is.null(input$min_top2_count)) input$min_top2_count else 0,
+                       min_top3_count = if(!is.null(input$min_top3_count)) input$min_top3_count else 0,
+                       min_top5_count = if(!is.null(input$min_top5_count)) input$min_top5_count else 0,
+                       cumulative_ownership_range = input$cumulative_ownership_range,
+                       geometric_mean_range = input$geometric_mean_range,
+                       excluded_players = if(!is.null(input$excluded_players)) input$excluded_players else character(0)
+                     )
+                     
+                     pool_stats <- calculate_filtered_pool_stats(rv$optimal_lineups, filters)
+                     
+                     output$filtered_pool_size <- renderText({
+                       paste0(format(pool_stats$count, big.mark = ","), 
+                              " lineups match current filters")
+                     })
+                   }
+                 })
+  
+  # Generate random lineups button
+  observeEvent(input$generate_lineups, {
+    req(rv$optimal_lineups)
+    
+    filters <- list(
+      min_top1_count = input$min_top1_count,
+      min_top2_count = input$min_top2_count,
+      min_top3_count = input$min_top3_count,
+      min_top5_count = input$min_top5_count,
+      cumulative_ownership_range = input$cumulative_ownership_range,
+      geometric_mean_range = input$geometric_mean_range,
+      num_lineups = input$num_random_lineups,
+      excluded_players = input$excluded_players
+    )
+    
+    withProgress(message = 'Generating lineups...', value = 0, {
+      rv$random_lineups <- generate_random_lineups(rv$optimal_lineups, filters)
+      
+      if(!is.null(rv$random_lineups)) {
+        # Create player mapping for exposure calculation
+        dk_data <- rv$input_data$dk_salaries
+        
+        player_mapping <- data.frame(
+          Name = dk_data$Name,
+          Salary = dk_data$Salary,
+          Proj = if("ETR_DK_Pts" %in% names(dk_data)) dk_data$ETR_DK_Pts else NA,
+          stringsAsFactors = FALSE
+        )
+        
+        rv$player_exposure <- calculate_player_exposure(
+          rv$optimal_lineups,
+          player_mapping,
+          rv$random_lineups
+        )
+        
+        showModal(modalDialog(
+          title = "Success",
+          sprintf("Generated %d lineups successfully!", nrow(rv$random_lineups)),
+          easyClose = TRUE
+        ))
+      } else {
+        showModal(modalDialog(
+          title = "No Lineups Generated",
+          "No lineups matched the selected filters. Try adjusting your filter settings.",
+          easyClose = TRUE
+        ))
+      }
+    })
+  })
+  
+  # Player exposure table
+  output$player_exposure_table <- renderDT({
+    req(rv$player_exposure)
+    
+    datatable(
+      rv$player_exposure,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        order = list(list(3, 'desc')),  # Sort by Exposure
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all')
+        )
+      ),
+      rownames = FALSE
+    ) %>%
+      formatCurrency('Salary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+      formatRound(c('Proj', 'Exposure', 'CaptainPct'), 1) %>%
+      formatStyle(
+        'Exposure',
+        background = styleColorBar(range(rv$player_exposure$Exposure, na.rm = TRUE), '#FFD700'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Random lineups table
+  output$random_lineups_table <- renderDT({
+    req(rv$random_lineups)
+    
+    datatable(
+      rv$random_lineups,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        order = list(list(0, 'asc')),  # Sort by LineupNum
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all')
+        )
+      ),
+      rownames = FALSE
+    ) %>%
+      formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+      formatRound(c('CumulativeOwnership', 'GeometricMeanOwnership'), 1)
+  })
+  
+  # Download random lineups
+  output$download_random_lineups <- downloadHandler(
+    filename = function() {
+      paste0("CFB_Showdown_Lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      req(rv$random_lineups)
+      
+      # Format for DK upload
+      upload_format <- rv$random_lineups %>%
+        select(Captain, Player1, Player2, Player3, Player4, Player5)
+      
+      write.csv(upload_format, file, row.names = FALSE)
+    }
+  )
 }
 
 # Run the application
