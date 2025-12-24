@@ -37,6 +37,29 @@ get_team_color <- function(team_name) {
   return(get_cfb_colors(team_name, "primary"))
 }
 
+# Efficient team color highlighting for tables (F1-style)
+# Pre-calculates colors and applies in one pass
+apply_team_colors_to_table <- function(dt, data, team_col) {
+  if (!team_col %in% names(data)) return(dt)
+  
+  # Get unique teams and their colors
+  unique_teams <- unique(data[[team_col]])
+  team_colors <- sapply(unique_teams, get_team_color)
+  
+  # Create color mapping
+  color_map <- setNames(team_colors, unique_teams)
+  
+  # Apply colors using styleEqual (much faster than row-by-row)
+  dt <- dt %>%
+    formatStyle(
+      team_col,
+      backgroundColor = styleEqual(unique_teams, paste0(team_colors, "20")),  # 20 = 12% opacity
+      color = styleEqual(unique_teams, team_colors)
+    )
+  
+  return(dt)
+}
+
 # Constants
 DK_SALARY_CAP <- 50000
 ROSTER_SIZE <- 6  # 1 CPT + 5 FLEX
@@ -256,33 +279,147 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       }
     }
     
-    # SWEEP UP: Distribute any remaining yards proportionally to active players
+    # IMPROVED SWEEP UP: Distribute remaining yards respecting ceiling constraints
     if (remaining_share > 0.01) {
-      active_players <- which(rush_yds_allocation > 0)
-      
-      if (length(active_players) > 0) {
-        # Distribute remaining yards proportionally based on what they already got
-        active_yards <- rush_yds_allocation[active_players]
-        proportions <- active_yards / sum(active_yards)
+      # Pass 1: Go through players from top, cap at 20% of remaining per player
+      for (i in 1:n_rushers) {
+        if (remaining_share <= 0.01) break
         
-        extra_yards <- round(team_rush_yds * remaining_share * proportions)
-        rush_yds_allocation[active_players] <- rush_yds_allocation[active_players] + extra_yards
+        ceiling_pct <- rushing_data$Ceiling[i]
+        if (is.na(ceiling_pct)) ceiling_pct <- rushing_data$Pct_P75[i]
+        if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+        
+        current_share <- rush_yds_allocation[i] / team_rush_yds
+        room_to_ceiling <- ceiling_pct - current_share
+        
+        if (room_to_ceiling > 0.01) {
+          additional_share <- min(
+            remaining_share,
+            room_to_ceiling,
+            remaining_share * 0.20  # Cap at 20% per iteration
+          )
+          
+          additional_yards <- round(team_rush_yds * additional_share)
+          rush_yds_allocation[i] <- rush_yds_allocation[i] + additional_yards
+          remaining_share <- remaining_share - additional_share
+        }
+      }
+      
+      # Pass 2: If still remaining, go through again without 20% cap
+      if (remaining_share > 0.01) {
+        for (i in 1:n_rushers) {
+          if (remaining_share <= 0.01) break
+          
+          ceiling_pct <- rushing_data$Ceiling[i]
+          if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+          
+          current_share <- rush_yds_allocation[i] / team_rush_yds
+          room_to_ceiling <- ceiling_pct - current_share
+          
+          if (room_to_ceiling > 0.01) {
+            additional_share <- min(remaining_share, room_to_ceiling)
+            additional_yards <- round(team_rush_yds * additional_share)
+            
+            rush_yds_allocation[i] <- rush_yds_allocation[i] + additional_yards
+            remaining_share <- remaining_share - additional_share
+          }
+        }
+      }
+      
+      # Pass 3: Final cleanup - distribute evenly RESPECTING CEILINGS
+      if (remaining_share > 0.01) {
+        final_remaining_yards <- round(team_rush_yds * remaining_share)
+        
+        # Only give to players who still have room to ceiling
+        for (yard in 1:final_remaining_yards) {
+          # Find players with room to ceiling
+          players_with_room <- numeric(0)
+          room_amounts <- numeric(0)
+          
+          for (i in 1:n_rushers) {
+            if (rush_yds_allocation[i] > 0) {  # Only active players
+              ceiling_pct <- rushing_data$Ceiling[i]
+              if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+              
+              current_share <- rush_yds_allocation[i] / team_rush_yds
+              room <- ceiling_pct - current_share
+              
+              if (room > 0.001) {  # Has room
+                players_with_room <- c(players_with_room, i)
+                room_amounts <- c(room_amounts, room)
+              }
+            }
+          }
+          
+          # If no one has room, we're done (better to under-allocate than break ceilings)
+          if (length(players_with_room) == 0) break
+          
+          # Give 1 yard to a random player with room (equal probability)
+          selected <- sample(players_with_room, 1)
+          rush_yds_allocation[selected] <- rush_yds_allocation[selected] + 1
+        }
       }
     }
     
-    # Second pass: Allocate rushing TDs one-by-one
+    # Second pass: Allocate rushing TDs with 70% input rate / 30% production + diminishing returns
     td_allocation <- rep(0, n_rushers)
     if (team_rush_tds > 0) {
+      # Historical TD rates (70% weight)
       td_rates <- as.numeric(rushing_data$TD_Rate)
       td_rates[is.na(td_rates)] <- 0
       td_rates[td_rates < 0] <- 0
       
-      if (sum(td_rates) > 0) {
-        td_probs <- td_rates / sum(td_rates)
+      # Production in this sim (30% weight)
+      production_weight <- rush_yds_allocation / max(rush_yds_allocation, 1)
+      
+      # 70/30 split
+      td_probs <- (td_rates * 0.7) + (production_weight * 0.3)
+      
+      # Only players with rush yards are eligible
+      eligible <- which(rush_yds_allocation > 0)
+      
+      if (length(eligible) > 0 && sum(td_probs[eligible]) > 0) {
+        td_probs_eligible <- td_probs[eligible]
+        td_probs_eligible <- td_probs_eligible / sum(td_probs_eligible)
         
+        # Allocate TDs with diminishing returns
         for (td in 1:team_rush_tds) {
-          selected <- sample(1:n_rushers, 1, prob = td_probs)
+          selected_idx <- sample(1:length(eligible), 1, prob = td_probs_eligible)
+          selected <- eligible[selected_idx]
+          
           td_allocation[selected] <- td_allocation[selected] + 1
+          
+          # Diminishing returns: Each TD reduces probability (0.6^n)
+          reduction_factor <- 0.6 ^ td_allocation[selected]
+          td_probs_eligible[selected_idx] <- td_probs_eligible[selected_idx] * reduction_factor
+          
+          if (sum(td_probs_eligible) > 0) {
+            td_probs_eligible <- td_probs_eligible / sum(td_probs_eligible)
+          } else {
+            td_probs_eligible <- rep(1/length(eligible), length(eligible))
+          }
+        }
+      }
+    }
+    
+    # CONSTRAINT: Rush TD requires rush yards > 0
+    for (i in 1:n_rushers) {
+      if (td_allocation[i] > 0 && rush_yds_allocation[i] == 0) {
+        rush_yds_allocation[i] <- 1
+      }
+    }
+    
+    # WORKLOAD CONSTRAINT: Track rushing outcomes for receiving cap
+    player_rush_outcome <- list()
+    
+    for (i in 1:n_rushers) {
+      if (rush_yds_allocation[i] > 0) {
+        rush_share <- rush_yds_allocation[i] / max(team_rush_yds, 1)
+        p75 <- rushing_data$Pct_P75[i]
+        
+        # If rushing outcome >= P75, mark as "hot"
+        if (!is.na(p75) && p75 > 0 && rush_share >= p75) {
+          player_rush_outcome[[rushing_data$Player[i]]] <- "hot"
         }
       }
     }
@@ -331,6 +468,14 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       if (is.na(p50_pct)) p50_pct <- p25_pct
       if (is.na(p75_pct)) p75_pct <- p50_pct
       if (is.na(ceiling_pct)) ceiling_pct <- p75_pct
+      
+      # WORKLOAD CONSTRAINT: If player had hot rushing game, cap receiving at P50
+      player_name <- receiving_data$Player[i]
+      if (player_name %in% names(player_rush_outcome)) {
+        if (player_rush_outcome[[player_name]] == "hot") {
+          ceiling_pct <- min(ceiling_pct, p50_pct)
+        }
+      }
       
       # SMART STOP: If we've allocated 98%+ and this player has Floor=0, skip
       if (allocated_share > 0.98 && floor_pct == 0) {
@@ -389,22 +534,133 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       }
     }
     
-    # SWEEP UP: Distribute any remaining yards proportionally to active players
+    # IMPROVED SWEEP UP: Distribute remaining yards respecting ceiling constraints
     if (remaining_share > 0.01) {
-      active_players <- which(rec_yds_allocation > 0)
-      
-      if (length(active_players) > 0) {
-        # Distribute remaining yards proportionally based on what they already got
-        active_yards <- rec_yds_allocation[active_players]
-        proportions <- active_yards / sum(active_yards)
+      # Pass 1: Go through players from top, cap at 20% of remaining per player
+      for (i in 1:n_receivers) {
+        if (remaining_share <= 0.01) break
         
-        extra_yards <- round(team_pass_yds * remaining_share * proportions)
-        rec_yds_allocation[active_players] <- rec_yds_allocation[active_players] + extra_yards
+        ceiling_pct <- receiving_data$Ceiling[i]
+        if (is.na(ceiling_pct)) ceiling_pct <- receiving_data$Pct_P75[i]
+        if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+        
+        current_share <- rec_yds_allocation[i] / team_pass_yds
+        room_to_ceiling <- ceiling_pct - current_share
+        
+        if (room_to_ceiling > 0.01) {
+          additional_share <- min(
+            remaining_share,
+            room_to_ceiling,
+            remaining_share * 0.20  # Cap at 20% per iteration
+          )
+          
+          additional_yards <- round(team_pass_yds * additional_share)
+          rec_yds_allocation[i] <- rec_yds_allocation[i] + additional_yards
+          remaining_share <- remaining_share - additional_share
+        }
+      }
+      
+      # Pass 2: If still remaining, go through again without 20% cap
+      if (remaining_share > 0.01) {
+        for (i in 1:n_receivers) {
+          if (remaining_share <= 0.01) break
+          
+          ceiling_pct <- receiving_data$Ceiling[i]
+          if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+          
+          current_share <- rec_yds_allocation[i] / team_pass_yds
+          room_to_ceiling <- ceiling_pct - current_share
+          
+          if (room_to_ceiling > 0.01) {
+            additional_share <- min(remaining_share, room_to_ceiling)
+            additional_yards <- round(team_pass_yds * additional_share)
+            
+            rec_yds_allocation[i] <- rec_yds_allocation[i] + additional_yards
+            remaining_share <- remaining_share - additional_share
+          }
+        }
+      }
+      
+      # Pass 3: Final cleanup - distribute evenly RESPECTING CEILINGS
+      if (remaining_share > 0.01) {
+        final_remaining_yards <- round(team_pass_yds * remaining_share)
+        
+        # Only give to players who still have room to ceiling
+        for (yard in 1:final_remaining_yards) {
+          # Find players with room to ceiling
+          players_with_room <- numeric(0)
+          room_amounts <- numeric(0)
+          
+          for (i in 1:n_receivers) {
+            if (rec_yds_allocation[i] > 0) {  # Only active players
+              ceiling_pct <- receiving_data$Ceiling[i]
+              if (is.na(ceiling_pct)) ceiling_pct <- 1.0
+              
+              current_share <- rec_yds_allocation[i] / team_pass_yds
+              room <- ceiling_pct - current_share
+              
+              if (room > 0.001) {  # Has room
+                players_with_room <- c(players_with_room, i)
+                room_amounts <- c(room_amounts, room)
+              }
+            }
+          }
+          
+          # If no one has room, we're done (better to under-allocate than break ceilings)
+          if (length(players_with_room) == 0) break
+          
+          # Give 1 yard to a random player with room (equal probability)
+          selected <- sample(players_with_room, 1)
+          rec_yds_allocation[selected] <- rec_yds_allocation[selected] + 1
+        }
       }
     }
     
-    # Second pass: Allocate receptions based on YPR profile
-    expected_recs <- rec_yds_allocation / ypr_values
+    # DYNAMIC YPR ADJUSTMENT: Adjust YPR based on actual yards vs expected
+    # High yardage games likely had explosive plays (higher YPR)
+    adjusted_ypr_values <- ypr_values  # Start with historical
+    
+    for (i in 1:n_receivers) {
+      if (rec_yds_allocation[i] > 0) {
+        # Calculate expected yards for this player based on P50
+        p50_pct <- receiving_data$Pct_P50[i]
+        if (is.na(p50_pct) || p50_pct <= 0) p50_pct <- 0.01
+        
+        expected_yds <- team_pass_yds * p50_pct
+        
+        if (expected_yds > 0) {
+          # Calculate how actual compares to expected
+          yards_ratio <- rec_yds_allocation[i] / expected_yds
+          
+          # If significantly OVER expected (explosive game), increase YPR
+          if (yards_ratio > 1.3) {
+            # Scale factor: the more explosive, the higher YPR
+            # 1.3x expected = 1.09x YPR
+            # 2.0x expected = 1.21x YPR
+            # 3.0x expected = 1.51x YPR
+            ypr_multiplier <- 1 + (yards_ratio - 1) * 0.3
+            
+            # Cap at 2.0x historical YPR
+            ypr_multiplier <- min(ypr_multiplier, 2.0)
+            
+            adjusted_ypr_values[i] <- ypr_values[i] * ypr_multiplier
+            
+          } else if (yards_ratio < 0.7) {
+            # If UNDER expected (possession/short-catch role), decrease YPR slightly
+            # 0.7x expected = 0.97x YPR
+            # 0.5x expected = 0.95x YPR
+            ypr_multiplier <- 0.9 + (yards_ratio * 0.1)
+            ypr_multiplier <- max(ypr_multiplier, 0.7)  # Floor at 70%
+            
+            adjusted_ypr_values[i] <- ypr_values[i] * ypr_multiplier
+          }
+          # If yards_ratio between 0.7-1.3, no adjustment (normal game)
+        }
+      }
+    }
+    
+    # Second pass: Allocate receptions based on ADJUSTED YPR profile
+    expected_recs <- rec_yds_allocation / adjusted_ypr_values
     expected_recs[is.na(expected_recs)] <- 0
     expected_recs[is.infinite(expected_recs)] <- 0
     
@@ -418,24 +674,96 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
         selected <- sample(1:n_receivers, 1, prob = rec_probs)
         rec_allocation[selected] <- rec_allocation[selected] + 1
       }
+      
+      # CONSTRAINT: Everyone with yards must have at least 1 catch
+      players_with_yards <- which(rec_yds_allocation > 0)
+      for (i in players_with_yards) {
+        if (rec_allocation[i] == 0) {
+          rec_allocation[i] <- 1
+          # Take 1 from player with most (who has >1)
+          eligible_to_reduce <- which(rec_allocation > 1)
+          if (length(eligible_to_reduce) > 0) {
+            max_idx <- eligible_to_reduce[which.max(rec_allocation[eligible_to_reduce])]
+            rec_allocation[max_idx] <- rec_allocation[max_idx] - 1
+          }
+        }
+      }
     } else {
       rec_allocation <- rep(0, n_receivers)
     }
     
-    # Third pass: Allocate receiving TDs one-by-one
+    # Third pass: Allocate receiving TDs with 70% input rate / 30% production + diminishing returns
     td_allocation <- rep(0, n_receivers)
     if (team_pass_tds > 0) {
+      # Historical TD rates (70% weight)
       td_rates <- as.numeric(receiving_data$TD_Rate)
       td_rates[is.na(td_rates)] <- 0
       td_rates[td_rates < 0] <- 0
       
-      if (sum(td_rates) > 0) {
-        td_probs <- td_rates / sum(td_rates)
+      # Production in this sim (30% weight)
+      # Combine yards and receptions
+      production_weight <- (rec_yds_allocation / max(rec_yds_allocation, 1)) * 0.5 + 
+        (rec_allocation / max(rec_allocation, 1)) * 0.5
+      
+      # 70/30 split
+      td_probs <- (td_rates * 0.7) + (production_weight * 0.3)
+      
+      # Only players who caught passes are eligible
+      eligible <- which(rec_allocation > 0)
+      
+      if (length(eligible) > 0 && sum(td_probs[eligible]) > 0) {
+        td_probs_eligible <- td_probs[eligible]
+        td_probs_eligible <- td_probs_eligible / sum(td_probs_eligible)
         
+        # Allocate TDs with diminishing returns
         for (td in 1:team_pass_tds) {
-          selected <- sample(1:n_receivers, 1, prob = td_probs)
+          selected_idx <- sample(1:length(eligible), 1, prob = td_probs_eligible)
+          selected <- eligible[selected_idx]
+          
           td_allocation[selected] <- td_allocation[selected] + 1
+          
+          # Diminishing returns: Each TD reduces probability (0.6^n)
+          reduction_factor <- 0.6 ^ td_allocation[selected]
+          td_probs_eligible[selected_idx] <- td_probs_eligible[selected_idx] * reduction_factor
+          
+          if (sum(td_probs_eligible) > 0) {
+            td_probs_eligible <- td_probs_eligible / sum(td_probs_eligible)
+          } else {
+            td_probs_eligible <- rep(1/length(eligible), length(eligible))
+          }
         }
+      }
+    }
+    
+    # CONSTRAINT: If player has rec TDs, ensure catches >= TDs
+    for (i in 1:n_receivers) {
+      if (td_allocation[i] > 0 && rec_allocation[i] < td_allocation[i]) {
+        needed_catches <- td_allocation[i] - rec_allocation[i]
+        rec_allocation[i] <- rec_allocation[i] + needed_catches
+        
+        # Take from others proportionally
+        for (take in 1:needed_catches) {
+          eligible_to_reduce <- which(rec_allocation > td_allocation & (1:n_receivers) != i)
+          if (length(eligible_to_reduce) > 0) {
+            excess <- rec_allocation[eligible_to_reduce] - td_allocation[eligible_to_reduce]
+            max_idx <- eligible_to_reduce[which.max(excess)]
+            rec_allocation[max_idx] <- rec_allocation[max_idx] - 1
+          } else {
+            break
+          }
+        }
+      }
+    }
+    
+    # FINAL VALIDATION
+    for (i in 1:n_receivers) {
+      # Yards > 0 → catches >= 1
+      if (rec_yds_allocation[i] > 0 && rec_allocation[i] == 0) {
+        rec_allocation[i] <- 1
+      }
+      # TDs > 0 → catches >= TDs
+      if (td_allocation[i] > 0 && rec_allocation[i] < td_allocation[i]) {
+        rec_allocation[i] <- td_allocation[i]
       }
     }
     
@@ -980,6 +1308,13 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       return(list(count = 0))
     }
     
+    # DEBUG: Print what filters we received
+    cat("\n=== FILTER DEBUG ===\n")
+    cat("Excluded captains:", paste(filters$excluded_captains, collapse = ", "), "\n")
+    cat("Excluded flex:", paste(filters$excluded_flex, collapse = ", "), "\n")
+    cat("Excluded stacks:", paste(filters$excluded_stacks, collapse = ", "), "\n")
+    cat("Starting lineups:", nrow(optimal_lineups), "\n")
+    
     filtered_lineups <- as.data.table(optimal_lineups)
     
     # Apply Top Count filters
@@ -1013,26 +1348,40 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
           GeometricMeanOwnership <= filters$geometric_mean_range[2]
       ]
     }
+    
     # Apply team stack exclusion filter
     if (!is.null(filters$excluded_stacks) && length(filters$excluded_stacks) > 0 && "TeamStack" %in% names(filtered_lineups)) {
+      cat("Applying stack filter...\n")
       filtered_lineups <- filtered_lineups[!TeamStack %in% filters$excluded_stacks]
+      cat("After stack filter:", nrow(filtered_lineups), "lineups\n")
     }
     
+    # Apply captain exclusion filter (direct match with IDs)
+    if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
+      cat("Applying captain filter...\n")
+      cat("Sample captains in data:", paste(head(filtered_lineups$Captain, 3), collapse = ", "), "\n")
+      filtered_lineups <- filtered_lineups[!Captain %in% filters$excluded_captains]
+      cat("After captain filter:", nrow(filtered_lineups), "lineups\n")
+    }
     
-    # Apply player exclusion filter
-    if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
-      player_cols <- c("Captain", paste0("Player", 1:5))
+    # Apply flex exclusion filter (direct match with IDs)
+    if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
+      cat("Applying flex filter...\n")
+      flex_cols <- paste0("Player", 1:5)
       to_exclude <- rep(FALSE, nrow(filtered_lineups))
       
-      for(col in player_cols) {
+      for(col in flex_cols) {
         if(col %in% names(filtered_lineups)) {
-          player_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups[[col]])
-          to_exclude <- to_exclude | (player_names %in% filters$excluded_players)
+          to_exclude <- to_exclude | (filtered_lineups[[col]] %in% filters$excluded_flex)
         }
       }
       
+      cat("Lineups to exclude:", sum(to_exclude), "\n")
       filtered_lineups <- filtered_lineups[!to_exclude]
+      cat("After flex filter:", nrow(filtered_lineups), "lineups\n")
     }
+    
+    cat("=== END FILTER DEBUG ===\n\n")
     
     return(list(
       count = nrow(filtered_lineups),
@@ -1083,14 +1432,18 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       filtered_lineups <- filtered_lineups[!TeamStack %in% filters$excluded_stacks]
     }
     
-    # Apply player exclusion filter
-    if (!is.null(filters$excluded_players) && length(filters$excluded_players) > 0) {
-      player_cols <- c("Captain", paste0("Player", 1:5))
+    # Apply player exclusion filter - direct match with IDs
+    if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
+      filtered_lineups <- filtered_lineups[!Captain %in% filters$excluded_captains]
+    }
+    
+    if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
+      flex_cols <- paste0("Player", 1:5)
       to_exclude <- rep(FALSE, nrow(filtered_lineups))
       
-      for(col in player_cols) {
+      for(col in flex_cols) {
         if(col %in% names(filtered_lineups)) {
-          to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_players
+          to_exclude <- to_exclude | (filtered_lineups[[col]] %in% filters$excluded_flex)
         }
       }
       
@@ -1462,15 +1815,19 @@ ui <- dashboardPage(
               ),
               
               fluidRow(
-                column(4, selectizeInput("excluded_players", "Exclude Players:", 
+                column(3, selectizeInput("excluded_captains", "Exclude from Captain:", 
                                          choices = NULL, multiple = TRUE,
                                          options = list(plugins = list('remove_button'), 
-                                                        placeholder = 'Click to select players to exclude'))),
-                column(4, selectizeInput("excluded_stacks", "Exclude Stacks:", 
+                                                        placeholder = 'Exclude from CPT slot'))),
+                column(3, selectizeInput("excluded_flex", "Exclude from Flex:", 
+                                         choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Exclude from FLEX slots'))),
+                column(3, selectizeInput("excluded_stacks", "Exclude Stacks:", 
                                          choices = NULL, multiple = TRUE,
                                          options = list(plugins = list('remove_button'),
                                                         placeholder = 'Click to select stacks to exclude'))),
-                column(4, numericInput("num_random_lineups", "Number of Lineups to Generate:", 
+                column(3, numericInput("num_random_lineups", "Number of Lineups to Generate:", 
                                        value = 20, min = 1, max = 150))
               ),
               
@@ -1700,7 +2057,8 @@ server <- function(input, output, session) {
                     backgroundSize = '95% 80%',
                     backgroundRepeat = 'no-repeat',
                     backgroundPosition = 'center')
-      } else .}
+      } else .} %>%
+      apply_team_colors_to_table(projections, "TeamAbbr")  # Add team colors
   })
   
   # Team 1 violin plot title
@@ -2222,14 +2580,19 @@ server <- function(input, output, session) {
   # Update player exclusion choices when optimal lineups are calculated
   observeEvent(rv$optimal_lineups, {
     if(!is.null(rv$optimal_lineups)) {
-      # Get all unique player names (strip IDs)
+      # Get all unique player names (KEEP IDs for exact matching)
       all_players <- unique(c(
-        gsub(" \\([^)]+\\)$", "", rv$optimal_lineups$Captain),
-        gsub(" \\([^)]+\\)$", "", unlist(rv$optimal_lineups[, paste0("Player", 1:5)]))
+        rv$optimal_lineups$Captain,
+        unlist(rv$optimal_lineups[, paste0("Player", 1:5)])
       ))
       all_players <- sort(all_players[!is.na(all_players) & all_players != ""])
       
-      updateSelectizeInput(session, "excluded_players", 
+      # Update both captain and flex exclusion dropdowns with same players
+      updateSelectizeInput(session, "excluded_captains", 
+                           choices = all_players, 
+                           server = TRUE)
+      
+      updateSelectizeInput(session, "excluded_flex", 
                            choices = all_players, 
                            server = TRUE)
       
@@ -2265,7 +2628,7 @@ server <- function(input, output, session) {
   # Real-time filtered pool size calculation
   observeEvent(c(input$min_top1_count, input$min_top2_count, input$min_top3_count,
                  input$min_top5_count, input$cumulative_ownership_range,
-                 input$geometric_mean_range, input$excluded_players, input$excluded_stacks), {
+                 input$geometric_mean_range, input$excluded_captains, input$excluded_flex, input$excluded_stacks), {
                    if(!is.null(rv$optimal_lineups)) {
                      filters <- list(
                        min_top1_count = if(!is.null(input$min_top1_count)) input$min_top1_count else 0,
@@ -2275,7 +2638,8 @@ server <- function(input, output, session) {
                        cumulative_ownership_range = input$cumulative_ownership_range,
                        geometric_mean_range = input$geometric_mean_range,
                        excluded_stacks = input$excluded_stacks,
-                       excluded_players = if(!is.null(input$excluded_players)) input$excluded_players else character(0)
+                       excluded_captains = if(!is.null(input$excluded_captains)) input$excluded_captains else character(0),
+                       excluded_flex = if(!is.null(input$excluded_flex)) input$excluded_flex else character(0)
                      )
                      
                      pool_stats <- calculate_filtered_pool_stats(rv$optimal_lineups, filters)
@@ -2303,7 +2667,8 @@ server <- function(input, output, session) {
       geometric_mean_range = input$geometric_mean_range,
       excluded_stacks = input$excluded_stacks,
       num_lineups = input$num_random_lineups,
-      excluded_players = input$excluded_players
+      excluded_captains = input$excluded_captains,
+      excluded_flex = input$excluded_flex
     )
     
     withProgress(message = 'Generating lineups...', value = 0, {
@@ -2363,10 +2728,10 @@ server <- function(input, output, session) {
         stringsAsFactors = FALSE
       )
       
-      # Add Pos, Salary, CPT_Own, Flex_Own from DK salaries
+      # Add Pos, Salary, CPT_Own, Flex_Own, Team from DK salaries
       if(!is.null(dk_data)) {
         display_data <- display_data %>%
-          left_join(dk_data %>% select(Name, Pos, Salary, CPT_Own, Flex_Own), 
+          left_join(dk_data %>% select(Name, Pos, Team, Salary, CPT_Own, Flex_Own), 
                     by = c("Player" = "Name"))
         
         # Calculate total ownership (sum, not average)
@@ -2407,13 +2772,14 @@ server <- function(input, output, session) {
         
         # Select columns with Exposure
         display_data <- display_data %>%
-          select(Player, Pos, Salary, CPT_Own, Flex_Own, TotalOwn, 
-                 CPT_Exposure, Flex_Exposure, Exposure, 
-                 CPT_Leverage, Flex_Leverage, Leverage)
+          select(Player, Pos, Team, Salary, 
+                 CPT_Own, CPT_Exposure, CPT_Leverage,
+                 Flex_Own, Flex_Exposure, Flex_Leverage,
+                 TotalOwn, Exposure, Leverage)
       } else {
         # Select columns without Exposure
         display_data <- display_data %>%
-          select(Player, Pos, Salary, CPT_Own, Flex_Own, TotalOwn)
+          select(Player, Pos, Team, Salary, CPT_Own, Flex_Own, TotalOwn)
       }
       
       # Sort by Exposure descending (or TotalOwn if no random lineups)
@@ -2449,6 +2815,9 @@ server <- function(input, output, session) {
       if(length(numeric_cols) > 0) {
         dt <- dt %>% formatRound(numeric_cols, digits = 1)
       }
+      
+      # Add team colors
+      dt <- apply_team_colors_to_table(dt, display_data, "Team")
       
       return(dt)
     }, error = function(e) {
