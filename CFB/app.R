@@ -935,6 +935,44 @@ run_simulations <- function(input_data, n_sims) {
   all_results <- vector("list", list_size)
   result_idx <- 1
   
+  # Pre-fetch DST names and column names if using DST (avoid repeated operations in loop)
+  team1_dst_name <- NULL
+  team2_dst_name <- NULL
+  def1_sacks_col <- NULL
+  def1_ints_col <- NULL
+  def1_fum_col <- NULL
+  def1_pts_col <- NULL
+  def2_sacks_col <- NULL
+  def2_ints_col <- NULL
+  def2_fum_col <- NULL
+  def2_pts_col <- NULL
+  
+  if (use_dst) {
+    # Pre-fetch DST names
+    team1_dst_name <- dk_salaries %>%
+      filter(Team == team_names[1], Pos == "DST") %>%
+      pull(Name)
+    if (length(team1_dst_name) == 0) team1_dst_name <- paste0(team_names[1], " DST")
+    else team1_dst_name <- team1_dst_name[1]
+    
+    team2_dst_name <- dk_salaries %>%
+      filter(Team == team_names[2], Pos == "DST") %>%
+      pull(Name)
+    if (length(team2_dst_name) == 0) team2_dst_name <- paste0(team_names[2], " DST")
+    else team2_dst_name <- team2_dst_name[1]
+    
+    # Pre-build column names
+    def1_sacks_col <- paste0(team_names[1], "_Def_Sacks")
+    def1_ints_col <- paste0(team_names[1], "_Def_Ints")
+    def1_fum_col <- paste0(team_names[1], "_Def_Fum")
+    def1_pts_col <- paste0(team_names[1], "_Def_Pts_Allow")
+    
+    def2_sacks_col <- paste0(team_names[2], "_Def_Sacks")
+    def2_ints_col <- paste0(team_names[2], "_Def_Ints")
+    def2_fum_col <- paste0(team_names[2], "_Def_Fum")
+    def2_pts_col <- paste0(team_names[2], "_Def_Pts_Allow")
+  }
+  
   batch_size <- 500
   n_batches <- ceiling(n_sims / batch_size)
   start_time <- Sys.time()
@@ -956,17 +994,7 @@ run_simulations <- function(input_data, n_sims) {
       
       # CREATE DST PLAYERS (NFL MODE)
       if (use_dst) {
-        # Extract defensive stats from sampled similar game
-        def1_sacks_col <- paste0(team_names[1], "_Def_Sacks")
-        def1_ints_col <- paste0(team_names[1], "_Def_Ints")
-        def1_fum_col <- paste0(team_names[1], "_Def_Fum")
-        def1_pts_col <- paste0(team_names[1], "_Def_Pts_Allow")
-        
-        def2_sacks_col <- paste0(team_names[2], "_Def_Sacks")
-        def2_ints_col <- paste0(team_names[2], "_Def_Ints")
-        def2_fum_col <- paste0(team_names[2], "_Def_Fum")
-        def2_pts_col <- paste0(team_names[2], "_Def_Pts_Allow")
-        
+        # Extract defensive stats using pre-built column names
         team1_dst_sacks <- as.numeric(sampled_game[[def1_sacks_col]])
         team1_dst_ints <- as.numeric(sampled_game[[def1_ints_col]])
         team1_dst_fum <- as.numeric(sampled_game[[def1_fum_col]])
@@ -987,20 +1015,25 @@ run_simulations <- function(input_data, n_sims) {
         if (is.na(team2_dst_fum)) team2_dst_fum <- 0
         if (is.na(team2_dst_pts_allow)) team2_dst_pts_allow <- 20
         
-        # Get DST names from DK salaries
-        team1_dst_name <- dk_salaries %>%
-          filter(Team == team_names[1], Pos == "DST") %>%
-          pull(Name)
-        if (length(team1_dst_name) == 0) team1_dst_name <- paste0(team_names[1], " DST")
-        else team1_dst_name <- team1_dst_name[1]
+        # PRE-CALCULATE DST fantasy points (FAST - no vectorization needed)
+        team1_pts_allow_score <- if (team1_dst_pts_allow == 0) 10 else
+          if (team1_dst_pts_allow <= 6) 7 else
+            if (team1_dst_pts_allow <= 13) 4 else
+              if (team1_dst_pts_allow <= 20) 1 else
+                if (team1_dst_pts_allow <= 27) 0 else
+                  if (team1_dst_pts_allow <= 34) -1 else -4
         
-        team2_dst_name <- dk_salaries %>%
-          filter(Team == team_names[2], Pos == "DST") %>%
-          pull(Name)
-        if (length(team2_dst_name) == 0) team2_dst_name <- paste0(team_names[2], " DST")
-        else team2_dst_name <- team2_dst_name[1]
+        team2_pts_allow_score <- if (team2_dst_pts_allow == 0) 10 else
+          if (team2_dst_pts_allow <= 6) 7 else
+            if (team2_dst_pts_allow <= 13) 4 else
+              if (team2_dst_pts_allow <= 20) 1 else
+                if (team2_dst_pts_allow <= 27) 0 else
+                  if (team2_dst_pts_allow <= 34) -1 else -4
         
-        # Store DST with same structure as offensive players - points calculated later
+        team1_dst_total <- (team1_dst_sacks * 1) + (team1_dst_ints * 2) + (team1_dst_fum * 2) + team1_pts_allow_score
+        team2_dst_total <- (team2_dst_sacks * 1) + (team2_dst_ints * 2) + (team2_dst_fum * 2) + team2_pts_allow_score
+        
+        # Store DST with pre-calculated points
         team1_dst_result <- data.table(
           SimID = sim, Team = team_names[1], Player = team1_dst_name,
           PassYds = 0, PassTDs = 0L, INTs = 0L,
@@ -1008,10 +1041,8 @@ run_simulations <- function(input_data, n_sims) {
           Recs = 0L, RecYds = 0, RecTDs = 0L,
           FGsMade = 0L, FG_Under30 = 0L, FG_30_39 = 0L, FG_40_49 = 0L, FG_50Plus = 0L,
           XPs = 0L, FumLost = 0L,
-          DST_Sacks = team1_dst_sacks,
-          DST_INTs = team1_dst_ints,
-          DST_Fum = team1_dst_fum,
-          DST_Pts_Allow = team1_dst_pts_allow
+          PassPts = 0, RushPts = 0, RecPts = 0, KickPts = 0, FumPts = 0,
+          DSTPts = team1_dst_total, TotalPts = team1_dst_total
         )
         
         team2_dst_result <- data.table(
@@ -1021,10 +1052,8 @@ run_simulations <- function(input_data, n_sims) {
           Recs = 0L, RecYds = 0, RecTDs = 0L,
           FGsMade = 0L, FG_Under30 = 0L, FG_30_39 = 0L, FG_40_49 = 0L, FG_50Plus = 0L,
           XPs = 0L, FumLost = 0L,
-          DST_Sacks = team2_dst_sacks,
-          DST_INTs = team2_dst_ints,
-          DST_Fum = team2_dst_fum,
-          DST_Pts_Allow = team2_dst_pts_allow
+          PassPts = 0, RushPts = 0, RecPts = 0, KickPts = 0, FumPts = 0,
+          DSTPts = team2_dst_total, TotalPts = team2_dst_total
         )
         
         all_results[[result_idx]] <- team1_dst_result
@@ -1048,20 +1077,6 @@ run_simulations <- function(input_data, n_sims) {
   }
   
   combined <- rbindlist(all_results, use.names = TRUE, fill = TRUE)
-  
-  # Add DST scoring for NFL mode (calculate points allowed score + defensive stats)
-  if ("DST_Sacks" %in% names(combined)) {
-    combined[!is.na(DST_Sacks), DSTPts := (DST_Sacks * 1) + (DST_INTs * 2) + (DST_Fum * 2) + 
-               ifelse(DST_Pts_Allow == 0, 10,
-                      ifelse(DST_Pts_Allow <= 6, 7,
-                             ifelse(DST_Pts_Allow <= 13, 4,
-                                    ifelse(DST_Pts_Allow <= 20, 1,
-                                           ifelse(DST_Pts_Allow <= 27, 0,
-                                                  ifelse(DST_Pts_Allow <= 34, -1, -4))))))]
-    
-    # Update TotalPts for DST
-    combined[!is.na(DST_Sacks), TotalPts := DSTPts]
-  }
   
   total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   cat(sprintf("\n??? Complete! %.1f seconds (%.0f sims/sec)\n\n", total_time, n_sims/total_time))
