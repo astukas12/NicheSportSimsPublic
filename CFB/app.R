@@ -23,7 +23,7 @@ source("cfb_lineup_builder_functions.R")
 # Load CFB team colors automatically
 tryCatch({
   source("cfb_team_colors.R")
-  cat("✓ Team colors loaded successfully\n")
+  cat("??? Team colors loaded successfully\n")
 }, error = function(e) {
   cat("Warning: cfb_team_colors.R not found. Using default colors.\n")
   # Fallback function if file doesn't exist
@@ -35,6 +35,35 @@ tryCatch({
 # Wrapper function for backwards compatibility with existing code
 get_team_color <- function(team_name) {
   return(get_cfb_colors(team_name, "primary"))
+}
+
+# ===== DST SCORING FUNCTIONS (NFL MODE) =====
+# Auto-detects NFL vs CFB based on defensive columns
+
+# Check if defensive scoring is available
+has_dst_scoring <- function(similar_games, team_names) {
+  # Check if defensive columns exist (NFL format)
+  def_cols_team1 <- paste0(team_names[1], c("_Def_Sacks", "_Def_Ints", "_Def_Fum", "_Def_Pts_Allow"))
+  def_cols_team2 <- paste0(team_names[2], c("_Def_Sacks", "_Def_Ints", "_Def_Fum", "_Def_Pts_Allow"))
+  
+  all_def_cols <- c(def_cols_team1, def_cols_team2)
+  all_exist <- all(all_def_cols %in% names(similar_games))
+  
+  return(all_exist)
+}
+
+# Calculate DraftKings NFL DST Points Allowed scoring
+calculate_pts_allowed_score <- function(pts_allowed) {
+  sapply(pts_allowed, function(pts) {
+    if (is.na(pts)) return(0)
+    if (pts == 0) return(10)
+    if (pts <= 6) return(7)
+    if (pts <= 13) return(4)
+    if (pts <= 20) return(1)
+    if (pts <= 27) return(0)
+    if (pts <= 34) return(-1)
+    return(-4)  # 35+
+  })
 }
 
 # Efficient team color highlighting for tables (F1-style)
@@ -140,7 +169,7 @@ read_input_file <- function(file_path) {
     
     # Fix malformed column names (Excel sometimes merges adjacent columns)
     if ("CPT_OwnPos" %in% names(input_data$dk_salaries)) {
-      cat("⚠ Fixing malformed column 'CPT_OwnPos' - splitting into separate columns\n")
+      cat("??? Fixing malformed column 'CPT_OwnPos' - splitting into separate columns\n")
       # This shouldn't happen with new generator, but handle old files
     }
     
@@ -155,7 +184,7 @@ read_input_file <- function(file_path) {
 }
 
 # Simulation function
-simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_salaries) {
+simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_salaries, use_dst = FALSE) {
   
   # Sheet names have underscores, Similar_Games columns have spaces
   team_name_for_cols <- gsub("_", " ", team_name)
@@ -757,11 +786,11 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
     
     # FINAL VALIDATION
     for (i in 1:n_receivers) {
-      # Yards > 0 → catches >= 1
+      # Yards > 0 ??? catches >= 1
       if (rec_yds_allocation[i] > 0 && rec_allocation[i] == 0) {
         rec_allocation[i] <- 1
       }
-      # TDs > 0 → catches >= TDs
+      # TDs > 0 ??? catches >= TDs
       if (td_allocation[i] > 0 && rec_allocation[i] < td_allocation[i]) {
         rec_allocation[i] <- td_allocation[i]
       }
@@ -861,9 +890,9 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
   )
   
   # Convert to data.table
-  results <- rbindlist(all_player_results)
+  results <- rbindlist(all_player_results, use.names = TRUE, fill = TRUE)
   
-  # Calculate fantasy points
+  # Calculate fantasy points (same as CFB version)
   results[, `:=`(
     PassPts = (PassYds * 0.04) + (PassTDs * 4) - INTs + ifelse(PassYds >= 300, 3, 0),
     RushPts = (RushYds * 0.1) + (RushTDs * 6) + ifelse(RushYds >= 100, 3, 0),
@@ -889,10 +918,21 @@ run_simulations <- function(input_data, n_sims) {
   team1_data <- input_data[[team_names[1]]]
   team2_data <- input_data[[team_names[2]]]
   
-  cat(sprintf("Teams: %s vs %s\n", team_names[1], team_names[2]))
-  cat(sprintf("Similar games: %d\n\n", nrow(similar_games)))
+  # Detect DST scoring (NFL vs CFB)
+  use_dst <- has_dst_scoring(similar_games, team_names)
   
-  all_results <- vector("list", n_sims * 2)
+  cat(sprintf("Teams: %s vs %s\n", team_names[1], team_names[2]))
+  cat(sprintf("Similar games: %d\n", nrow(similar_games)))
+  
+  if (use_dst) {
+    cat("??? DST scoring detected (NFL mode)\n\n")
+  } else {
+    cat("??? No DST data (CFB mode)\n\n")
+  }
+  
+  # Pre-allocate (2 teams + 2 DST if NFL)
+  list_size <- if (use_dst) n_sims * 4 else n_sims * 2
+  all_results <- vector("list", list_size)
   result_idx <- 1
   
   batch_size <- 500
@@ -906,13 +946,92 @@ run_simulations <- function(input_data, n_sims) {
     for (sim in start_sim:end_sim) {
       sampled_game <- similar_games[sample(nrow(similar_games), 1), ]
       
-      team1_result <- simulate_team_game(sim, team_names[1], team1_data, sampled_game, dk_salaries)
+      team1_result <- simulate_team_game(sim, team_names[1], team1_data, sampled_game, dk_salaries, use_dst)
       all_results[[result_idx]] <- team1_result
       result_idx <- result_idx + 1
       
-      team2_result <- simulate_team_game(sim, team_names[2], team2_data, sampled_game, dk_salaries)
+      team2_result <- simulate_team_game(sim, team_names[2], team2_data, sampled_game, dk_salaries, use_dst)
       all_results[[result_idx]] <- team2_result
       result_idx <- result_idx + 1
+      
+      # CREATE DST PLAYERS (NFL MODE)
+      if (use_dst) {
+        # Extract defensive stats from sampled similar game
+        def1_sacks_col <- paste0(team_names[1], "_Def_Sacks")
+        def1_ints_col <- paste0(team_names[1], "_Def_Ints")
+        def1_fum_col <- paste0(team_names[1], "_Def_Fum")
+        def1_pts_col <- paste0(team_names[1], "_Def_Pts_Allow")
+        
+        def2_sacks_col <- paste0(team_names[2], "_Def_Sacks")
+        def2_ints_col <- paste0(team_names[2], "_Def_Ints")
+        def2_fum_col <- paste0(team_names[2], "_Def_Fum")
+        def2_pts_col <- paste0(team_names[2], "_Def_Pts_Allow")
+        
+        team1_dst_sacks <- as.numeric(sampled_game[[def1_sacks_col]])
+        team1_dst_ints <- as.numeric(sampled_game[[def1_ints_col]])
+        team1_dst_fum <- as.numeric(sampled_game[[def1_fum_col]])
+        team1_dst_pts_allow <- as.numeric(sampled_game[[def1_pts_col]])
+        
+        team2_dst_sacks <- as.numeric(sampled_game[[def2_sacks_col]])
+        team2_dst_ints <- as.numeric(sampled_game[[def2_ints_col]])
+        team2_dst_fum <- as.numeric(sampled_game[[def2_fum_col]])
+        team2_dst_pts_allow <- as.numeric(sampled_game[[def2_pts_col]])
+        
+        # Validate
+        if (is.na(team1_dst_sacks)) team1_dst_sacks <- 0
+        if (is.na(team1_dst_ints)) team1_dst_ints <- 0
+        if (is.na(team1_dst_fum)) team1_dst_fum <- 0
+        if (is.na(team1_dst_pts_allow)) team1_dst_pts_allow <- 20
+        if (is.na(team2_dst_sacks)) team2_dst_sacks <- 0
+        if (is.na(team2_dst_ints)) team2_dst_ints <- 0
+        if (is.na(team2_dst_fum)) team2_dst_fum <- 0
+        if (is.na(team2_dst_pts_allow)) team2_dst_pts_allow <- 20
+        
+        # Get DST names from DK salaries
+        team1_dst_name <- dk_salaries %>%
+          filter(Team == team_names[1], Pos == "DST") %>%
+          pull(Name)
+        if (length(team1_dst_name) == 0) team1_dst_name <- paste0(team_names[1], " DST")
+        else team1_dst_name <- team1_dst_name[1]
+        
+        team2_dst_name <- dk_salaries %>%
+          filter(Team == team_names[2], Pos == "DST") %>%
+          pull(Name)
+        if (length(team2_dst_name) == 0) team2_dst_name <- paste0(team_names[2], " DST")
+        else team2_dst_name <- team2_dst_name[1]
+        
+        # Store DST with same structure as offensive players - points calculated later
+        team1_dst_result <- data.table(
+          SimID = sim, Team = team_names[1], Player = team1_dst_name,
+          PassYds = 0, PassTDs = 0L, INTs = 0L,
+          RushYds = 0, RushTDs = 0L,
+          Recs = 0L, RecYds = 0, RecTDs = 0L,
+          FGsMade = 0L, FG_Under30 = 0L, FG_30_39 = 0L, FG_40_49 = 0L, FG_50Plus = 0L,
+          XPs = 0L, FumLost = 0L,
+          DST_Sacks = team1_dst_sacks,
+          DST_INTs = team1_dst_ints,
+          DST_Fum = team1_dst_fum,
+          DST_Pts_Allow = team1_dst_pts_allow
+        )
+        
+        team2_dst_result <- data.table(
+          SimID = sim, Team = team_names[2], Player = team2_dst_name,
+          PassYds = 0, PassTDs = 0L, INTs = 0L,
+          RushYds = 0, RushTDs = 0L,
+          Recs = 0L, RecYds = 0, RecTDs = 0L,
+          FGsMade = 0L, FG_Under30 = 0L, FG_30_39 = 0L, FG_40_49 = 0L, FG_50Plus = 0L,
+          XPs = 0L, FumLost = 0L,
+          DST_Sacks = team2_dst_sacks,
+          DST_INTs = team2_dst_ints,
+          DST_Fum = team2_dst_fum,
+          DST_Pts_Allow = team2_dst_pts_allow
+        )
+        
+        all_results[[result_idx]] <- team1_dst_result
+        result_idx <- result_idx + 1
+        all_results[[result_idx]] <- team2_dst_result
+        result_idx <- result_idx + 1
+      }
     }
     
     if (batch %% 5 == 0 || batch == n_batches) {
@@ -930,8 +1049,22 @@ run_simulations <- function(input_data, n_sims) {
   
   combined <- rbindlist(all_results, use.names = TRUE, fill = TRUE)
   
+  # Add DST scoring for NFL mode (calculate points allowed score + defensive stats)
+  if ("DST_Sacks" %in% names(combined)) {
+    combined[!is.na(DST_Sacks), DSTPts := (DST_Sacks * 1) + (DST_INTs * 2) + (DST_Fum * 2) + 
+               ifelse(DST_Pts_Allow == 0, 10,
+                      ifelse(DST_Pts_Allow <= 6, 7,
+                             ifelse(DST_Pts_Allow <= 13, 4,
+                                    ifelse(DST_Pts_Allow <= 20, 1,
+                                           ifelse(DST_Pts_Allow <= 27, 0,
+                                                  ifelse(DST_Pts_Allow <= 34, -1, -4))))))]
+    
+    # Update TotalPts for DST
+    combined[!is.na(DST_Sacks), TotalPts := DSTPts]
+  }
+  
   total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-  cat(sprintf("\n✓ Complete! %.1f seconds (%.0f sims/sec)\n\n", total_time, n_sims/total_time))
+  cat(sprintf("\n??? Complete! %.1f seconds (%.0f sims/sec)\n\n", total_time, n_sims/total_time))
   
   return(combined)
 }
@@ -1160,7 +1293,7 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
   valid_lineups <- all_lineups[!sapply(all_lineups, is.null)]
   
   if (length(valid_lineups) == 0) {
-    cat("❌ No valid lineups found\n")
+    cat("??? No valid lineups found\n")
     return(NULL)
   }
   
@@ -1207,10 +1340,10 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     cpt_own_lookup <- setNames(dk_salaries_with_ids$CPT_Own, dk_salaries_with_ids$Name)
     flex_own_lookup <- setNames(dk_salaries_with_ids$Flex_Own, dk_salaries_with_ids$Name)
     has_ownership <- TRUE
-    cat("✓ Ownership data found - adding ownership metrics to lineups\n")
+    cat("??? Ownership data found - adding ownership metrics to lineups\n")
   } else {
     has_ownership <- FALSE
-    cat("⚠ No ownership data (CPT_Own/Flex_Own) - skipping ownership metrics\n")
+    cat("??? No ownership data (CPT_Own/Flex_Own) - skipping ownership metrics\n")
   }
   
   # Format captain with CPT_DFS_ID
@@ -1294,7 +1427,7 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
   
   total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   
-  cat(sprintf("\n✓ Found %s unique lineups in %.1f seconds\n\n", 
+  cat(sprintf("\n??? Found %s unique lineups in %.1f seconds\n\n", 
               format(nrow(result), big.mark = ","), total_time))
   
   return(as.data.frame(result))
@@ -2702,7 +2835,7 @@ server <- function(input, output, session) {
           easyClose = TRUE
         ))
       } else {
-        cat("⚠ No lineups matched filters\n")
+        cat("??? No lineups matched filters\n")
         showModal(modalDialog(
           title = "No Lineups Generated",
           "No lineups matched the selected filters. Try adjusting your filter settings.",
@@ -2821,7 +2954,7 @@ server <- function(input, output, session) {
       
       return(dt)
     }, error = function(e) {
-      cat("❌ Error in player_exposure_table:", e$message, "\n")
+      cat("??? Error in player_exposure_table:", e$message, "\n")
       cat("Traceback:\n")
       print(traceback())
       datatable(data.frame(Error = paste("Error displaying exposure:", e$message)),
@@ -2868,7 +3001,7 @@ server <- function(input, output, session) {
       
       return(dt)
     }, error = function(e) {
-      cat("❌ Error in random_lineups_table:", e$message, "\n")
+      cat("??? Error in random_lineups_table:", e$message, "\n")
       print(traceback())
       datatable(data.frame(Error = paste("Error displaying lineups:", e$message)),
                 options = list(dom = 't'), rownames = FALSE)
