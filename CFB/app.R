@@ -173,7 +173,7 @@ read_input_file <- function(file_path) {
       # This shouldn't happen with new generator, but handle old files
     }
     
-    input_data$sim_totals <- read_excel(file_path, sheet = "Sim_Totals")
+    # Sim_Totals sheet is no longer needed/used
     input_data$similar_games <- read_excel(file_path, sheet = "Similar_Games")
     input_data$team_names <- team_names
     
@@ -1533,15 +1533,18 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       cat("After stack filter:", nrow(filtered_lineups), "lineups\n")
     }
     
-    # Apply captain exclusion filter (direct match with IDs)
+    # Apply captain exclusion filter (match on name without ID)
     if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
       cat("Applying captain filter...\n")
-      cat("Sample captains in data:", paste(head(filtered_lineups$Captain, 3), collapse = ", "), "\n")
-      filtered_lineups <- filtered_lineups[!Captain %in% filters$excluded_captains]
+      # Strip IDs from captain names for comparison
+      captain_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups$Captain)
+      to_exclude <- captain_names %in% filters$excluded_captains
+      cat("Lineups to exclude:", sum(to_exclude), "\n")
+      filtered_lineups <- filtered_lineups[!to_exclude]
       cat("After captain filter:", nrow(filtered_lineups), "lineups\n")
     }
     
-    # Apply flex exclusion filter (direct match with IDs)
+    # Apply flex exclusion filter (match on name without ID)
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
       cat("Applying flex filter...\n")
       flex_cols <- paste0("Player", 1:5)
@@ -1549,7 +1552,9 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       
       for(col in flex_cols) {
         if(col %in% names(filtered_lineups)) {
-          to_exclude <- to_exclude | (filtered_lineups[[col]] %in% filters$excluded_flex)
+          # Strip IDs from player names for comparison
+          player_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups[[col]])
+          to_exclude <- to_exclude | (player_names %in% filters$excluded_flex)
         }
       }
       
@@ -1609,9 +1614,11 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       filtered_lineups <- filtered_lineups[!TeamStack %in% filters$excluded_stacks]
     }
     
-    # Apply player exclusion filter - direct match with IDs
+    # Apply player exclusion filter - match on name without ID
     if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
-      filtered_lineups <- filtered_lineups[!Captain %in% filters$excluded_captains]
+      captain_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups$Captain)
+      to_exclude <- captain_names %in% filters$excluded_captains
+      filtered_lineups <- filtered_lineups[!to_exclude]
     }
     
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
@@ -1620,7 +1627,8 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       
       for(col in flex_cols) {
         if(col %in% names(filtered_lineups)) {
-          to_exclude <- to_exclude | (filtered_lineups[[col]] %in% filters$excluded_flex)
+          player_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups[[col]])
+          to_exclude <- to_exclude | (player_names %in% filters$excluded_flex)
         }
       }
       
@@ -2534,6 +2542,7 @@ server <- function(input, output, session) {
         )
         
         rv$optimal_lineups <- optimal_lineups
+        rv$filtered_pool <- optimal_lineups  # Initialize with all lineups
         
         # Calculate initial player exposure (before random lineups)
         dk_data <- rv$input_data$dk_salaries
@@ -2575,7 +2584,13 @@ server <- function(input, output, session) {
     req(rv$optimal_lineups)
     req(rv$simulation_results)
     
-    display_lineups <- copy(rv$optimal_lineups)
+    
+    # Use filtered pool if available (from filter controls), otherwise show all
+    if(!is.null(rv$filtered_pool) && nrow(rv$filtered_pool) > 0) {
+      display_lineups <- copy(rv$filtered_pool)
+    } else {
+      display_lineups <- copy(rv$optimal_lineups)
+    }
     
     # Remove IDs from display (keep original for download)
     display_lineups$Captain <- gsub(" \\([^)]+\\)$", "", display_lineups$Captain)
@@ -2757,20 +2772,25 @@ server <- function(input, output, session) {
   # Update player exclusion choices when optimal lineups are calculated
   observeEvent(rv$optimal_lineups, {
     if(!is.null(rv$optimal_lineups)) {
-      # Get all unique player names (KEEP IDs for exact matching)
-      all_players <- unique(c(
+      # Get all unique player names WITH IDs
+      all_players_with_ids <- unique(c(
         rv$optimal_lineups$Captain,
         unlist(rv$optimal_lineups[, paste0("Player", 1:5)])
       ))
-      all_players <- sort(all_players[!is.na(all_players) & all_players != ""])
+      all_players_with_ids <- all_players_with_ids[!is.na(all_players_with_ids) & all_players_with_ids != ""]
       
-      # Update both captain and flex exclusion dropdowns with same players
+      # Strip IDs to get clean names for dropdown display
+      all_players_clean <- gsub(" \\([^)]+\\)$", "", all_players_with_ids)
+      all_players_clean <- unique(all_players_clean)  # Remove duplicates
+      all_players_clean <- sort(all_players_clean)
+      
+      # Update both captain and flex exclusion dropdowns with clean names
       updateSelectizeInput(session, "excluded_captains", 
-                           choices = all_players, 
+                           choices = all_players_clean, 
                            server = TRUE)
       
       updateSelectizeInput(session, "excluded_flex", 
-                           choices = all_players, 
+                           choices = all_players_clean, 
                            server = TRUE)
       
       # Get TeamStack choices with percentages
