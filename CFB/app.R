@@ -506,13 +506,6 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
         }
       }
       
-      # SMART STOP: If we've allocated 98%+ and this player has Floor=0, skip
-      if (allocated_share > 0.98 && floor_pct == 0) {
-        rec_yds_allocation[i] <- 0
-        ypr_values[i] <- 10
-        next
-      }
-      
       # Sample player share
       target_share <- sample_from_percentiles(floor_pct, p25_pct, p50_pct, p75_pct, ceiling_pct)
       
@@ -2173,22 +2166,22 @@ server <- function(input, output, session) {
                   by = c("Player" = "Name"))
       
       
-      # Reorder columns - Pos, Salary, Median first, no Max
+      # Reorder columns - Pos, Salary, Median, Avg, then other projections
       if ("Pos" %in% names(projections)) {
         projections <- projections %>%
-          select(Player, Pos, TeamAbbr, Salary, MedianPts, ETR_DK_Pts, Saber_Proj)
+          select(Player, Pos, TeamAbbr, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
       } else {
         projections <- projections %>%
-          select(Player, TeamAbbr, Salary, MedianPts, ETR_DK_Pts, Saber_Proj)
+          select(Player, TeamAbbr, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
       }
       
     } else {
       if ("Pos" %in% names(projections)) {
         projections <- projections %>%
-          select(Player, Pos, TeamAbbr, Salary, MedianPts)
+          select(Player, Pos, TeamAbbr, Salary, MedianPts, AvgPts)
       } else {
         projections <- projections %>%
-          select(Player, TeamAbbr, Salary, MedianPts)
+          select(Player, TeamAbbr, Salary, MedianPts, AvgPts)
       }
     }
     
@@ -2199,8 +2192,8 @@ server <- function(input, output, session) {
       col_names <- c(col_names, 'Pos')
       col_idx <- col_idx + 1
     }
-    col_names <- c(col_names, 'Team', 'Salary', 'Median Pts')
-    median_col_idx <- length(col_names)
+    col_names <- c(col_names, 'Team', 'Salary', 'Median Pts', 'Avg Pts')
+    median_col_idx <- length(col_names) - 1  # MedianPts is now second-to-last before AvgPts
     
     if ("ETR_DK_Pts" %in% names(projections)) {
       col_names <- c(col_names, 'ETR Proj', 'Saber Proj')
@@ -2224,7 +2217,14 @@ server <- function(input, output, session) {
       formatRound(setdiff(names(projections), c('Player', 'Pos', 'TeamAbbr', 'Salary')), 2) %>%
       formatStyle(
         'MedianPts',
-        background = styleColorBar(range(projections$MedianPts, na.rm = TRUE), '#32CD32'),  # Green for sim
+        background = styleColorBar(range(projections$MedianPts, na.rm = TRUE), '#32CD32'),  # Green for median
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      ) %>%
+      formatStyle(
+        'AvgPts',
+        background = styleColorBar(range(projections$AvgPts, na.rm = TRUE), '#FFA500'),  # Orange for average
         backgroundSize = '95% 80%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
