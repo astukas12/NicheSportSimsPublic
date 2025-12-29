@@ -21,34 +21,258 @@ library(lpSolve)
 source("cfb_lineup_builder_functions.R")
 
 # Load team colors (NFL or CFB) automatically
-# Try NFL first, then fall back to CFB
-nfl_mode <- FALSE
-tryCatch({
-  source("nfl_team_colors.R")
-  nfl_mode <- TRUE
-  cat("✓ NFL team colors loaded successfully\n")
-}, error = function(e) {
-  tryCatch({
-    source("cfb_team_colors.R")
-    cat("✓ CFB team colors loaded successfully\n")
-  }, error = function(e) {
-    cat("Warning: No team colors file found. Using default colors.\n")
-    # Fallback function if neither file exists
-    get_cfb_colors <- function(team_name, type = "primary") {
-      return(if(type == "primary") "#003366" else "#999999")
-    }
-  })
-})
+# UNIVERSAL TEAM COLORS - NFL + CFB Combined
+cat("✓ Loading universal team colors (NFL + CFB)\n")
+
+UNIVERSAL_TEAM_COLORS <- list(
+  # === NFL TEAMS ===
+  "BUF" = list(primary = "#00338D", secondary = "#C60C30"),
+  "MIA" = list(primary = "#008E97", secondary = "#FC4C02"),
+  "NE" = list(primary = "#002244", secondary = "#C60C30"),
+  "NYJ" = list(primary = "#125740", secondary = "#000000"),
+  "BAL" = list(primary = "#241773", secondary = "#000000"),
+  "CIN" = list(primary = "#FB4F14", secondary = "#000000"),
+  "CLE" = list(primary = "#311D00", secondary = "#FF3C00"),
+  "PIT" = list(primary = "#FFB612", secondary = "#000000"),
+  "HOU" = list(primary = "#03202F", secondary = "#A71930"),
+  "IND" = list(primary = "#002C5F", secondary = "#A2AAAD"),
+  "JAX" = list(primary = "#006778", secondary = "#D7A22A"),
+  "TEN" = list(primary = "#0C2340", secondary = "#4B92DB"),
+  "DEN" = list(primary = "#FB4F14", secondary = "#002244"),
+  "KC" = list(primary = "#E31837", secondary = "#FFB81C"),
+  "LV" = list(primary = "#000000", secondary = "#A5ACAF"),
+  "LAC" = list(primary = "#0080C6", secondary = "#FFC20E"),
+  "DAL" = list(primary = "#041E42", secondary = "#869397"),
+  "NYG" = list(primary = "#0B2265", secondary = "#A71930"),
+  "PHI" = list(primary = "#004C54", secondary = "#A5ACAF"),
+  "WAS" = list(primary = "#5A1414", secondary = "#FFB612"),
+  "CHI" = list(primary = "#0B162A", secondary = "#C83803"),
+  "DET" = list(primary = "#0076B6", secondary = "#B0B7BC"),
+  "GB" = list(primary = "#203731", secondary = "#FFB612"),
+  "MIN" = list(primary = "#4F2683", secondary = "#FFC62F"),
+  "ATL" = list(primary = "#A71930", secondary = "#000000"),
+  "CAR" = list(primary = "#0085CA", secondary = "#000000"),
+  "NO" = list(primary = "#D3BC8D", secondary = "#000000"),
+  "TB" = list(primary = "#D50A0A", secondary = "#34302B"),
+  "ARI" = list(primary = "#97233F", secondary = "#000000"),
+  "LAR" = list(primary = "#003594", secondary = "#FFA300"),
+  "SF" = list(primary = "#AA0000", secondary = "#B3995D"),
+  "SEA" = list(primary = "#002244", secondary = "#69BE28"),
+  
+  # === CFB TEAMS ===
+  "Air Force" = list(primary = "#003087", secondary = "#8A8D8F"),
+  "Akron" = list(primary = "#041E42", secondary = "#A89968"),
+  "Alabama" = list(primary = "#9E1B32", secondary = "#828A8F"),
+  "App State" = list(primary = "#000000", secondary = "#FFB81C"),
+  "Arizona" = list(primary = "#003366", secondary = "#CC0033"),
+  "Arizona State" = list(primary = "#8C1D40", secondary = "#FFC627"),
+  "Arkansas" = list(primary = "#9D2235", secondary = "#FFFFFF"),
+  "Arkansas State" = list(primary = "#CC092F", secondary = "#000000"),
+  "Army" = list(primary = "#000000", secondary = "#D4AF37"),
+  "Auburn" = list(primary = "#0C2340", secondary = "#E87722"),
+  "Ball State" = list(primary = "#BA0C2F", secondary = "#FFFFFF"),
+  "Baylor" = list(primary = "#003015", secondary = "#FFB81C"),
+  "Boise State" = list(primary = "#0033A0", secondary = "#D64309"),
+  "Boston College" = list(primary = "#98002E", secondary = "#BC9B6A"),
+  "Bowling Green" = list(primary = "#FE5000", secondary = "#4F2C1D"),
+  "Buffalo" = list(primary = "#005BBB", secondary = "#FFFFFF"),
+  "BYU" = list(primary = "#002E5D", secondary = "#FFFFFF"),
+  "California" = list(primary = "#003262", secondary = "#FDB515"),
+  "UCF" = list(primary = "#000000", secondary = "#FFC904"),
+  "Central Michigan" = list(primary = "#6A0032", secondary = "#FFC82E"),
+  "Charlotte" = list(primary = "#005035", secondary = "#B3A369"),
+  "Cincinnati" = list(primary = "#E00122", secondary = "#000000"),
+  "Clemson" = list(primary = "#F56600", secondary = "#522D80"),
+  "Coastal Carolina" = list(primary = "#006F71", secondary = "#A27752"),
+  "Colorado" = list(primary = "#000000", secondary = "#CFB87C"),
+  "Colorado State" = list(primary = "#1E4D2B", secondary = "#C8C372"),
+  "Connecticut" = list(primary = "#000E2F", secondary = "#E4002B"),
+  "Duke" = list(primary = "#003087", secondary = "#FFFFFF"),
+  "East Carolina" = list(primary = "#592A8A", secondary = "#FFB81C"),
+  "Eastern Michigan" = list(primary = "#006633", secondary = "#FFFFFF"),
+  "Florida" = list(primary = "#0021A5", secondary = "#FA4616"),
+  "Florida Atlantic" = list(primary = "#003366", secondary = "#CC0000"),
+  "Florida International" = list(primary = "#081E3F", secondary = "#B6862C"),
+  "Florida State" = list(primary = "#782F40", secondary = "#CEB888"),
+  "Fresno State" = list(primary = "#DB0032", secondary = "#003A70"),
+  "Georgia" = list(primary = "#BA0C2F", secondary = "#000000"),
+  "Georgia Southern" = list(primary = "#003087", secondary = "grey"),
+  "Georgia State" = list(primary = "#0033A0", secondary = "#C8102E"),
+  "Georgia Tech" = list(primary = "#B3A369", secondary = "#003057"),
+  "Hawaii" = list(primary = "#024731", secondary = "#FFFFFF"),
+  "Houston" = list(primary = "#C8102E", secondary = "#FFFFFF"),
+  "Illinois" = list(primary = "#13294B", secondary = "#E84A27"),
+  "Indiana" = list(primary = "#990000", secondary = "#EEEDEB"),
+  "Iowa" = list(primary = "#000000", secondary = "#FFCD00"),
+  "Iowa State" = list(primary = "#C8102E", secondary = "#F1BE48"),
+  "Jacksonville State" = list(primary = "#CC092F", secondary = "#FFFFFF"),
+  "James Madison" = list(primary = "#450084", secondary = "#CBB677"),
+  "Kansas" = list(primary = "#0051BA", secondary = "#E8000D"),
+  "Kansas State" = list(primary = "#512888", secondary = "#FFFFFF"),
+  "Kennesaw State" = list(primary = "#000000", secondary = "#FFC82E"),
+  "Kent State" = list(primary = "#002664", secondary = "#EAAA00"),
+  "Kentucky" = list(primary = "#0033A0", secondary = "#FFFFFF"),
+  "Liberty" = list(primary = "#002147", secondary = "#C8102E"),
+  "Louisiana" = list(primary = "#CE181E", secondary = "#FFFFFF"),
+  "Louisiana Monroe" = list(primary = "#85002B", secondary = "#FFBE0F"),
+  "Louisiana Tech" = list(primary = "#002F8B", secondary = "#E31B23"),
+  "Louisville" = list(primary = "#AD0000", secondary = "#000000"),
+  "LSU" = list(primary = "#461D7C", secondary = "#FDD023"),
+  "Marshall" = list(primary = "#00B140", secondary = "#FFFFFF"),
+  "Maryland" = list(primary = "#E03A3E", secondary = "#000000"),
+  "Memphis" = list(primary = "#003087", secondary = "#8D9093"),
+  "Miami" = list(primary = "#F47321", secondary = "#005030"),
+  "Miami (OH)" = list(primary = "#C8102E", secondary = "#000000"),
+  "Michigan" = list(primary = "#00274C", secondary = "#FFCB05"),
+  "Michigan State" = list(primary = "#18453B", secondary = "#FFFFFF"),
+  "Middle Tennessee" = list(primary = "#0066CC", secondary = "#FFFFFF"),
+  "Minnesota" = list(primary = "#7A0019", secondary = "#FFCC33"),
+  "Mississippi State" = list(primary = "#660000", secondary = "#FFFFFF"),
+  "Missouri" = list(primary = "#F1B82D", secondary = "#000000"),
+  "Navy" = list(primary = "#00205B", secondary = "#C5B783"),
+  "Nebraska" = list(primary = "#E41C38", secondary = "#FFFFFF"),
+  "Nevada" = list(primary = "#003366", secondary = "#8A8D8F"),
+  "New Mexico" = list(primary = "#BA0C2F", secondary = "#8A8D8F"),
+  "New Mexico State" = list(primary = "#BA0C2F", secondary = "#FFFFFF"),
+  "North Carolina" = list(primary = "#7BAFD4", secondary = "#13294B"),
+  "North Texas" = list(primary = "#00853E", secondary = "#FFFFFF"),
+  "Northern Illinois" = list(primary = "#BA0C2F", secondary = "#000000"),
+  "Northwestern" = list(primary = "#4E2A84", secondary = "#FFFFFF"),
+  "Notre Dame" = list(primary = "#0C2340", secondary = "#C99700"),
+  "Ohio" = list(primary = "#00694E", secondary = "#FFFFFF"),
+  "Ohio State" = list(primary = "#BB0000", secondary = "#666666"),
+  "Oklahoma" = list(primary = "#841617", secondary = "#FDFBF5"),
+  "Oklahoma State" = list(primary = "#FF6600", secondary = "#000000"),
+  "Old Dominion" = list(primary = "#003057", secondary = "#8A8D8F"),
+  "Ole Miss" = list(primary = "#14213D", secondary = "#CE1126"),
+  "Oregon" = list(primary = "#154733", secondary = "#FEE123"),
+  "Oregon State" = list(primary = "#DC4405", secondary = "#000000"),
+  "Penn State" = list(primary = "#041E42", secondary = "#FFFFFF"),
+  "Pittsburgh" = list(primary = "#003594", secondary = "#FFB81C"),
+  "Purdue" = list(primary = "#CEB888", secondary = "#000000"),
+  "Rice" = list(primary = "#00205B", secondary = "#8A8D8F"),
+  "Rutgers" = list(primary = "#CC0033", secondary = "#FFFFFF"),
+  "Sam Houston" = list(primary = "#F47321", secondary = "#FFFFFF"),
+  "San Diego State" = list(primary = "#A6192E", secondary = "#000000"),
+  "San Jose State" = list(primary = "#0055A2", secondary = "#E5A823"),
+  "SMU" = list(primary = "#0033A0", secondary = "#CC0000"),
+  "South Alabama" = list(primary = "#00205B", secondary = "#CC0000"),
+  "South Carolina" = list(primary = "#73000A", secondary = "#000000"),
+  "South Florida" = list(primary = "#006747", secondary = "#CFC493"),
+  "Southern Miss" = list(primary = "#000000", secondary = "#FFAA3C"),
+  "Stanford" = list(primary = "#8C1515", secondary = "#FFFFFF"),
+  "Syracuse" = list(primary = "#F76900", secondary = "#000E54"),
+  "TCU" = list(primary = "#4D1979", secondary = "#A3A9AC"),
+  "Temple" = list(primary = "#9B1B1E", secondary = "#FFFFFF"),
+  "Tennessee" = list(primary = "#FF8200", secondary = "#FFFFFF"),
+  "Texas" = list(primary = "#BF5700", secondary = "#FFFFFF"),
+  "Texas A&M" = list(primary = "#500000", secondary = "#FFFFFF"),
+  "Texas State" = list(primary = "#501214", secondary = "#B29063"),
+  "Texas Tech" = list(primary = "#CC0000", secondary = "#000000"),
+  "Toledo" = list(primary = "#003E7E", secondary = "#FFCE00"),
+  "Troy" = list(primary = "#890028", secondary = "#A59665"),
+  "Tulane" = list(primary = "#006747", secondary = "#7BAFD4"),
+  "Tulsa" = list(primary = "#002D72", secondary = "#C8102E"),
+  "UAB" = list(primary = "#1E6B52", secondary = "#FFCE00"),
+  "UCLA" = list(primary = "#2D68C4", secondary = "#FFD100"),
+  "UMass" = list(primary = "#881C1C", secondary = "#FFFFFF"),
+  "UNLV" = list(primary = "#B10202", secondary = "#474747"),
+  "USC" = list(primary = "#990000", secondary = "#FFC72C"),
+  "Utah" = list(primary = "#CC0000", secondary = "#FFFFFF"),
+  "Utah State" = list(primary = "#0F2439", secondary = "#97999B"),
+  "UTEP" = list(primary = "#FF8200", secondary = "#041E42"),
+  "UTSA" = list(primary = "#0C2340", secondary = "#F15A22"),
+  "Vanderbilt" = list(primary = "#866D4B", secondary = "#000000"),
+  "Virginia" = list(primary = "#232D4B", secondary = "#F84C1E"),
+  "Virginia Tech" = list(primary = "#630031", secondary = "#CF4420"),
+  "Wake Forest" = list(primary = "#9E7E38", secondary = "#000000"),
+  "Washington" = list(primary = "#4B2E83", secondary = "#B7A57A"),
+  "Washington State" = list(primary = "#981E32", secondary = "#5E6A71"),
+  "West Virginia" = list(primary = "#002855", secondary = "#EAAA00"),
+  "Western Kentucky" = list(primary = "#C8102E", secondary = "#FFFFFF"),
+  "Western Michigan" = list(primary = "#5B3819", secondary = "#FFCB0B"),
+  "Wisconsin" = list(primary = "#C5050C", secondary = "#FFFFFF"),
+  "Wyoming" = list(primary = "#492F24", secondary = "#FFC425")
+)
+
+get_universal_colors <- function(team_name, type = "primary") {
+  if (team_name %in% names(UNIVERSAL_TEAM_COLORS)) {
+    return(UNIVERSAL_TEAM_COLORS[[team_name]][[type]])
+  }
+  # Default fallback
+  return(if(type == "primary") "#003366" else "#999999")
+}
+
+cat("✓ Universal team colors loaded (", length(UNIVERSAL_TEAM_COLORS), "teams: NFL + CFB)\n")
+
+# Team name mapping for common abbreviations
+# Maps abbreviated names (from sheet names) to full names (in color database)
+TEAM_NAME_MAPPING <- c(
+  "App State" = "App State",
+  "ASU" = "Arizona State",
+  "BC" = "Boston College",
+  "BGSU" = "Bowling Green",
+  "ECU" = "East Carolina",
+  "EMU" = "Eastern Michigan",
+  "FAU" = "Florida Atlantic",
+  "FIU" = "Florida International",
+  "FSU" = "Florida State",
+  "GT" = "Georgia Tech",
+  "JSU" = "Jacksonville State",
+  "JMU" = "James Madison",
+  "KSU" = "Kansas State",
+  "LT" = "Louisiana Tech",
+  "Miami FL" = "Miami",
+  "Miami OH" = "Miami (OH)",
+  "MSU" = "Michigan State",
+  "MTSU" = "Middle Tennessee",
+  "UM" = "Miami",
+  "UMass" = "Massachusetts",
+  "UNC" = "North Carolina",
+  "UNLV" = "Nevada Las Vegas",
+  "OSU" = "Ohio State",
+  "OU" = "Oklahoma",
+  "Pitt" = "Pittsburgh",
+  "SDSU" = "San Diego State",
+  "SJSU" = "San Jose State",
+  "SMU" = "Southern Methodist",
+  "TCU" = "Texas Christian",
+  "TTU" = "Texas Tech",
+  "UA" = "Arizona",
+  "UAB" = "Alabama Birmingham",
+  "UCF" = "Central Florida",
+  "UGA" = "Georgia",
+  "UL" = "Louisiana",
+  "ULL" = "Louisiana",
+  "ULM" = "Louisiana Monroe",
+  "UNC" = "North Carolina",
+  "UNT" = "North Texas",
+  "USC" = "Southern California",
+  "USF" = "South Florida",
+  "USM" = "Southern Miss",
+  "UTEP" = "Texas El Paso",
+  "UTSA" = "Texas San Antonio",
+  "UVA" = "Virginia",
+  "VT" = "Virginia Tech",
+  "WKU" = "Western Kentucky",
+  "WMU" = "Western Michigan",
+  "WSU" = "Washington State",
+  "WVU" = "West Virginia"
+)
 
 # Wrapper function for backwards compatibility with existing code
 get_team_color <- function(team_name) {
-  if (exists("nfl_mode") && nfl_mode && exists("get_nfl_colors")) {
-    return(get_nfl_colors(team_name, "primary"))
-  } else if (exists("get_cfb_colors")) {
-    return(get_cfb_colors(team_name, "primary"))
-  } else {
-    return("#003366")  # Default fallback
+  # Convert underscores to spaces for team name lookup
+  # (sheet names use underscores, but color lookups expect spaces)
+  team_name_lookup <- gsub("_", " ", team_name)
+  
+  # Check if there's a mapping for this abbreviated name
+  if (team_name_lookup %in% names(TEAM_NAME_MAPPING)) {
+    team_name_lookup <- TEAM_NAME_MAPPING[[team_name_lookup]]
   }
+  
+  # Use universal lookup
+  return(get_universal_colors(team_name_lookup, "primary"))
 }
 
 # ===== DST SCORING FUNCTIONS (NFL MODE) =====
@@ -1492,13 +1716,6 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       return(list(count = 0))
     }
     
-    # DEBUG: Print what filters we received
-    cat("\n=== FILTER DEBUG ===\n")
-    cat("Excluded captains:", paste(filters$excluded_captains, collapse = ", "), "\n")
-    cat("Excluded flex:", paste(filters$excluded_flex, collapse = ", "), "\n")
-    cat("Excluded stacks:", paste(filters$excluded_stacks, collapse = ", "), "\n")
-    cat("Starting lineups:", nrow(optimal_lineups), "\n")
-    
     filtered_lineups <- as.data.table(optimal_lineups)
     
     # Apply Top Count filters
@@ -1535,42 +1752,44 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     
     # Apply team stack exclusion filter
     if (!is.null(filters$excluded_stacks) && length(filters$excluded_stacks) > 0 && "TeamStack" %in% names(filtered_lineups)) {
-      cat("Applying stack filter...\n")
-      filtered_lineups <- filtered_lineups[!TeamStack %in% filters$excluded_stacks]
-      cat("After stack filter:", nrow(filtered_lineups), "lineups\n")
+      print("STACK FILTER IS RUNNING")
+      print(paste("Excluding:", paste(filters$excluded_stacks, collapse=", ")))
+      before <- nrow(filtered_lineups)
+      for (stack in filters$excluded_stacks) {
+        filtered_lineups <- filtered_lineups[TeamStack != stack]
+      }
+      after <- nrow(filtered_lineups)
+      print(paste("Before:", before, "After:", after))
     }
     
-    # Apply captain exclusion filter (match on name without ID)
-    if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
-      cat("Applying captain filter...\n")
-      # Strip IDs from captain names for comparison
-      captain_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups$Captain)
-      to_exclude <- captain_names %in% filters$excluded_captains
-      cat("Lineups to exclude:", sum(to_exclude), "\n")
-      filtered_lineups <- filtered_lineups[!to_exclude]
-      cat("After captain filter:", nrow(filtered_lineups), "lineups\n")
+    # Apply captain exclusion filter
+    if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0 && "Captain" %in% names(filtered_lineups)) {
+      print("CAPTAIN FILTER IS RUNNING")
+      print(paste("Excluding:", paste(filters$excluded_captains, collapse=", ")))
+      before <- nrow(filtered_lineups)
+      for (captain in filters$excluded_captains) {
+        filtered_lineups <- filtered_lineups[Captain != captain]
+      }
+      after <- nrow(filtered_lineups)
+      print(paste("Before:", before, "After:", after))
     }
     
-    # Apply flex exclusion filter (match on name without ID)
+    # Apply flex exclusion filter
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
-      cat("Applying flex filter...\n")
+      print("FLEX FILTER IS RUNNING")
+      print(paste("Excluding:", paste(filters$excluded_flex, collapse=", ")))
+      before <- nrow(filtered_lineups)
       flex_cols <- paste0("Player", 1:5)
-      to_exclude <- rep(FALSE, nrow(filtered_lineups))
-      
-      for(col in flex_cols) {
-        if(col %in% names(filtered_lineups)) {
-          # Strip IDs from player names for comparison
-          player_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups[[col]])
-          to_exclude <- to_exclude | (player_names %in% filters$excluded_flex)
+      for (col in flex_cols) {
+        if (col %in% names(filtered_lineups)) {
+          for (player in filters$excluded_flex) {
+            filtered_lineups <- filtered_lineups[get(col) != player]
+          }
         }
       }
-      
-      cat("Lineups to exclude:", sum(to_exclude), "\n")
-      filtered_lineups <- filtered_lineups[!to_exclude]
-      cat("After flex filter:", nrow(filtered_lineups), "lineups\n")
+      after <- nrow(filtered_lineups)
+      print(paste("Before:", before, "After:", after))
     }
-    
-    cat("=== END FILTER DEBUG ===\n\n")
     
     return(list(
       count = nrow(filtered_lineups),
@@ -1616,30 +1835,29 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     }
     
     # Apply team count filter
-    # Apply team stack exclusion filter
+    # Apply team stack exclusion filter - using loop like Top1Count
     if (!is.null(filters$excluded_stacks) && length(filters$excluded_stacks) > 0 && "TeamStack" %in% names(filtered_lineups)) {
-      filtered_lineups <- filtered_lineups[!TeamStack %in% filters$excluded_stacks]
+      for (stack in filters$excluded_stacks) {
+        filtered_lineups <- filtered_lineups[TeamStack != stack]
+      }
     }
     
-    # Apply player exclusion filter - match on name without ID
+    # Apply player exclusion filter - using loop like Top1Count
     if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
-      captain_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups$Captain)
-      to_exclude <- captain_names %in% filters$excluded_captains
-      filtered_lineups <- filtered_lineups[!to_exclude]
+      for (captain in filters$excluded_captains) {
+        filtered_lineups <- filtered_lineups[Captain != captain]
+      }
     }
     
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
       flex_cols <- paste0("Player", 1:5)
-      to_exclude <- rep(FALSE, nrow(filtered_lineups))
-      
-      for(col in flex_cols) {
-        if(col %in% names(filtered_lineups)) {
-          player_names <- gsub(" \\([^)]+\\)$", "", filtered_lineups[[col]])
-          to_exclude <- to_exclude | (player_names %in% filters$excluded_flex)
+      for (col in flex_cols) {
+        if (col %in% names(filtered_lineups)) {
+          for (player in filters$excluded_flex) {
+            filtered_lineups <- filtered_lineups[get(col) != player]
+          }
         }
       }
-      
-      filtered_lineups <- filtered_lineups[!to_exclude]
     }
     
     # Check if any lineups match filters
@@ -2008,15 +2226,15 @@ ui <- dashboardPage(
               
               fluidRow(
                 column(3, selectizeInput("excluded_captains", "Exclude from Captain:", 
-                                         choices = NULL, multiple = TRUE,
+                                         choices = NULL, multiple = TRUE, selected = character(0),
                                          options = list(plugins = list('remove_button'), 
                                                         placeholder = 'Exclude from CPT slot'))),
                 column(3, selectizeInput("excluded_flex", "Exclude from Flex:", 
-                                         choices = NULL, multiple = TRUE,
+                                         choices = NULL, multiple = TRUE, selected = character(0),
                                          options = list(plugins = list('remove_button'), 
                                                         placeholder = 'Exclude from FLEX slots'))),
                 column(3, selectizeInput("excluded_stacks", "Exclude Stacks:", 
-                                         choices = NULL, multiple = TRUE,
+                                         choices = NULL, multiple = TRUE, selected = character(0),
                                          options = list(plugins = list('remove_button'),
                                                         placeholder = 'Click to select stacks to exclude'))),
                 column(3, numericInput("num_random_lineups", "Number of Lineups to Generate:", 
@@ -2128,6 +2346,12 @@ server <- function(input, output, session) {
         setProgress(0.1, detail = "Starting simulations...")
         
         rv$simulation_results <- run_simulations(rv$input_data, input$n_sims)
+        
+        # Convert underscores to spaces in team names throughout the app
+        if (!is.null(rv$simulation_results) && "Team" %in% names(rv$simulation_results)) {
+          rv$simulation_results$Team <- gsub("_", " ", rv$simulation_results$Team)
+        }
+        
         rv$simulation_complete <- TRUE
         
         setProgress(1, detail = "Complete!")
@@ -2171,7 +2395,6 @@ server <- function(input, output, session) {
     
     dk_data <- rv$input_data$dk_salaries
     projections <- analyze_fantasy_scoring(rv$simulation_results, dk_data)
-    
     
     # Join with ETR and Saber projections if available
     if (!is.null(dk_data)) {
@@ -2292,12 +2515,12 @@ server <- function(input, output, session) {
     team_color <- get_team_color(team_name)
     team_data <- plot_data[Team == team_name]
     
-    # Get top 10 players by median points
-    top_players <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
-      order(-MedianPts)
-    ][1:min(10, .N)]
+    # Get all players who scored points in at least one simulation
+    players_with_points <- team_data[, .(MedianPts = median(TotalPts), MaxPts = max(TotalPts)), by = Player][
+      MaxPts > 0
+    ][order(-MedianPts)]
     
-    team_data <- team_data[Player %in% top_players$Player]
+    team_data <- team_data[Player %in% players_with_points$Player]
     
     # Order players by median
     player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
@@ -2341,12 +2564,12 @@ server <- function(input, output, session) {
     team_color <- get_team_color(team_name)
     team_data <- plot_data[Team == team_name]
     
-    # Get top 10 players by median points
-    top_players <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
-      order(-MedianPts)
-    ][1:min(10, .N)]
+    # Get all players who scored points in at least one simulation
+    players_with_points <- team_data[, .(MedianPts = median(TotalPts), MaxPts = max(TotalPts)), by = Player][
+      MaxPts > 0
+    ][order(-MedianPts)]
     
-    team_data <- team_data[Player %in% top_players$Player]
+    team_data <- team_data[Player %in% players_with_points$Player]
     
     # Order players by median
     player_order <- team_data[, .(MedianPts = median(TotalPts)), by = Player][
@@ -2598,6 +2821,19 @@ server <- function(input, output, session) {
     req(rv$optimal_lineups)
     req(rv$simulation_results)
     
+    # EXPLICITLY depend on all filter inputs to force table re-render
+    # This ensures the table updates whenever ANY filter changes
+    trigger_inputs <- list(
+      input$min_top1_count,
+      input$min_top2_count, 
+      input$min_top3_count,
+      input$min_top5_count,
+      input$cumulative_ownership_range,
+      input$geometric_mean_range,
+      input$excluded_captains,
+      input$excluded_flex,
+      input$excluded_stacks
+    )
     
     # Use filtered pool if available (from filter controls), otherwise show all
     if(!is.null(rv$filtered_pool) && nrow(rv$filtered_pool) > 0) {
@@ -2786,37 +3022,33 @@ server <- function(input, output, session) {
   # Update player exclusion choices when optimal lineups are calculated
   observeEvent(rv$optimal_lineups, {
     if(!is.null(rv$optimal_lineups)) {
-      # Get all unique player names WITH IDs
-      all_players_with_ids <- unique(c(
-        rv$optimal_lineups$Captain,
-        unlist(rv$optimal_lineups[, paste0("Player", 1:5)])
-      ))
-      all_players_with_ids <- all_players_with_ids[!is.na(all_players_with_ids) & all_players_with_ids != ""]
+      # Get unique CAPTAINS only for captain exclusion dropdown
+      captain_players <- unique(rv$optimal_lineups$Captain)
+      captain_players <- captain_players[!is.na(captain_players) & captain_players != ""]
+      captain_players <- sort(captain_players)
       
-      # Strip IDs to get clean names for dropdown display
-      all_players_clean <- gsub(" \\([^)]+\\)$", "", all_players_with_ids)
-      all_players_clean <- unique(all_players_clean)  # Remove duplicates
-      all_players_clean <- sort(all_players_clean)
+      # Get unique FLEX players only for flex exclusion dropdown  
+      flex_players <- unique(unlist(rv$optimal_lineups[, paste0("Player", 1:5)]))
+      flex_players <- flex_players[!is.na(flex_players) & flex_players != ""]
+      flex_players <- sort(flex_players)
       
-      # Update both captain and flex exclusion dropdowns with clean names
+      # Update captain exclusion dropdown - ONLY show players who are captains
       updateSelectizeInput(session, "excluded_captains", 
-                           choices = all_players_clean, 
-                           server = TRUE)
+                           choices = captain_players, 
+                           server = FALSE)
       
+      # Update flex exclusion dropdown - ONLY show players who are in flex positions
       updateSelectizeInput(session, "excluded_flex", 
-                           choices = all_players_clean, 
-                           server = TRUE)
+                           choices = flex_players, 
+                           server = FALSE)
       
-      # Get TeamStack choices with percentages
+      # Get TeamStack choices - show EXACT values from data (no percentages)
       if ("TeamStack" %in% names(rv$optimal_lineups)) {
-        stack_counts <- table(rv$optimal_lineups$TeamStack)
-        stack_pcts <- round(100 * stack_counts / nrow(rv$optimal_lineups), 1)
-        stack_choices <- paste0(names(stack_counts), " (", stack_pcts, "%)")
-        names(stack_choices) <- names(stack_counts)  # Value is stack name, label shows percentage
+        stack_choices <- sort(unique(rv$optimal_lineups$TeamStack))
         
         updateSelectizeInput(session, "excluded_stacks",
                              choices = stack_choices,
-                             server = TRUE)
+                             server = FALSE)
       }
       
       # Update ownership sliders based on actual data range
@@ -2837,33 +3069,43 @@ server <- function(input, output, session) {
   })
   
   # Real-time filtered pool size calculation
-  observeEvent(c(input$min_top1_count, input$min_top2_count, input$min_top3_count,
-                 input$min_top5_count, input$cumulative_ownership_range,
-                 input$geometric_mean_range, input$excluded_captains, input$excluded_flex, input$excluded_stacks), {
-                   if(!is.null(rv$optimal_lineups)) {
-                     filters <- list(
-                       min_top1_count = if(!is.null(input$min_top1_count)) input$min_top1_count else 0,
-                       min_top2_count = if(!is.null(input$min_top2_count)) input$min_top2_count else 0,
-                       min_top3_count = if(!is.null(input$min_top3_count)) input$min_top3_count else 0,
-                       min_top5_count = if(!is.null(input$min_top5_count)) input$min_top5_count else 0,
-                       cumulative_ownership_range = input$cumulative_ownership_range,
-                       geometric_mean_range = input$geometric_mean_range,
-                       excluded_stacks = input$excluded_stacks,
-                       excluded_captains = if(!is.null(input$excluded_captains)) input$excluded_captains else character(0),
-                       excluded_flex = if(!is.null(input$excluded_flex)) input$excluded_flex else character(0)
-                     )
-                     
-                     pool_stats <- calculate_filtered_pool_stats(rv$optimal_lineups, filters)
-                     
-                     # Store filtered pool for exposure calculation
-                     rv$filtered_pool <- pool_stats$filtered_lineups
-                     
-                     output$filtered_pool_size <- renderText({
-                       paste0(format(pool_stats$count, big.mark = ","), 
-                              " lineups match current filters")
-                     })
-                   }
-                 })
+  observe({
+    # Create dependencies on all filter inputs
+    min_top1 <- input$min_top1_count
+    min_top2 <- input$min_top2_count
+    min_top3 <- input$min_top3_count
+    min_top5 <- input$min_top5_count
+    cum_range <- input$cumulative_ownership_range
+    geo_range <- input$geometric_mean_range
+    exc_cap <- input$excluded_captains
+    exc_flex <- input$excluded_flex
+    exc_stacks <- input$excluded_stacks
+    
+    # Only proceed if we have optimal lineups
+    if(!is.null(rv$optimal_lineups)) {
+      filters <- list(
+        min_top1_count = if(!is.null(min_top1)) min_top1 else 0,
+        min_top2_count = if(!is.null(min_top2)) min_top2 else 0,
+        min_top3_count = if(!is.null(min_top3)) min_top3 else 0,
+        min_top5_count = if(!is.null(min_top5)) min_top5 else 0,
+        cumulative_ownership_range = cum_range,
+        geometric_mean_range = geo_range,
+        excluded_stacks = exc_stacks,
+        excluded_captains = if(!is.null(exc_cap)) exc_cap else character(0),
+        excluded_flex = if(!is.null(exc_flex)) exc_flex else character(0)
+      )
+      
+      pool_stats <- calculate_filtered_pool_stats(rv$optimal_lineups, filters)
+      
+      # Store filtered pool for exposure calculation
+      rv$filtered_pool <- pool_stats$filtered_lineups
+      
+      output$filtered_pool_size <- renderText({
+        paste0(format(pool_stats$count, big.mark = ","), 
+               " lineups match current filters")
+      })
+    }
+  })
   
   # Generate random lineups button
   observeEvent(input$generate_lineups, {
@@ -2878,8 +3120,8 @@ server <- function(input, output, session) {
       geometric_mean_range = input$geometric_mean_range,
       excluded_stacks = input$excluded_stacks,
       num_lineups = input$num_random_lineups,
-      excluded_captains = input$excluded_captains,
-      excluded_flex = input$excluded_flex
+      excluded_captains = if(!is.null(input$excluded_captains)) input$excluded_captains else character(0),
+      excluded_flex = if(!is.null(input$excluded_flex)) input$excluded_flex else character(0)
     )
     
     withProgress(message = 'Generating lineups...', value = 0, {
