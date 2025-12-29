@@ -20,21 +20,35 @@ library(lpSolve)
 # Source lineup builder functions
 source("cfb_lineup_builder_functions.R")
 
-# Load CFB team colors automatically
+# Load team colors (NFL or CFB) automatically
+# Try NFL first, then fall back to CFB
+nfl_mode <- FALSE
 tryCatch({
-  source("cfb_team_colors.R")
-  cat("✓ Team colors loaded successfully\n")
+  source("nfl_team_colors.R")
+  nfl_mode <- TRUE
+  cat("✓ NFL team colors loaded successfully\n")
 }, error = function(e) {
-  cat("Warning: cfb_team_colors.R not found. Using default colors.\n")
-  # Fallback function if file doesn't exist
-  get_cfb_colors <- function(team_name, type = "primary") {
-    return(if(type == "primary") "#003366" else "#999999")
-  }
+  tryCatch({
+    source("cfb_team_colors.R")
+    cat("✓ CFB team colors loaded successfully\n")
+  }, error = function(e) {
+    cat("Warning: No team colors file found. Using default colors.\n")
+    # Fallback function if neither file exists
+    get_cfb_colors <- function(team_name, type = "primary") {
+      return(if(type == "primary") "#003366" else "#999999")
+    }
+  })
 })
 
 # Wrapper function for backwards compatibility with existing code
 get_team_color <- function(team_name) {
-  return(get_cfb_colors(team_name, "primary"))
+  if (exists("nfl_mode") && nfl_mode && exists("get_nfl_colors")) {
+    return(get_nfl_colors(team_name, "primary"))
+  } else if (exists("get_cfb_colors")) {
+    return(get_cfb_colors(team_name, "primary"))
+  } else {
+    return("#003366")  # Default fallback
+  }
 }
 
 # ===== DST SCORING FUNCTIONS (NFL MODE) =====
