@@ -55,7 +55,7 @@ UNIVERSAL_TEAM_COLORS <- list(
   "NO" = list(primary = "#D3BC8D", secondary = "#000000"),
   "TB" = list(primary = "#D50A0A", secondary = "#34302B"),
   "ARI" = list(primary = "#97233F", secondary = "#000000"),
-  "LAR" = list(primary = "#003594", secondary = "#FFA300"),
+  "LA" = list(primary = "#003594", secondary = "#FFA300"),
   "SF" = list(primary = "#AA0000", secondary = "#B3995D"),
   "SEA" = list(primary = "#002244", secondary = "#69BE28"),
   
