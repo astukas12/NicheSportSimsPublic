@@ -422,7 +422,7 @@ read_input_file <- function(file_path) {
 }
 
 # Simulation function
-simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_salaries, use_dst = FALSE, opponent_ints = 0) {
+simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_salaries, similar_games, use_dst = FALSE, opponent_ints = 0) {
   
   # Sheet names have underscores, Similar_Games columns have spaces
   team_name_for_cols <- gsub("_", " ", team_name)
@@ -451,9 +451,37 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
   all_player_results <- list()
   result_idx <- 1
   
-  # Helper function: sample from percentiles (MMA-style piecewise linear)
-  sample_from_percentiles <- function(floor, p25, p50, p75, ceiling) {
+  # Helper function: Calculate compression factor based on team total extremeness
+  # Higher team totals = more compression (narrower individual ranges)
+  calculate_compression <- function(team_total, similar_games_column) {
+    if (length(similar_games_column) == 0 || is.na(team_total)) return(0)
+    
+    # Calculate percentile of this team total
+    team_percentile <- ecdf(similar_games_column)(team_total)
+    
+    # Compression increases as we move away from median (0.50)
+    # Distance from median: 0 (at median) to 0.5 (at extremes)
+    distance_from_median <- abs(team_percentile - 0.50)
+    
+    # Convert to compression: 0 at median, up to 0.85 at extremes
+    # This means at 99th percentile, we compress range by 85%
+    compression <- distance_from_median * 1.7  # 0.5 * 1.7 = 0.85 max
+    compression <- min(compression, 0.85)  # Cap at 85%
+    
+    return(compression)
+  }
+  
+  # Helper function: sample from percentiles with optional compression
+  # compression = 0 means full range, compression = 0.85 means very narrow range around median
+  sample_from_percentiles <- function(floor, p25, p50, p75, ceiling, compression = 0) {
     percentile <- runif(1, 0, 1)
+    
+    # Apply compression by squeezing percentile toward 0.50 (median)
+    if (compression > 0) {
+      # Compress the percentile range toward median
+      compressed_percentile <- 0.50 + (percentile - 0.50) * (1 - compression)
+      percentile <- compressed_percentile
+    }
     
     if (percentile <= 0.05) {
       return(0)  # Below floor = injury/benched
@@ -469,6 +497,10 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       return(ceiling)  # Hard ceiling at P95
     }
   }
+  
+  # CALCULATE COMPRESSION FACTORS based on team total extremeness
+  rush_compression <- calculate_compression(team_rush_yds, similar_games[[rush_col]])
+  pass_compression <- calculate_compression(team_pass_yds, similar_games[[pass_col]])
   
   # RUSHING
   rushing_data <- team_data$rushing
@@ -500,8 +532,8 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
         next
       }
       
-      # Sample player share
-      player_share <- sample_from_percentiles(floor_pct, p25_pct, p50_pct, p75_pct, ceiling_pct)
+      # Sample player share WITH COMPRESSION
+      player_share <- sample_from_percentiles(floor_pct, p25_pct, p50_pct, p75_pct, ceiling_pct, rush_compression)
       
       # CUMULATIVE ADJUSTMENT
       if (i > 1 && remaining_share < 1.0) {
@@ -656,8 +688,10 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
           
           td_allocation[selected] <- td_allocation[selected] + 1
           
-          # Diminishing returns: Each TD reduces probability (0.6^n)
-          reduction_factor <- 0.6 ^ td_allocation[selected]
+          # AGGRESSIVE diminishing returns: Each TD drastically reduces probability
+          # After 1 TD: 0.3x probability
+          # After 2 TDs: 0.09x probability (basically impossible to get 3rd)
+          reduction_factor <- 0.3 ^ td_allocation[selected]
           td_probs_eligible[selected_idx] <- td_probs_eligible[selected_idx] * reduction_factor
           
           if (sum(td_probs_eligible) > 0) {
@@ -744,8 +778,8 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
         }
       }
       
-      # Sample player share
-      target_share <- sample_from_percentiles(floor_pct, p25_pct, p50_pct, p75_pct, ceiling_pct)
+      # Sample player share WITH COMPRESSION
+      target_share <- sample_from_percentiles(floor_pct, p25_pct, p50_pct, p75_pct, ceiling_pct, pass_compression)
       
       # CUMULATIVE ADJUSTMENT
       if (i > 1 && remaining_share < 1.0) {
@@ -919,37 +953,94 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       }
     }
     
-    # Second pass: Allocate receptions based on ADJUSTED YPR profile
-    expected_recs <- rec_yds_allocation / adjusted_ypr_values
-    expected_recs[is.na(expected_recs)] <- 0
-    expected_recs[is.infinite(expected_recs)] <- 0
+    # Second pass: Allocate receptions using POISSON DISTRIBUTION
+    # This prevents unrealistic combinations like "4 catches for 1 yard"
+    rec_allocation <- rep(0, n_receivers)
     
-    # Normalize to match team total receptions
-    if (sum(expected_recs) > 0 && team_total_recs > 0) {
-      rec_probs <- expected_recs / sum(expected_recs)
+    if (team_total_recs > 0) {
+      # Step 1: Calculate expected catches for each player based on their yards and historical YPR
+      expected_catches <- numeric(n_receivers)
       
-      # Allocate receptions one-by-one
-      rec_allocation <- rep(0, n_receivers)
-      for (rec in 1:team_total_recs) {
-        selected <- sample(1:n_receivers, 1, prob = rec_probs)
-        rec_allocation[selected] <- rec_allocation[selected] + 1
+      for (i in 1:n_receivers) {
+        if (rec_yds_allocation[i] > 0) {
+          # Expected catches = yards / YPR
+          expected_catches[i] <- rec_yds_allocation[i] / adjusted_ypr_values[i]
+          expected_catches[i] <- max(1, expected_catches[i])  # Min 1 if they have yards
+          
+          # Sample from Poisson distribution for realistic variance
+          simulated_catches <- rpois(1, lambda = expected_catches[i])
+          simulated_catches <- max(1, simulated_catches)  # Ensure at least 1
+          
+          # Cap at reasonable maximum (prevent outliers like 50 catches)
+          max_realistic <- ceiling(expected_catches[i] * 1.5)
+          rec_allocation[i] <- min(simulated_catches, max_realistic)
+        }
       }
       
-      # CONSTRAINT: Everyone with yards must have at least 1 catch
-      players_with_yards <- which(rec_yds_allocation > 0)
-      for (i in players_with_yards) {
-        if (rec_allocation[i] == 0) {
+      # Step 2: Scale to match team total receptions
+      actual_total <- sum(rec_allocation)
+      
+      # If we're over team total, remove catches intelligently
+      while (sum(rec_allocation) > team_total_recs) {
+        # Find player who can best afford to lose a catch
+        # (high catch count, maintains reasonable YPR after reduction)
+        cushion <- numeric(n_receivers)
+        for (i in 1:n_receivers) {
+          if (rec_allocation[i] > 1 && rec_yds_allocation[i] > 0) {
+            # How far above minimum can we go?
+            new_ypr_if_reduced <- rec_yds_allocation[i] / (rec_allocation[i] - 1)
+            # Prefer reducing from players with low YPR impact
+            cushion[i] <- rec_allocation[i] - 1
+          } else {
+            cushion[i] <- -999  # Don't reduce below 1
+          }
+        }
+        
+        if (max(cushion) <= 0) break  # Can't reduce any more
+        
+        reduce_idx <- which.max(cushion)
+        rec_allocation[reduce_idx] <- rec_allocation[reduce_idx] - 1
+      }
+      
+      # If we're under team total, add catches intelligently
+      while (sum(rec_allocation) < team_total_recs) {
+        # Find players who could plausibly have more catches
+        room <- numeric(n_receivers)
+        for (i in 1:n_receivers) {
+          if (rec_yds_allocation[i] > 0) {
+            # Max realistic catches = yards / (YPR * 0.7) - generous allowance for short catches
+            max_plausible <- ceiling(rec_yds_allocation[i] / (adjusted_ypr_values[i] * 0.7))
+            room[i] <- max(0, max_plausible - rec_allocation[i])
+          } else {
+            room[i] <- 0  # Don't add to players with 0 yards
+          }
+        }
+        
+        if (sum(room) == 0) break  # No room to add
+        
+        # Add to player weighted by room available
+        add_probs <- room / sum(room)
+        add_idx <- sample(1:n_receivers, 1, prob = add_probs)
+        rec_allocation[add_idx] <- rec_allocation[add_idx] + 1
+      }
+      
+      # Step 3: FINAL VALIDATION - ensure no impossible combinations
+      for (i in 1:n_receivers) {
+        # Yards > 0 → catches >= 1
+        if (rec_yds_allocation[i] > 0 && rec_allocation[i] == 0) {
           rec_allocation[i] <- 1
-          # Take 1 from player with most (who has >1)
-          eligible_to_reduce <- which(rec_allocation > 1)
-          if (length(eligible_to_reduce) > 0) {
-            max_idx <- eligible_to_reduce[which.max(rec_allocation[eligible_to_reduce])]
-            rec_allocation[max_idx] <- rec_allocation[max_idx] - 1
+        }
+        
+        # Prevent absurd YPR (catches way too high for yards)
+        if (rec_allocation[i] > 0 && rec_yds_allocation[i] > 0) {
+          actual_ypr <- rec_yds_allocation[i] / rec_allocation[i]
+          # If YPR drops below 3.0, that's too many catches for the yards
+          if (actual_ypr < 3.0) {
+            # Reduce catches to maintain at least 3.0 YPR
+            rec_allocation[i] <- max(1, floor(rec_yds_allocation[i] / 3.0))
           }
         }
       }
-    } else {
-      rec_allocation <- rep(0, n_receivers)
     }
     
     # Third pass: Allocate receiving TDs with 70% input rate / 30% production + diminishing returns
@@ -982,8 +1073,10 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
           
           td_allocation[selected] <- td_allocation[selected] + 1
           
-          # Diminishing returns: Each TD reduces probability (0.6^n)
-          reduction_factor <- 0.6 ^ td_allocation[selected]
+          # AGGRESSIVE diminishing returns: Each TD drastically reduces probability
+          # After 1 TD: 0.3x probability
+          # After 2 TDs: 0.09x probability (basically impossible to get 3rd)
+          reduction_factor <- 0.3 ^ td_allocation[selected]
           td_probs_eligible[selected_idx] <- td_probs_eligible[selected_idx] * reduction_factor
           
           if (sum(td_probs_eligible) > 0) {
@@ -1236,11 +1329,11 @@ run_simulations <- function(input_data, n_sims) {
         team1_opponent_ints <- team2_dst_ints
       }
       
-      team1_result <- simulate_team_game(sim, team_names[1], team1_data, sampled_game, dk_salaries, use_dst, team1_opponent_ints)
+      team1_result <- simulate_team_game(sim, team_names[1], team1_data, sampled_game, dk_salaries, similar_games, use_dst, team1_opponent_ints)
       all_results[[result_idx]] <- team1_result
       result_idx <- result_idx + 1
       
-      team2_result <- simulate_team_game(sim, team_names[2], team2_data, sampled_game, dk_salaries, use_dst, team2_opponent_ints)
+      team2_result <- simulate_team_game(sim, team_names[2], team2_data, sampled_game, dk_salaries, similar_games, use_dst, team2_opponent_ints)
       all_results[[result_idx]] <- team2_result
       result_idx <- result_idx + 1
       
