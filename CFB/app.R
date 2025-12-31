@@ -22,7 +22,7 @@ source("cfb_lineup_builder_functions.R")
 
 # Load team colors (NFL or CFB) automatically
 # UNIVERSAL TEAM COLORS - NFL + CFB Combined
-cat("✓ Loading universal team colors (NFL + CFB)\n")
+cat("??? Loading universal team colors (NFL + CFB)\n")
 
 UNIVERSAL_TEAM_COLORS <- list(
   # === NFL TEAMS ===
@@ -203,73 +203,13 @@ get_universal_colors <- function(team_name, type = "primary") {
   return(if(type == "primary") "#003366" else "#999999")
 }
 
-cat("✓ Universal team colors loaded (", length(UNIVERSAL_TEAM_COLORS), "teams: NFL + CFB)\n")
-
-# Team name mapping for common abbreviations
-# Maps abbreviated names (from sheet names) to full names (in color database)
-TEAM_NAME_MAPPING <- c(
-  "App State" = "App State",
-  "ASU" = "Arizona State",
-  "BC" = "Boston College",
-  "BGSU" = "Bowling Green",
-  "ECU" = "East Carolina",
-  "EMU" = "Eastern Michigan",
-  "FAU" = "Florida Atlantic",
-  "FIU" = "Florida International",
-  "FSU" = "Florida State",
-  "GT" = "Georgia Tech",
-  "JSU" = "Jacksonville State",
-  "JMU" = "James Madison",
-  "KSU" = "Kansas State",
-  "LT" = "Louisiana Tech",
-  "Miami FL" = "Miami",
-  "Miami OH" = "Miami (OH)",
-  "MSU" = "Michigan State",
-  "MTSU" = "Middle Tennessee",
-  "UM" = "Miami",
-  "UMass" = "Massachusetts",
-  "UNC" = "North Carolina",
-  "UNLV" = "Nevada Las Vegas",
-  "OSU" = "Ohio State",
-  "OU" = "Oklahoma",
-  "Pitt" = "Pittsburgh",
-  "SDSU" = "San Diego State",
-  "SJSU" = "San Jose State",
-  "SMU" = "Southern Methodist",
-  "TCU" = "Texas Christian",
-  "TTU" = "Texas Tech",
-  "UA" = "Arizona",
-  "UAB" = "Alabama Birmingham",
-  "UCF" = "Central Florida",
-  "UGA" = "Georgia",
-  "UL" = "Louisiana",
-  "ULL" = "Louisiana",
-  "ULM" = "Louisiana Monroe",
-  "UNC" = "North Carolina",
-  "UNT" = "North Texas",
-  "USC" = "Southern California",
-  "USF" = "South Florida",
-  "USM" = "Southern Miss",
-  "UTEP" = "Texas El Paso",
-  "UTSA" = "Texas San Antonio",
-  "UVA" = "Virginia",
-  "VT" = "Virginia Tech",
-  "WKU" = "Western Kentucky",
-  "WMU" = "Western Michigan",
-  "WSU" = "Washington State",
-  "WVU" = "West Virginia"
-)
+cat("??? Universal team colors loaded (", length(UNIVERSAL_TEAM_COLORS), "teams: NFL + CFB)\n")
 
 # Wrapper function for backwards compatibility with existing code
 get_team_color <- function(team_name) {
   # Convert underscores to spaces for team name lookup
   # (sheet names use underscores, but color lookups expect spaces)
   team_name_lookup <- gsub("_", " ", team_name)
-  
-  # Check if there's a mapping for this abbreviated name
-  if (team_name_lookup %in% names(TEAM_NAME_MAPPING)) {
-    team_name_lookup <- TEAM_NAME_MAPPING[[team_name_lookup]]
-  }
   
   # Use universal lookup
   return(get_universal_colors(team_name_lookup, "primary"))
@@ -407,7 +347,7 @@ read_input_file <- function(file_path) {
     
     # Fix malformed column names (Excel sometimes merges adjacent columns)
     if ("CPT_OwnPos" %in% names(input_data$dk_salaries)) {
-      cat("⚠ Fixing malformed column 'CPT_OwnPos' - splitting into separate columns\n")
+      cat("??? Fixing malformed column 'CPT_OwnPos' - splitting into separate columns\n")
       # This shouldn't happen with new generator, but handle old files
     }
     
@@ -1026,7 +966,7 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
       
       # Step 3: FINAL VALIDATION - ensure no impossible combinations
       for (i in 1:n_receivers) {
-        # Yards > 0 → catches >= 1
+        # Yards > 0 ??? catches >= 1
         if (rec_yds_allocation[i] > 0 && rec_allocation[i] == 0) {
           rec_allocation[i] <- 1
         }
@@ -1110,11 +1050,11 @@ simulate_team_game <- function(sim_id, team_name, team_data, sampled_game, dk_sa
     
     # FINAL VALIDATION
     for (i in 1:n_receivers) {
-      # Yards > 0 → catches >= 1
+      # Yards > 0 ??? catches >= 1
       if (rec_yds_allocation[i] > 0 && rec_allocation[i] == 0) {
         rec_allocation[i] <- 1
       }
-      # TDs > 0 → catches >= TDs
+      # TDs > 0 ??? catches >= TDs
       if (td_allocation[i] > 0 && rec_allocation[i] < td_allocation[i]) {
         rec_allocation[i] <- td_allocation[i]
       }
@@ -1250,9 +1190,9 @@ run_simulations <- function(input_data, n_sims) {
   cat(sprintf("Similar games: %d\n", nrow(similar_games)))
   
   if (use_dst) {
-    cat("✓ DST scoring detected (NFL mode)\n\n")
+    cat("??? DST scoring detected (NFL mode)\n\n")
   } else {
-    cat("✓ No DST data (CFB mode)\n\n")
+    cat("??? No DST data (CFB mode)\n\n")
   }
   
   # Pre-allocate (2 teams + 2 DST if NFL)
@@ -1323,9 +1263,9 @@ run_simulations <- function(input_data, n_sims) {
         if (is.na(team1_dst_ints)) team1_dst_ints <- 0
         if (is.na(team2_dst_ints)) team2_dst_ints <- 0
         
-        # Team1's defense INTs → Team2's QB threw them
+        # Team1's defense INTs ??? Team2's QB threw them
         team2_opponent_ints <- team1_dst_ints
-        # Team2's defense INTs → Team1's QB threw them  
+        # Team2's defense INTs ??? Team1's QB threw them  
         team1_opponent_ints <- team2_dst_ints
       }
       
@@ -1432,7 +1372,7 @@ run_simulations <- function(input_data, n_sims) {
   combined <- rbindlist(all_results, use.names = TRUE, fill = TRUE)
   
   total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-  cat(sprintf("\n✓ Complete! %.1f seconds (%.0f sims/sec)\n\n", total_time, n_sims/total_time))
+  cat(sprintf("\n??? Complete! %.1f seconds (%.0f sims/sec)\n\n", total_time, n_sims/total_time))
   
   return(combined)
 }
@@ -1471,13 +1411,6 @@ analyze_fantasy_scoring <- function(sim_results, dk_salaries = NULL) {
                            all.x = TRUE)
     
   }
-  
-  # Convert team names to abbreviations
-  scoring_stats[, TeamAbbr := ifelse(grepl("Texas", Team), "TA&M",
-                                     ifelse(grepl("Miami", Team), "MIA",
-                                            ifelse(grepl("Utah State", Team), "USU",
-                                                   ifelse(grepl("Washington State", Team), "WSU",
-                                                          Team))))]
   
   setorder(scoring_stats, -MedianPts)
   
@@ -1661,7 +1594,7 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
   valid_lineups <- all_lineups[!sapply(all_lineups, is.null)]
   
   if (length(valid_lineups) == 0) {
-    cat("❌ No valid lineups found\n")
+    cat("??? No valid lineups found\n")
     return(NULL)
   }
   
@@ -1708,10 +1641,10 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     cpt_own_lookup <- setNames(dk_salaries_with_ids$CPT_Own, dk_salaries_with_ids$Name)
     flex_own_lookup <- setNames(dk_salaries_with_ids$Flex_Own, dk_salaries_with_ids$Name)
     has_ownership <- TRUE
-    cat("✓ Ownership data found - adding ownership metrics to lineups\n")
+    cat("??? Ownership data found - adding ownership metrics to lineups\n")
   } else {
     has_ownership <- FALSE
-    cat("⚠ No ownership data (CPT_Own/Flex_Own) - skipping ownership metrics\n")
+    cat("??? No ownership data (CPT_Own/Flex_Own) - skipping ownership metrics\n")
   }
   
   # Format captain with CPT_DFS_ID
@@ -1795,7 +1728,7 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
   
   total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   
-  cat(sprintf("\n✓ Found %s unique lineups in %.1f seconds\n\n", 
+  cat(sprintf("\n??? Found %s unique lineups in %.1f seconds\n\n", 
               format(nrow(result), big.mark = ","), total_time))
   
   return(as.data.frame(result))
@@ -2499,19 +2432,19 @@ server <- function(input, output, session) {
       # Reorder columns - Pos, Salary, Median, Avg, then other projections
       if ("Pos" %in% names(projections)) {
         projections <- projections %>%
-          select(Player, Pos, TeamAbbr, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
+          select(Player, Pos, Team, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
       } else {
         projections <- projections %>%
-          select(Player, TeamAbbr, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
+          select(Player, Team, Salary, MedianPts, AvgPts, ETR_DK_Pts, Saber_Proj)
       }
       
     } else {
       if ("Pos" %in% names(projections)) {
         projections <- projections %>%
-          select(Player, Pos, TeamAbbr, Salary, MedianPts, AvgPts)
+          select(Player, Pos, Team, Salary, MedianPts, AvgPts)
       } else {
         projections <- projections %>%
-          select(Player, TeamAbbr, Salary, MedianPts, AvgPts)
+          select(Player, Team, Salary, MedianPts, AvgPts)
       }
     }
     
@@ -2544,7 +2477,7 @@ server <- function(input, output, session) {
       colnames = col_names
     ) %>%
       formatCurrency('Salary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
-      formatRound(setdiff(names(projections), c('Player', 'Pos', 'TeamAbbr', 'Salary')), 2) %>%
+      formatRound(setdiff(names(projections), c('Player', 'Pos', 'Team', 'Salary')), 2) %>%
       formatStyle(
         'MedianPts',
         background = styleColorBar(range(projections$MedianPts, na.rm = TRUE), '#32CD32'),  # Green for median
@@ -2573,7 +2506,7 @@ server <- function(input, output, session) {
                     backgroundRepeat = 'no-repeat',
                     backgroundPosition = 'center')
       } else .} %>%
-      apply_team_colors_to_table(projections, "TeamAbbr")  # Add team colors
+      apply_team_colors_to_table(projections, "Team")  # Add team colors
   })
   
   # Team 1 violin plot title
@@ -3248,7 +3181,7 @@ server <- function(input, output, session) {
           easyClose = TRUE
         ))
       } else {
-        cat("⚠ No lineups matched filters\n")
+        cat("??? No lineups matched filters\n")
         showModal(modalDialog(
           title = "No Lineups Generated",
           "No lineups matched the selected filters. Try adjusting your filter settings.",
@@ -3367,7 +3300,7 @@ server <- function(input, output, session) {
       
       return(dt)
     }, error = function(e) {
-      cat("❌ Error in player_exposure_table:", e$message, "\n")
+      cat("??? Error in player_exposure_table:", e$message, "\n")
       cat("Traceback:\n")
       print(traceback())
       datatable(data.frame(Error = paste("Error displaying exposure:", e$message)),
@@ -3414,7 +3347,7 @@ server <- function(input, output, session) {
       
       return(dt)
     }, error = function(e) {
-      cat("❌ Error in random_lineups_table:", e$message, "\n")
+      cat("??? Error in random_lineups_table:", e$message, "\n")
       print(traceback())
       datatable(data.frame(Error = paste("Error displaying lineups:", e$message)),
                 options = list(dom = 't'), rownames = FALSE)
