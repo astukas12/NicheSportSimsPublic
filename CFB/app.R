@@ -1,9 +1,3 @@
-# CFB SHOWDOWN SIMULATOR
-# Daily Fantasy Sports Simulation for College Football  
-# Author: Andrew
-# Golden Ticket Sims
-# Date: December 2024
-
 library(shiny)
 library(shinydashboard)
 library(DT)
@@ -1709,7 +1703,9 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     # Count by team
     team1_count <- sum(teams == team_names[1], na.rm = TRUE)
     team2_count <- sum(teams == team_names[2], na.rm = TRUE)
-    paste0(team1_count, "-", team2_count)
+    
+    # Use team1 name as prefix
+    paste0(team_names[1], " ", team1_count, "-", team2_count)
   }, by = 1:nrow(lineup_counts)]
   
   # Remove individual rank count columns, keep only Top counts
@@ -1736,86 +1732,133 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
   # CFB SHOWDOWN LINEUP BUILDER FUNCTIONS
   # Functions for filtering and randomizing optimal lineups
   
+
   # Calculate filtered pool statistics
   calculate_filtered_pool_stats <- function(optimal_lineups, filters) {
     if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
-      return(list(count = 0))
+      return(list(count = 0, filtered_lineups = data.frame()))
     }
     
-    filtered_lineups <- as.data.table(optimal_lineups)
+    filtered_lineups <- as.data.table(copy(optimal_lineups))
+    initial_count <- nrow(filtered_lineups)
+    
+    cat("\n=== FILTER DEBUG ===\n")
+    cat("Starting lineups:", initial_count, "\n")
     
     # Apply Top Count filters
     if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0 && "Top1Count" %in% names(filtered_lineups)) {
       filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
+      cat("After Top1Count >=", filters$min_top1_count, ":", nrow(filtered_lineups), "\n")
     }
     
     if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0 && "Top2Count" %in% names(filtered_lineups)) {
       filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
+      cat("After Top2Count >=", filters$min_top2_count, ":", nrow(filtered_lineups), "\n")
     }
     
     if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0 && "Top3Count" %in% names(filtered_lineups)) {
       filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
+      cat("After Top3Count >=", filters$min_top3_count, ":", nrow(filtered_lineups), "\n")
     }
     
     if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0 && "Top5Count" %in% names(filtered_lineups)) {
       filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
+      cat("After Top5Count >=", filters$min_top5_count, ":", nrow(filtered_lineups), "\n")
     }
     
     # Apply ownership filters (if available)
     if (!is.null(filters$cumulative_ownership_range) && "CumulativeOwnership" %in% names(filtered_lineups)) {
+      before <- nrow(filtered_lineups)
       filtered_lineups <- filtered_lineups[
         CumulativeOwnership >= filters$cumulative_ownership_range[1] &
           CumulativeOwnership <= filters$cumulative_ownership_range[2]
       ]
+      cat("After CumulativeOwnership filter:", nrow(filtered_lineups), "(removed", before - nrow(filtered_lineups), ")\n")
     }
     
     if (!is.null(filters$geometric_mean_range) && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
+      before <- nrow(filtered_lineups)
       filtered_lineups <- filtered_lineups[
         GeometricMeanOwnership >= filters$geometric_mean_range[1] &
           GeometricMeanOwnership <= filters$geometric_mean_range[2]
       ]
+      cat("After GeometricMean filter:", nrow(filtered_lineups), "(removed", before - nrow(filtered_lineups), ")\n")
     }
     
     # Apply team stack exclusion filter
     if (!is.null(filters$excluded_stacks) && length(filters$excluded_stacks) > 0 && "TeamStack" %in% names(filtered_lineups)) {
-      print("STACK FILTER IS RUNNING")
-      print(paste("Excluding:", paste(filters$excluded_stacks, collapse=", ")))
       before <- nrow(filtered_lineups)
-      for (stack in filters$excluded_stacks) {
-        filtered_lineups <- filtered_lineups[TeamStack != stack]
-      }
-      after <- nrow(filtered_lineups)
-      print(paste("Before:", before, "After:", after))
+      
+      # Ensure both sides are character for comparison
+      filtered_lineups <- as.data.frame(filtered_lineups)  # Convert to data.frame for safer filtering
+      filtered_lineups$TeamStack <- as.character(filtered_lineups$TeamStack)
+      excluded_stacks_char <- as.character(filters$excluded_stacks)
+      
+      cat("Excluding stacks:", paste(excluded_stacks_char, collapse = ", "), "\n")
+      cat("Sample TeamStack values:", paste(head(unique(filtered_lineups$TeamStack), 5), collapse = ", "), "\n")
+      cat("Unique TeamStack count before:", length(unique(filtered_lineups$TeamStack)), "\n")
+      
+      # Use base R filtering instead of data.table
+      filtered_lineups <- filtered_lineups[!filtered_lineups$TeamStack %in% excluded_stacks_char, ]
+      filtered_lineups <- as.data.table(filtered_lineups)  # Convert back to data.table
+      
+      cat("After stack exclusion:", nrow(filtered_lineups), "(removed", before - nrow(filtered_lineups), ")\n")
+      cat("Unique TeamStack count after:", length(unique(filtered_lineups$TeamStack)), "\n")
     }
     
     # Apply captain exclusion filter
     if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0 && "Captain" %in% names(filtered_lineups)) {
-      print("CAPTAIN FILTER IS RUNNING")
-      print(paste("Excluding:", paste(filters$excluded_captains, collapse=", ")))
       before <- nrow(filtered_lineups)
-      for (captain in filters$excluded_captains) {
-        filtered_lineups <- filtered_lineups[Captain != captain]
-      }
-      after <- nrow(filtered_lineups)
-      print(paste("Before:", before, "After:", after))
+      
+      # Ensure character comparison
+      filtered_lineups <- as.data.frame(filtered_lineups)
+      filtered_lineups$Captain <- as.character(filtered_lineups$Captain)
+      excluded_captains_char <- as.character(filters$excluded_captains)
+      
+      cat("Excluding captains:", paste(excluded_captains_char, collapse = ", "), "\n")
+      cat("Sample Captain values:", paste(head(unique(filtered_lineups$Captain), 3), collapse = ", "), "\n")
+      
+      # Use base R filtering
+      filtered_lineups <- filtered_lineups[!filtered_lineups$Captain %in% excluded_captains_char, ]
+      filtered_lineups <- as.data.table(filtered_lineups)
+      
+      cat("After captain exclusion:", nrow(filtered_lineups), "(removed", before - nrow(filtered_lineups), ")\n")
     }
     
     # Apply flex exclusion filter
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
-      print("FLEX FILTER IS RUNNING")
-      print(paste("Excluding:", paste(filters$excluded_flex, collapse=", ")))
       before <- nrow(filtered_lineups)
+      
+      # Ensure character comparison
+      filtered_lineups <- as.data.frame(filtered_lineups)
+      excluded_flex_char <- as.character(filters$excluded_flex)
+      
+      cat("Excluding flex players:", paste(excluded_flex_char, collapse = ", "), "\n")
+      
       flex_cols <- paste0("Player", 1:5)
       for (col in flex_cols) {
         if (col %in% names(filtered_lineups)) {
-          for (player in filters$excluded_flex) {
-            filtered_lineups <- filtered_lineups[get(col) != player]
-          }
+          filtered_lineups[[col]] <- as.character(filtered_lineups[[col]])
         }
       }
-      after <- nrow(filtered_lineups)
-      print(paste("Before:", before, "After:", after))
+      
+      # Use base R filtering - remove any lineup that contains excluded player in any flex spot
+      for (player in excluded_flex_char) {
+        mask <- rep(TRUE, nrow(filtered_lineups))
+        for (col in flex_cols) {
+          if (col %in% names(filtered_lineups)) {
+            mask <- mask & (filtered_lineups[[col]] != player)
+          }
+        }
+        filtered_lineups <- filtered_lineups[mask, ]
+      }
+      
+      filtered_lineups <- as.data.table(filtered_lineups)
+      
+      cat("After flex exclusion:", nrow(filtered_lineups), "(removed", before - nrow(filtered_lineups), ")\n")
     }
+    
+    cat("=== END FILTER DEBUG ===\n\n")
     
     return(list(
       count = nrow(filtered_lineups),
@@ -1823,6 +1866,7 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
     ))
   }
   
+  # Generate random lineups from filtered pool
   # Generate random lineups from filtered pool
   generate_random_lineups <- function(optimal_lineups, filters) {
     setDT(optimal_lineups)
@@ -1860,30 +1904,48 @@ generate_showdown_lineups <- function(sim_results, dk_salaries, n_sims, top_k = 
       ]
     }
     
-    # Apply team count filter
-    # Apply team stack exclusion filter - using loop like Top1Count
+    # Apply team stack exclusion - use base R filtering
     if (!is.null(filters$excluded_stacks) && length(filters$excluded_stacks) > 0 && "TeamStack" %in% names(filtered_lineups)) {
-      for (stack in filters$excluded_stacks) {
-        filtered_lineups <- filtered_lineups[TeamStack != stack]
-      }
+      filtered_lineups <- as.data.frame(filtered_lineups)
+      filtered_lineups$TeamStack <- as.character(filtered_lineups$TeamStack)
+      excluded_stacks_char <- as.character(filters$excluded_stacks)
+      filtered_lineups <- filtered_lineups[!filtered_lineups$TeamStack %in% excluded_stacks_char, ]
+      filtered_lineups <- as.data.table(filtered_lineups)
     }
     
-    # Apply player exclusion filter - using loop like Top1Count
+    # Apply captain exclusion - use base R filtering
     if (!is.null(filters$excluded_captains) && length(filters$excluded_captains) > 0) {
-      for (captain in filters$excluded_captains) {
-        filtered_lineups <- filtered_lineups[Captain != captain]
-      }
+      filtered_lineups <- as.data.frame(filtered_lineups)
+      filtered_lineups$Captain <- as.character(filtered_lineups$Captain)
+      excluded_captains_char <- as.character(filters$excluded_captains)
+      filtered_lineups <- filtered_lineups[!filtered_lineups$Captain %in% excluded_captains_char, ]
+      filtered_lineups <- as.data.table(filtered_lineups)
     }
     
+    # Apply flex exclusion - use base R filtering
     if (!is.null(filters$excluded_flex) && length(filters$excluded_flex) > 0) {
+      filtered_lineups <- as.data.frame(filtered_lineups)
+      excluded_flex_char <- as.character(filters$excluded_flex)
+      
       flex_cols <- paste0("Player", 1:5)
       for (col in flex_cols) {
         if (col %in% names(filtered_lineups)) {
-          for (player in filters$excluded_flex) {
-            filtered_lineups <- filtered_lineups[get(col) != player]
-          }
+          filtered_lineups[[col]] <- as.character(filtered_lineups[[col]])
         }
       }
+      
+      # Remove any lineup that contains excluded player in any flex spot
+      for (player in excluded_flex_char) {
+        mask <- rep(TRUE, nrow(filtered_lineups))
+        for (col in flex_cols) {
+          if (col %in% names(filtered_lineups)) {
+            mask <- mask & (filtered_lineups[[col]] != player)
+          }
+        }
+        filtered_lineups <- filtered_lineups[mask, ]
+      }
+      
+      filtered_lineups <- as.data.table(filtered_lineups)
     }
     
     # Check if any lineups match filters
@@ -3046,6 +3108,7 @@ server <- function(input, output, session) {
   outputOptions(output, "has_optimal_lineups", suspendWhenHidden = FALSE)
   
   # Update player exclusion choices when optimal lineups are calculated
+  # Update player exclusion choices when optimal lineups are calculated
   observeEvent(rv$optimal_lineups, {
     if(!is.null(rv$optimal_lineups)) {
       # Get unique CAPTAINS only for captain exclusion dropdown
@@ -3068,9 +3131,12 @@ server <- function(input, output, session) {
                            choices = flex_players, 
                            server = FALSE)
       
-      # Get TeamStack choices - show EXACT values from data (no percentages)
+      # Get TeamStack choices - ensure clean string values
       if ("TeamStack" %in% names(rv$optimal_lineups)) {
-        stack_choices <- sort(unique(rv$optimal_lineups$TeamStack))
+        stack_choices <- sort(unique(as.character(rv$optimal_lineups$TeamStack)))
+        stack_choices <- stack_choices[!is.na(stack_choices)]
+        
+        cat("Available TeamStack values:", paste(stack_choices, collapse=", "), "\n")
         
         updateSelectizeInput(session, "excluded_stacks",
                              choices = stack_choices,
@@ -3094,71 +3160,167 @@ server <- function(input, output, session) {
     }
   })
   
-  # Real-time filtered pool size calculation
-  observe({
-    # Create dependencies on all filter inputs
-    min_top1 <- input$min_top1_count
-    min_top2 <- input$min_top2_count
-    min_top3 <- input$min_top3_count
-    min_top5 <- input$min_top5_count
-    cum_range <- input$cumulative_ownership_range
-    geo_range <- input$geometric_mean_range
-    exc_cap <- input$excluded_captains
-    exc_flex <- input$excluded_flex
-    exc_stacks <- input$excluded_stacks
+  # Reactive expression for filtered lineups
+  filtered_optimal_lineups <- reactive({
+    req(rv$optimal_lineups)
     
-    # Only proceed if we have optimal lineups
-    if(!is.null(rv$optimal_lineups)) {
-      filters <- list(
-        min_top1_count = if(!is.null(min_top1)) min_top1 else 0,
-        min_top2_count = if(!is.null(min_top2)) min_top2 else 0,
-        min_top3_count = if(!is.null(min_top3)) min_top3 else 0,
-        min_top5_count = if(!is.null(min_top5)) min_top5 else 0,
-        cumulative_ownership_range = cum_range,
-        geometric_mean_range = geo_range,
-        excluded_stacks = exc_stacks,
-        excluded_captains = if(!is.null(exc_cap)) exc_cap else character(0),
-        excluded_flex = if(!is.null(exc_flex)) exc_flex else character(0)
-      )
-      
-      pool_stats <- calculate_filtered_pool_stats(rv$optimal_lineups, filters)
-      
-      # Store filtered pool for exposure calculation
-      rv$filtered_pool <- pool_stats$filtered_lineups
-      
-      output$filtered_pool_size <- renderText({
-        paste0(format(pool_stats$count, big.mark = ","), 
-               " lineups match current filters")
-      })
+    filtered <- as.data.frame(rv$optimal_lineups)
+    
+    cat("\n=== FILTER DEBUG ===\n")
+    cat("Starting lineups:", nrow(filtered), "\n")
+    
+    # Apply Top Count filters
+    if (!is.null(input$min_top1_count) && input$min_top1_count > 0 && "Top1Count" %in% names(filtered)) {
+      filtered <- filtered[filtered$Top1Count >= input$min_top1_count, ]
+      cat("After Top1Count >=", input$min_top1_count, ":", nrow(filtered), "\n")
     }
+    
+    if (!is.null(input$min_top2_count) && input$min_top2_count > 0 && "Top2Count" %in% names(filtered)) {
+      filtered <- filtered[filtered$Top2Count >= input$min_top2_count, ]
+      cat("After Top2Count >=", input$min_top2_count, ":", nrow(filtered), "\n")
+    }
+    
+    if (!is.null(input$min_top3_count) && input$min_top3_count > 0 && "Top3Count" %in% names(filtered)) {
+      filtered <- filtered[filtered$Top3Count >= input$min_top3_count, ]
+      cat("After Top3Count >=", input$min_top3_count, ":", nrow(filtered), "\n")
+    }
+    
+    if (!is.null(input$min_top5_count) && input$min_top5_count > 0 && "Top5Count" %in% names(filtered)) {
+      filtered <- filtered[filtered$Top5Count >= input$min_top5_count, ]
+      cat("After Top5Count >=", input$min_top5_count, ":", nrow(filtered), "\n")
+    }
+    
+    # Apply ownership filters
+    if (!is.null(input$cumulative_ownership_range) && "CumulativeOwnership" %in% names(filtered)) {
+      before <- nrow(filtered)
+      filtered <- filtered[filtered$CumulativeOwnership >= input$cumulative_ownership_range[1] &
+                             filtered$CumulativeOwnership <= input$cumulative_ownership_range[2], ]
+      cat("After CumulativeOwnership filter:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    if (!is.null(input$geometric_mean_range) && "GeometricMeanOwnership" %in% names(filtered)) {
+      before <- nrow(filtered)
+      filtered <- filtered[filtered$GeometricMeanOwnership >= input$geometric_mean_range[1] &
+                             filtered$GeometricMeanOwnership <= input$geometric_mean_range[2], ]
+      cat("After GeometricMean filter:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    # Apply team stack exclusion
+    if (!is.null(input$excluded_stacks) && length(input$excluded_stacks) > 0 && "TeamStack" %in% names(filtered)) {
+      before <- nrow(filtered)
+      filtered$TeamStack <- as.character(filtered$TeamStack)
+      
+      cat("Excluding stacks:", paste(input$excluded_stacks, collapse = ", "), "\n")
+      cat("Sample TeamStack values:", paste(head(unique(filtered$TeamStack), 5), collapse = ", "), "\n")
+      
+      for(stack in input$excluded_stacks) {
+        filtered <- filtered[filtered$TeamStack != stack, ]
+      }
+      
+      cat("After stack exclusion:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    # Apply captain exclusion
+    if (!is.null(input$excluded_captains) && length(input$excluded_captains) > 0 && "Captain" %in% names(filtered)) {
+      before <- nrow(filtered)
+      filtered$Captain <- as.character(filtered$Captain)
+      
+      cat("Excluding captains:", paste(input$excluded_captains, collapse = ", "), "\n")
+      
+      for(captain in input$excluded_captains) {
+        filtered <- filtered[filtered$Captain != captain, ]
+      }
+      
+      cat("After captain exclusion:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    # Apply flex exclusion
+    if (!is.null(input$excluded_flex) && length(input$excluded_flex) > 0) {
+      before <- nrow(filtered)
+      
+      cat("Excluding flex players:", paste(input$excluded_flex, collapse = ", "), "\n")
+      
+      flex_cols <- paste0("Player", 1:5)
+      for(col in flex_cols) {
+        if(col %in% names(filtered)) {
+          filtered[[col]] <- as.character(filtered[[col]])
+        }
+      }
+      
+      for(player in input$excluded_flex) {
+        filtered <- filtered[filtered$Player1 != player & 
+                               filtered$Player2 != player & 
+                               filtered$Player3 != player & 
+                               filtered$Player4 != player & 
+                               filtered$Player5 != player, ]
+      }
+      
+      cat("After flex exclusion:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    cat("=== END FILTER DEBUG ===\n\n")
+    
+    return(filtered)
   })
+  
+  # Observer to update filtered pool display
+  observe({
+    filtered_pool <- filtered_optimal_lineups()
+    rv$filtered_pool <- filtered_pool
+    
+    output$filtered_pool_size <- renderText({
+      paste0(format(nrow(filtered_pool), big.mark = ","), 
+             " lineups match current filters")
+    })
+  })
+  
   
   # Generate random lineups button
   observeEvent(input$generate_lineups, {
     req(rv$optimal_lineups)
     
-    filters <- list(
-      min_top1_count = input$min_top1_count,
-      min_top2_count = input$min_top2_count,
-      min_top3_count = input$min_top3_count,
-      min_top5_count = input$min_top5_count,
-      cumulative_ownership_range = input$cumulative_ownership_range,
-      geometric_mean_range = input$geometric_mean_range,
-      excluded_stacks = input$excluded_stacks,
-      num_lineups = input$num_random_lineups,
-      excluded_captains = if(!is.null(input$excluded_captains)) input$excluded_captains else character(0),
-      excluded_flex = if(!is.null(input$excluded_flex)) input$excluded_flex else character(0)
-    )
+    # Get already-filtered lineups from reactive
+    filtered_pool <- filtered_optimal_lineups()
+    
+    if(nrow(filtered_pool) == 0) {
+      showModal(modalDialog(
+        title = "No Lineups Available",
+        "No lineups match the current filters.",
+        easyClose = TRUE
+      ))
+      return()
+    }
     
     withProgress(message = 'Generating lineups...', value = 0, {
       
-      rv$random_lineups <- generate_random_lineups(rv$optimal_lineups, filters)
+      # Sample from filtered pool using Top1Count weights
+      selected_lineups <- data.frame()
+      selected_indices <- integer(0)
       
-      if(!is.null(rv$random_lineups)) {
+      num_to_generate <- input$num_random_lineups
+      attempts <- 0
+      max_attempts <- num_to_generate * 10
+      
+      while(nrow(selected_lineups) < num_to_generate && attempts < max_attempts) {
+        attempts <- attempts + 1
         
-        # Create player mapping for exposure calculation
+        available_indices <- setdiff(1:nrow(filtered_pool), selected_indices)
+        if(length(available_indices) == 0) break
+        
+        weights <- filtered_pool$Top1Count[available_indices]
+        if(sum(weights) == 0) weights <- rep(1, length(available_indices))
+        
+        selected_idx <- sample(available_indices, 1, prob = weights)
+        selected_indices <- c(selected_indices, selected_idx)
+        selected_lineups <- rbind(selected_lineups, filtered_pool[selected_idx, ])
+      }
+      
+      if(nrow(selected_lineups) > 0) {
+        selected_lineups$LineupNum <- 1:nrow(selected_lineups)
+        rv$random_lineups <- selected_lineups
+        
+        # Update player exposure
         dk_data <- rv$input_data$dk_salaries
-        
         player_mapping <- data.frame(
           Name = dk_data$Name,
           Salary = dk_data$Salary,
@@ -3174,22 +3336,21 @@ server <- function(input, output, session) {
           rv$random_lineups
         )
         
-        
         showModal(modalDialog(
           title = "Success",
           sprintf("Generated %d lineups successfully!", nrow(rv$random_lineups)),
           easyClose = TRUE
         ))
       } else {
-        cat("??? No lineups matched filters\n")
         showModal(modalDialog(
           title = "No Lineups Generated",
-          "No lineups matched the selected filters. Try adjusting your filter settings.",
+          "Could not generate lineups with current settings.",
           easyClose = TRUE
         ))
       }
     })
   })
+  
   
   # Player exposure table
   output$player_exposure_table <- renderDT({
