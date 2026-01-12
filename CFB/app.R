@@ -27,7 +27,7 @@ UNIVERSAL_TEAM_COLORS <- list(
   "CIN" = list(primary = "#FB4F14", secondary = "#000000"),
   "CLE" = list(primary = "#311D00", secondary = "#FF3C00"),
   "PIT" = list(primary = "#FFB612", secondary = "#000000"),
-  "HOU" = list(primary = "#03202F", secondary = "#A71930"),
+  "HOU" = list(primary = "#A71930", secondary = "#03202F"),
   "IND" = list(primary = "#002C5F", secondary = "#A2AAAD"),
   "JAX" = list(primary = "#006778", secondary = "#D7A22A"),
   "TEN" = list(primary = "#0C2340", secondary = "#4B92DB"),
@@ -2507,7 +2507,7 @@ ui <- dashboardPage(
                   style = "margin-top: 20px;",
                   actionButton(
                     "generate_lineups",
-                    "Add Lineups to Pool",
+                    "Add Lineups to Portfolio",
                     class = "btn-primary btn-lg",
                     style = "width: 100%;"
                   ),
@@ -2523,20 +2523,23 @@ ui <- dashboardPage(
               ), column(
                 6, div(
                   style = "margin-top: 20px;",
-                  downloadButton("download_random_lineups", "Download All Lineups", style = "width: 100%;")
+                  downloadButton("download_random_lineups", "Download Portfolio", style = "width: 100%;")
                 )
               ))
             )
           ),
           
-          fluidRow(
-            box(
-              width = 12,
-              title = "Filtered Pool Player Statistics",
-              status = "info",
-              solidHeader = TRUE,
-              DTOutput("filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
-            )
+          box(
+            width = 12, 
+            title = div(
+              style = "display: flex; justify-content: space-between; align-items: center;",
+              span("Filtered Pool Player Statistics"),
+              span(textOutput("filtered_pool_count_display", inline = TRUE), 
+                   style = "font-size: 24px; font-weight: bold; color: #000000;")
+            ),
+            status = "info",
+            solidHeader = TRUE,
+            DTOutput("filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
           ),
           
           # Build Summary
@@ -3634,6 +3637,11 @@ server <- function(input, output, session) {
     })
   })
   
+  output$filtered_pool_count_display <- renderText({
+    filtered_pool <- filtered_optimal_lineups()
+    paste0(format(nrow(filtered_pool), big.mark = ","), " lineups")
+  })
+  
   
   # Generate random lineups button - NOW ADDS TO BUILD LIST
   observeEvent(input$generate_lineups, {
@@ -3884,15 +3892,12 @@ server <- function(input, output, session) {
         ) %>%
         arrange(desc(Pool_Total_Pct))
       
-      caption_text <- sprintf("Filtered Pool Analysis (%s lineups match current filters)", 
-                              format(nrow(filtered_pool), big.mark = ","))
-      
+
       dt <- datatable(
         display_data,
-        caption = caption_text,
         options = list(
           pageLength = 25,
-          dom = "ftp",
+          dom = "tp",  # Removed 'f' (search)
           scrollX = TRUE
         ),
         rownames = FALSE,
@@ -4159,68 +4164,20 @@ server <- function(input, output, session) {
     return(dt)
   })
   
-  # Update random lineups table to show all builds
-  output$random_lineups_table <- renderDT({
-    if (length(rv$lineup_builds) == 0) {
-      return(datatable(
-        data.frame(Message = "No lineups generated yet."),
-        options = list(dom = 't'),
-        rownames = FALSE
-      ))
+  output$download_random_lineups <- downloadHandler(
+    filename = function() {
+      paste0("CFB_Showdown_Portfolio_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      req(length(rv$lineup_builds) > 0)
+      
+      # Combine all builds
+      all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b) b$lineups))
+      
+      # Keep all columns in the download
+      write.csv(all_lineups, file, row.names = FALSE)
     }
-    
-    # Combine all builds
-    all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b)
-      b$lineups))
-    
-    # Remove IDs from display
-    display_lineups <- as.data.frame(all_lineups)
-    display_lineups$Captain <- gsub(" \\([^)]+\\)$", "", display_lineups$Captain)
-    for (i in 1:5) {
-      player_col <- paste0("Player", i)
-      if (player_col %in% names(display_lineups)) {
-        display_lineups[[player_col]] <- gsub(" \\([^)]+\\)$", "", display_lineups[[player_col]])
-      }
-    }
-    
-    # Reorder columns to show BuildLabel first
-    col_order <- c(
-      "BuildLabel",
-      "LineupNum",
-      "Captain",
-      paste0("Player", 1:5),
-      "Top1Count",
-      "Top2Count",
-      "Top3Count",
-      "Top5Count",
-      "TotalSalary",
-      "CumulativeOwnership",
-      "GeometricMeanOwnership",
-      "TeamStack"
-    )
-    col_order <- col_order[col_order %in% names(display_lineups)]
-    display_lineups <- display_lineups[, col_order]
-    
-    dt <- datatable(
-      display_lineups,
-      options = list(
-        pageLength = 50,
-        scrollX = TRUE,
-        order = list(list(0, 'asc'), list(1, 'asc'))
-      ),
-      rownames = FALSE,
-      class = 'cell-border stripe compact'
-    )
-    
-    dt <- dt %>%
-      formatCurrency('TotalSalary', '$', digits = 0) %>%
-      formatRound(intersect(
-        c('CumulativeOwnership', 'GeometricMeanOwnership'),
-        names(display_lineups)
-      ), 1)
-    
-    return(dt)
-  })
+  )
   
 }
 
