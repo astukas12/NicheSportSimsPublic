@@ -610,7 +610,10 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
   player_distributions <- precompute_golf_distributions(players_dt, cut_line, no_cut)
   
   # Extract static data once (updated to handle missing FD)
-  static_data <- list(names = players_dt$Name)
+  static_data <- list(
+    names = players_dt$Name,
+    pool = if("POOL" %in% names(players_dt)) players_dt$POOL else if("Pool" %in% names(players_dt)) players_dt$Pool else rep("Y", nrow(players_dt))
+  )
   
   if (has_dk) {
     static_data$dk <- list(
@@ -685,6 +688,7 @@ run_golf_simulation <- function(input_data, n_sims = 1000, cut_line = 65, no_cut
       sim_result <- data.table(
         SimID = sim,
         Name = static_data$names,
+        Pool = static_data$pool,
         FinishPosition = all_finish_positions[, sim]
       )
       
@@ -1704,6 +1708,11 @@ count_dk_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   # Create data.table for better performance
   sim_results_dt <- as.data.table(sim_results)
   
+  # Filter to only Pool players
+  if("Pool" %in% names(sim_results_dt)) {
+    sim_results_dt <- sim_results_dt[Pool == "Y"]
+  }
+  
   # Extract only necessary columns
   sim_results_dt <- sim_results_dt[, .(
     SimID, Name, DKSalary, DKFantasyPoints, DKOP
@@ -1834,6 +1843,13 @@ count_fd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   sim_results_dt <- as.data.table(sim_results)
   sim_results_dt <- sim_results_dt[FDSalary > 0]
   
+  
+  # Filter to only Pool players
+  if("Pool" %in% names(sim_results_dt)) {
+    sim_results_dt <- sim_results_dt[Pool == "Y"]
+  }
+  
+  
   # Extract only necessary columns
   sim_results_dt <- sim_results_dt[, .(
     SimID, Name, FDSalary, FDFantasyPoints, FDOP
@@ -1963,6 +1979,11 @@ count_fd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
 count_sd_golf_optimal_lineups <- function(sim_results, player_data = NULL) {
   # Create data.table for better performance
   sim_results_dt <- as.data.table(sim_results)
+  
+  # Filter to only Pool players
+  if("Pool" %in% names(sim_results_dt)) {
+    sim_results_dt <- sim_results_dt[Pool == "Y"]
+  }
   
   # Extract only necessary columns
   sim_results_dt <- sim_results_dt[, .(
