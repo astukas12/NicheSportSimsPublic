@@ -291,8 +291,8 @@ select_app <- function() {
   cat("2) Formula 1 Simulation  8) Tennis\n")
   cat("3) NASCAR Review         9) Tennis Review\n")
   cat("4) Formula 1 Review      10) Golf\n")
-  cat("5) MMA                   11) CFB\n")
-  cat("6) MMA Review            12) NASCAR Research Hub\n")
+  cat("5) MMA                   11) Football Showdown\n")
+  cat("6) MMA Review            12) Football Classic\n")
   cat("13) Exit\n")
   cat("----------------------------------------------\n")
   
@@ -308,12 +308,12 @@ select_app <- function() {
 launch_app <- function(choice, repo_path) {
   subdirs <- c("Nascar", "Formula1", "NascarReview", "F1Review", "MMA",
                "MMAReview", "Sweat", "Tennis", "TennisReview", "Golf",
-               "CFB", "Database")
+               "CFB", "NFL")
   
   app_names <- c("NASCAR Simulation", "Formula 1 Simulation", "NASCAR Review",
                  "Formula 1 Review", "MMA Simulation", "MMA Review",
                  "NASCAR Live Sweat Tool", "Tennis Simulation", "Tennis Review",
-                 "Golf Cut Optimizer", "CFB Simulation", "NASCAR Research Hub")
+                 "Golf Cut Optimizer", "Football Showdown", "Football Classic")
   
   if (choice < 1 || choice > 12) return()
   

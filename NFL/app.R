@@ -93,6 +93,8 @@ build_classic_lineups <- function(sim_results, dk_salaries, sport = "NFL") {
     ungroup()
   
   # Count occurrences and calculate metrics for each unique lineup
+  # Count occurrences and calculate metrics for each unique lineup
+  # Count occurrences and calculate metrics for each unique lineup
   unique_lineups <- all_lineups_df %>%
     group_by(LineupKey) %>%
     summarise(
@@ -108,9 +110,12 @@ build_classic_lineups <- function(sim_results, dk_salaries, sport = "NFL") {
       TotalSalary = first(TotalSalary),
       ProjectedPoints = mean(LineupPoints),
       TotalOwnership = first(TotalOwnership),
-      Top1Count = n(),
-      # Each appearance = it was #1 in that sim
+      Top1Count = n(),  # Each appearance = it was #1 in that sim
       .groups = 'drop'
+    ) %>%
+    mutate(
+      CumulativeOwnership = TotalOwnership,  # ADD as alias
+      GeometricMeanOwnership = TotalOwnership / 9  # ADD geometric mean
     ) %>%
     select(-LineupKey) %>%
     arrange(desc(Top1Count))
@@ -4380,60 +4385,45 @@ server <- function(input, output, session) {
   outputOptions(output, "has_optimal_lineups", suspendWhenHidden = FALSE)
   
   
-  # Update player exclusion choices when optimal lineups are calculated
-  # Update player exclusion choices when optimal lineups are calculated
   observeEvent(rv$optimal_lineups, {
     if (!is.null(rv$optimal_lineups)) {
-      # Get unique CAPTAINS only for captain exclusion dropdown
-      captain_players <- unique(rv$optimal_lineups$Captain)
-      captain_players <- captain_players[!is.na(captain_players) &
-                                           captain_players != ""]
-      captain_players <- sort(captain_players)
       
-      # Get unique FLEX players only for flex exclusion dropdown
-      flex_players <- unique(unlist(rv$optimal_lineups[, paste0("Player", 1:5)]))
-      flex_players <- flex_players[!is.na(flex_players) &
-                                     flex_players != ""]
-      flex_players <- sort(flex_players)
+      is_classic <- !is.null(rv$contest_type) && rv$contest_type == "classic"
       
-      # Update captain exclusion dropdown - ONLY show players who are captains
-      updateSelectizeInput(session,
-                           "excluded_captains",
-                           choices = captain_players,
-                           server = FALSE)
-      
-      # Update flex exclusion dropdown - ONLY show players who are in flex positions
-      updateSelectizeInput(session,
-                           "excluded_flex",
-                           choices = flex_players,
-                           server = FALSE)
-      
-      updateSelectizeInput(
-        session,
-        "locked_captain",
-        choices = setNames(c("", captain_players), c("None", captain_players)),
-        server = FALSE,
-        selected = ""
-      )
-      
-      updateSelectizeInput(session,
-                           "locked_flex",
-                           choices = flex_players,
-                           server = FALSE)
-      
-      # Get TeamStack choices - ensure clean string values
-      if ("TeamStack" %in% names(rv$optimal_lineups)) {
-        stack_choices <- sort(unique(as.character(rv$optimal_lineups$TeamStack)))
-        stack_choices <- stack_choices[!is.na(stack_choices)]
+      if (is_classic) {
+        # CLASSIC MODE - populate player choices from Player1-9
+        all_players <- unique(unlist(rv$optimal_lineups[, paste0("Player", 1:9)]))
+        all_players <- all_players[!is.na(all_players) & all_players != ""]
+        all_players <- sort(all_players)
         
+        updateSelectizeInput(session, "classic_locked_players", choices = all_players, server = FALSE)
+        updateSelectizeInput(session, "classic_excluded_players", choices = all_players, server = FALSE)
         
-        updateSelectizeInput(session,
-                             "excluded_stacks",
-                             choices = stack_choices,
-                             server = FALSE)
+      } else {
+        # SHOWDOWN MODE
+        captain_players <- unique(rv$optimal_lineups$Captain)
+        captain_players <- captain_players[!is.na(captain_players) & captain_players != ""]
+        captain_players <- sort(captain_players)
+        
+        flex_players <- unique(unlist(rv$optimal_lineups[, paste0("Player", 1:5)]))
+        flex_players <- flex_players[!is.na(flex_players) & flex_players != ""]
+        flex_players <- sort(flex_players)
+        
+        updateSelectizeInput(session, "excluded_captains", choices = captain_players, server = FALSE)
+        updateSelectizeInput(session, "excluded_flex", choices = flex_players, server = FALSE)
+        updateSelectizeInput(session, "locked_captain", 
+                             choices = setNames(c("", captain_players), c("None", captain_players)),
+                             server = FALSE, selected = "")
+        updateSelectizeInput(session, "locked_flex", choices = flex_players, server = FALSE)
+        
+        if ("TeamStack" %in% names(rv$optimal_lineups)) {
+          stack_choices <- sort(unique(as.character(rv$optimal_lineups$TeamStack)))
+          stack_choices <- stack_choices[!is.na(stack_choices)]
+          updateSelectizeInput(session, "excluded_stacks", choices = stack_choices, server = FALSE)
+        }
       }
       
-      # Update ownership sliders based on actual data range
+      # Update ownership sliders (BOTH MODES) - FIX: Remove post="%"
       if ("CumulativeOwnership" %in% names(rv$optimal_lineups)) {
         cum_min <- floor(min(rv$optimal_lineups$CumulativeOwnership, na.rm = TRUE))
         cum_max <- ceiling(max(rv$optimal_lineups$CumulativeOwnership, na.rm = TRUE))
@@ -4459,6 +4449,7 @@ server <- function(input, output, session) {
       }
     }
   })
+  
   
   # Reactive expression for filtered lineups
   filtered_optimal_lineups <- reactive({
@@ -4658,7 +4649,89 @@ server <- function(input, output, session) {
   })
   
   
-  # Generate random lineups button - NOW ADDS TO BUILD LIST
+  # Calculate player exposure for classic mode
+  calculate_player_exposure_classic <- function(optimal_lineups, dk_salaries, generated_lineups) {
+    if (is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
+      return(data.frame(Message = "No optimal lineups available."))
+    }
+    
+    # Get all unique players from optimal lineups (Player1-9)
+    all_players <- unique(unlist(optimal_lineups[, paste0("Player", 1:9)]))
+    all_players <- gsub(" \\([^)]+\\)$", "", all_players)  # Strip IDs
+    all_players <- all_players[!is.na(all_players) & all_players != ""]
+    
+    if (length(all_players) == 0) {
+      return(data.frame(Message = "No players found in lineups."))
+    }
+    
+    # Initialize metrics
+    metrics_data <- data.frame(
+      Player = all_players,
+      Salary = NA_real_,
+      Own = NA_real_,
+      OptimalRate = 0,
+      Exposure = NA_real_,
+      Leverage = NA_real_,
+      stringsAsFactors = FALSE
+    )
+    
+    # Match with DK salaries
+    for (i in 1:nrow(metrics_data)) {
+      player_name <- metrics_data$Player[i]
+      matches <- which(dk_salaries$Name == player_name)
+      
+      if (length(matches) > 0) {
+        match_idx <- matches[1]
+        metrics_data$Salary[i] <- dk_salaries$Salary[match_idx]
+        metrics_data$Own[i] <- dk_salaries$Own[match_idx]
+      }
+    }
+    
+    # Calculate OptimalRate (% of optimal lineups containing player)
+    total_optimal <- nrow(optimal_lineups)
+    if (total_optimal > 0) {
+      for (player in all_players) {
+        # Count across Player1-9
+        player_count <- 0
+        for (col in paste0("Player", 1:9)) {
+          if (col %in% names(optimal_lineups)) {
+            player_appears <- gsub(" \\([^)]+\\)$", "", optimal_lineups[[col]]) == player
+            player_count <- player_count + sum(player_appears, na.rm = TRUE)
+          }
+        }
+        metrics_data[metrics_data$Player == player, "OptimalRate"] <- (player_count / total_optimal) * 100
+      }
+    }
+    
+    # Calculate Exposure (% of generated lineups containing player)
+    if (!is.null(generated_lineups) && nrow(generated_lineups) > 0) {
+      for (player in all_players) {
+        # Count across Player1-9 in generated lineups
+        player_count <- 0
+        for (col in paste0("Player", 1:9)) {
+          if (col %in% names(generated_lineups)) {
+            player_appears <- gsub(" \\([^)]+\\)$", "", generated_lineups[[col]]) == player
+            player_count <- player_count + sum(player_appears, na.rm = TRUE)
+          }
+        }
+        exposure_pct <- (player_count / nrow(generated_lineups)) * 100
+        metrics_data[metrics_data$Player == player, "Exposure"] <- exposure_pct
+        
+        # Leverage = Exposure - Ownership
+        if (!is.na(metrics_data[metrics_data$Player == player, "Own"])) {
+          own <- metrics_data[metrics_data$Player == player, "Own"]
+          metrics_data[metrics_data$Player == player, "Leverage"] <- exposure_pct - own
+        }
+      }
+    }
+    
+    metrics_data <- metrics_data %>%
+      select(Player, Salary, Own, Exposure, Leverage) %>%
+      arrange(desc(Exposure))
+    
+    return(metrics_data)
+  }
+  
   observeEvent(input$generate_lineups, {
     req(rv$optimal_lineups)
     
@@ -4694,44 +4767,49 @@ server <- function(input, output, session) {
           break
         
         weights <- filtered_pool$Top1Count[available_indices]
-        if (sum(weights) == 0)
-          weights <- rep(1, length(available_indices))
+        if(sum(weights) == 0) weights <- rep(1, length(available_indices))
         
         # Fix for when there's only 1 lineup available
-        if (length(available_indices) == 1) {
+        if(length(available_indices) == 1) {
           selected_idx <- available_indices[1]
         } else {
           selected_idx <- sample(available_indices, 1, prob = weights)
         }
-        
         
         selected_indices <- c(selected_indices, selected_idx)
         selected_lineups <- rbind(selected_lineups, filtered_pool[selected_idx, ])
       }
       
       if (nrow(selected_lineups) > 0) {
+        is_classic <- !is.null(rv$contest_type) && rv$contest_type == "classic"
+        
         # Create build label - auto-generate from filters if empty
-        build_label <- if (!is.null(input$build_label) &&
-                           input$build_label != "") {
+        build_label <- if (!is.null(input$build_label) && input$build_label != "") {
           input$build_label
         } else {
           # Auto-generate label based on active filters
           label_parts <- c()
           
-          if (!is.null(input$locked_captain) &&
-              input$locked_captain != "") {
-            cpt_name <- gsub(" \\(.*\\)", "", input$locked_captain)
-            label_parts <- c(label_parts, paste0("CPT:", cpt_name))
-          }
-          
-          if (!is.null(input$locked_flex) &&
-              length(input$locked_flex) > 0) {
-            label_parts <- c(label_parts, paste0(length(input$locked_flex), "Lock"))
-          }
-          
-          if (!is.null(input$excluded_stacks) &&
-              length(input$excluded_stacks) > 0) {
-            label_parts <- c(label_parts, "NoStacks")
+          if (is_classic) {
+            # Classic auto-label
+            if (!is.null(input$classic_locked_players) && length(input$classic_locked_players) > 0) {
+              label_parts <- c(label_parts, paste0(length(input$classic_locked_players), "Lock"))
+            }
+            if (!is.null(input$classic_excluded_players) && length(input$classic_excluded_players) > 0) {
+              label_parts <- c(label_parts, "Excl")
+            }
+          } else {
+            # Showdown auto-label
+            if (!is.null(input$locked_captain) && input$locked_captain != "") {
+              cpt_name <- gsub(" \\(.*\\)", "", input$locked_captain)
+              label_parts <- c(label_parts, paste0("CPT:", cpt_name))
+            }
+            if (!is.null(input$locked_flex) && length(input$locked_flex) > 0) {
+              label_parts <- c(label_parts, paste0(length(input$locked_flex), "Lock"))
+            }
+            if (!is.null(input$excluded_stacks) && length(input$excluded_stacks) > 0) {
+              label_parts <- c(label_parts, "NoStacks")
+            }
           }
           
           if (length(label_parts) > 0) {
@@ -4746,34 +4824,38 @@ server <- function(input, output, session) {
         selected_lineups$LineupNum <- 1:nrow(selected_lineups)
         
         # Add to builds list
-        rv$lineup_builds[[length(rv$lineup_builds) + 1]] <- list(label = build_label,
-                                                                 lineups = selected_lineups,
-                                                                 timestamp = Sys.time())
-        
-        # Update player exposure for ALL builds combined
-        all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b)
-          b$lineups))
-        
-        dk_data <- rv$input_data$dk_salaries
-        player_mapping <- data.frame(
-          Name = dk_data$Name,
-          Salary = dk_data$Salary,
-          Proj = if ("ETR_DK_Pts" %in% names(dk_data))
-            dk_data$ETR_DK_Pts
-          else
-            NA,
-          Flex_Own = if ("Flex_Own" %in% names(dk_data))
-            dk_data$Flex_Own
-          else
-            NA,
-          CPT_Own = if ("CPT_Own" %in% names(dk_data))
-            dk_data$CPT_Own
-          else
-            NA,
-          stringsAsFactors = FALSE
+        rv$lineup_builds[[length(rv$lineup_builds) + 1]] <- list(
+          label = build_label,
+          lineups = selected_lineups,
+          timestamp = Sys.time()
         )
         
-        rv$player_exposure <- calculate_player_exposure(rv$optimal_lineups, player_mapping, all_lineups)
+        # Update player exposure for ALL builds combined
+        all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b) b$lineups))
+        
+        # Get salary data based on mode
+        if (is_classic) {
+          dk_data <- rv$classic_slate_data$dk_salaries
+        } else {
+          dk_data <- rv$input_data$dk_salaries
+        }
+        
+        # Calculate player exposure based on mode
+        if (is_classic) {
+          # Classic mode - simpler exposure calculation
+          rv$player_exposure <- calculate_player_exposure_classic(rv$optimal_lineups, dk_data, all_lineups)
+        } else {
+          # Showdown mode - original function
+          player_mapping <- data.frame(
+            Name = dk_data$Name,
+            Salary = dk_data$Salary,
+            Proj = if ("ETR_DK_Pts" %in% names(dk_data)) dk_data$ETR_DK_Pts else NA,
+            Flex_Own = if ("Flex_Own" %in% names(dk_data)) dk_data$Flex_Own else NA,
+            CPT_Own = if ("CPT_Own" %in% names(dk_data)) dk_data$CPT_Own else NA,
+            stringsAsFactors = FALSE
+          )
+          rv$player_exposure <- calculate_player_exposure(rv$optimal_lineups, player_mapping, all_lineups)
+        }
         
         showModal(modalDialog(
           title = "Success",
@@ -5044,161 +5126,55 @@ server <- function(input, output, session) {
     )
   })
   
-  # Player exposure table
   output$player_exposure_table <- renderDT({
-    req(rv$simulation_complete)
+    req(rv$player_exposure)
     
-    if (length(rv$lineup_builds) == 0) {
+    if ("Message" %in% names(rv$player_exposure)) {
       return(datatable(
-        data.frame(Message = "No lineups generated yet. Build some lineups first."),
+        rv$player_exposure,
         options = list(dom = 't'),
         rownames = FALSE
       ))
     }
     
-    tryCatch({
-      # Combine all builds
-      all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b)
-        b$lineups))
-      total_lineups <- nrow(all_lineups)
-      
-      dk_data <- rv$input_data$dk_salaries
-      all_players <- unique(rv$simulation_results$Player)
-      
-      display_data <- data.frame(Player = all_players, stringsAsFactors = FALSE)
-      
-      # Add basic info
-      if (!is.null(dk_data)) {
-        display_data <- display_data %>%
-          left_join(
-            dk_data %>% select(Name, Pos, Team, Salary, CPT_Own, Flex_Own),
-            by = c("Player" = "Name")
-          )
-        
-        display_data$CPT_Own[is.na(display_data$CPT_Own)] <- 0
-        display_data$Flex_Own[is.na(display_data$Flex_Own)] <- 0
-        display_data$TotalOwn <- display_data$CPT_Own + display_data$Flex_Own
-      } else {
-        display_data$Pos <- NA
-        display_data$Team <- NA
-        display_data$Salary <- NA
-        display_data$CPT_Own <- 0
-        display_data$Flex_Own <- 0
-        display_data$TotalOwn <- 0
-      }
-      
-      # Calculate exposure in portfolio
-      display_data$Portfolio_CPT_Exposure <- 0
-      display_data$Portfolio_Flex_Exposure <- 0
-      
-      for (i in 1:nrow(display_data)) {
-        player <- display_data$Player[i]
-        
-        # Captain exposure
-        captain_count <- sum(gsub(" \\([^)]+\\)$", "", all_lineups$Captain) == player,
-                             na.rm = TRUE)
-        display_data$Portfolio_CPT_Exposure[i] <- (captain_count / total_lineups) * 100
-        
-        # Flex exposure
-        flex_count <- 0
-        for (col in paste0("Player", 1:5)) {
-          if (col %in% names(all_lineups)) {
-            flex_count <- flex_count + sum(gsub(" \\([^)]+\\)$", "", all_lineups[[col]]) == player,
-                                           na.rm = TRUE)
-          }
-        }
-        display_data$Portfolio_Flex_Exposure[i] <- (flex_count / total_lineups) * 100
-      }
-      
-      display_data$Portfolio_Total_Exposure <- display_data$Portfolio_CPT_Exposure + display_data$Portfolio_Flex_Exposure
-      
-      # Calculate leverage vs ownership
-      display_data$CPT_Leverage <- display_data$Portfolio_CPT_Exposure - display_data$CPT_Own
-      display_data$Flex_Leverage <- display_data$Portfolio_Flex_Exposure - display_data$Flex_Own
-      display_data$Total_Leverage <- display_data$Portfolio_Total_Exposure - display_data$TotalOwn
-      
-      # Filter to only players in portfolio
-      display_data <- display_data %>%
-        filter(Portfolio_Total_Exposure > 0) %>%
-        select(
-          Player,
-          Pos,
-          Team,
-          Salary,
-          CPT_Own,
-          Portfolio_CPT_Exposure,
-          CPT_Leverage,
-          Flex_Own,
-          Portfolio_Flex_Exposure,
-          Flex_Leverage,
-          TotalOwn,
-          Portfolio_Total_Exposure,
-          Total_Leverage
-        ) %>%
-        arrange(desc(Portfolio_Total_Exposure))
-      
-      # Create caption with lineup count
-      caption_text <- sprintf(
-        "Portfolio Analysis (%s total lineups across %s builds)",
-        format(total_lineups, big.mark = ","),
-        length(rv$lineup_builds)
-      )
-      
+    is_classic <- !is.null(rv$contest_type) && rv$contest_type == "classic"
+    
+    if (is_classic) {
+      # CLASSIC MODE - Only Own, Exposure, Leverage
       dt <- datatable(
-        display_data,
-        caption = caption_text,
+        rv$player_exposure,
         options = list(
           pageLength = 25,
-          dom = "ftp",
-          scrollX = TRUE
+          scrollX = TRUE,
+          order = list(list(3, 'desc'))  # Sort by Exposure
         ),
         rownames = FALSE,
         class = 'cell-border stripe compact'
-      )
+      ) %>%
+        formatCurrency('Salary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+        formatRound(c('Own', 'Exposure', 'Leverage'), digits = 1)
       
-      if ("Salary" %in% names(display_data)) {
-        dt <- dt %>% formatCurrency(
-          'Salary',
-          currency = "$",
-          interval = 3,
-          mark = ",",
-          digits = 0
-        )
-      }
+    } else {
+      # SHOWDOWN MODE
+      exposure_col_idx <- which(names(rv$player_exposure) == "Exposure") - 1
       
-      numeric_cols <- intersect(
-        c(
-          'CPT_Own',
-          'Portfolio_CPT_Exposure',
-          'CPT_Leverage',
-          'Flex_Own',
-          'Portfolio_Flex_Exposure',
-          'Flex_Leverage',
-          'TotalOwn',
-          'Portfolio_Total_Exposure',
-          'Total_Leverage'
+      dt <- datatable(
+        rv$player_exposure,
+        options = list(
+          pageLength = 25,
+          scrollX = TRUE,
+          order = list(list(exposure_col_idx, 'desc'))
         ),
-        names(display_data)
-      )
-      if (length(numeric_cols) > 0) {
-        dt <- dt %>% formatRound(numeric_cols, digits = 1)
-      }
-      
-      if ("Team" %in% names(display_data)) {
-        dt <- apply_team_colors_to_table(dt, display_data, "Team")
-      }
-      
-      return(dt)
-    }, error = function(e) {
-      datatable(data.frame(Error = paste("Error:", e$message)),
-                options = list(dom = 't'),
-                rownames = FALSE)
-    })
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      ) %>%
+        formatCurrency('Salary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+        formatRound(c('FlexOwn', 'CPTOwn', 'OptimalRate', 'Exposure', 'Leverage'), digits = 1)
+    }
+    
+    return(dt)
   })
   
-  
-  
-  # Update random lineups table to show all builds
   output$random_lineups_table <- renderDT({
     if (length(rv$lineup_builds) == 0) {
       return(datatable(
@@ -5208,74 +5184,172 @@ server <- function(input, output, session) {
       ))
     }
     
-    # Combine all builds
-    all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b)
-      b$lineups))
+    all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b) b$lineups))
     
-    # Remove IDs from display
-    display_lineups <- as.data.frame(all_lineups)
-    display_lineups$Captain <- gsub(" \\([^)]+\\)$", "", display_lineups$Captain)
-    for (i in 1:5) {
-      player_col <- paste0("Player", i)
-      if (player_col %in% names(display_lineups)) {
-        display_lineups[[player_col]] <- gsub(" \\([^)]+\\)$", "", display_lineups[[player_col]])
+    if (nrow(all_lineups) == 0) {
+      return(datatable(
+        data.frame(Message = "No lineups available."),
+        options = list(dom = 't'),
+        rownames = FALSE
+      ))
+    }
+    
+    is_classic <- !is.null(rv$contest_type) && rv$contest_type == "classic"
+    
+    if (is_classic) {
+      # CLASSIC MODE - Format with positions like optimal lineups table
+      player_pos_lookup <- rv$simulation_results %>%
+        distinct(Player, Pos, DFS_ID) %>%
+        mutate(PlayerDisplay = paste0(Player, " (", DFS_ID, ")"))
+      
+      formatted_lineups <- list()
+      
+      for (i in 1:nrow(all_lineups)) {
+        lineup_row <- all_lineups[i, ]
+        
+        players <- c(
+          lineup_row$Player1, lineup_row$Player2, lineup_row$Player3,
+          lineup_row$Player4, lineup_row$Player5, lineup_row$Player6,
+          lineup_row$Player7, lineup_row$Player8, lineup_row$Player9
+        )
+        
+        player_data <- player_pos_lookup %>%
+          filter(PlayerDisplay %in% players)
+        
+        qbs <- player_data %>% filter(Pos == "QB") %>% pull(PlayerDisplay)
+        rbs <- player_data %>% filter(Pos == "RB") %>% pull(PlayerDisplay)
+        wrs <- player_data %>% filter(Pos == "WR") %>% pull(PlayerDisplay)
+        tes <- player_data %>% filter(Pos == "TE") %>% pull(PlayerDisplay)
+        dsts <- player_data %>% filter(Pos == "DST") %>% pull(PlayerDisplay)
+        
+        # Safer way to create data frame - always return a value
+        formatted_lineups[[i]] <- data.frame(
+          BuildLabel = lineup_row$BuildLabel,
+          LineupNum = lineup_row$LineupNum,
+          QB = if(length(qbs) >= 1) qbs[1] else "",
+          RB1 = if(length(rbs) >= 1) rbs[1] else "",
+          RB2 = if(length(rbs) >= 2) rbs[2] else "",
+          WR1 = if(length(wrs) >= 1) wrs[1] else "",
+          WR2 = if(length(wrs) >= 2) wrs[2] else "",
+          WR3 = if(length(wrs) >= 3) wrs[3] else "",
+          TE = if(length(tes) >= 1) tes[1] else "",
+          FLEX = if(length(rbs) >= 3) rbs[3] else if(length(wrs) >= 4) wrs[4] else if(length(tes) >= 2) tes[2] else "",
+          DST = if(length(dsts) >= 1) dsts[1] else "",
+          TotalSalary = ifelse(!is.null(lineup_row$TotalSalary), lineup_row$TotalSalary, 0),
+          CumulativeOwnership = ifelse(!is.null(lineup_row$CumulativeOwnership), lineup_row$CumulativeOwnership, 0),
+          GeometricMeanOwnership = ifelse(!is.null(lineup_row$GeometricMeanOwnership), lineup_row$GeometricMeanOwnership, 0),
+          stringsAsFactors = FALSE
+        )
+      }
+      
+      display_lineups <- bind_rows(formatted_lineups)
+      
+      # Remove IDs
+      for (col in c("QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST")) {
+        if (col %in% names(display_lineups)) {
+          display_lineups[[col]] <- gsub(" \\([^)]+\\)$", "", display_lineups[[col]])
+        }
+      }
+      
+    } else {
+      # SHOWDOWN MODE - Original format
+      display_lineups <- all_lineups
+      
+      # Remove IDs
+      if ("Captain" %in% names(display_lineups)) {
+        display_lineups$Captain <- gsub(" \\([^)]+\\)$", "", display_lineups$Captain)
+      }
+      for (i in 1:5) {
+        player_col <- paste0("Player", i)
+        if (player_col %in% names(display_lineups)) {
+          display_lineups[[player_col]] <- gsub(" \\([^)]+\\)$", "", display_lineups[[player_col]])
+        }
       }
     }
     
-    # Reorder columns to show BuildLabel first
-    col_order <- c(
-      "BuildLabel",
-      "LineupNum",
-      "Captain",
-      paste0("Player", 1:5),
-      "Top1Count",
-      "Top2Count",
-      "Top3Count",
-      "Top5Count",
-      "TotalSalary",
-      "CumulativeOwnership",
-      "GeometricMeanOwnership",
-      "TeamStack"
-    )
-    col_order <- col_order[col_order %in% names(display_lineups)]
-    display_lineups <- display_lineups[, col_order]
-    
-    dt <- datatable(
+    datatable(
       display_lineups,
       options = list(
-        pageLength = 50,
-        scrollX = TRUE,
-        order = list(list(0, 'asc'), list(1, 'asc'))
+        pageLength = 25,
+        scrollX = TRUE
       ),
       rownames = FALSE,
       class = 'cell-border stripe compact'
-    )
-    
-    dt <- dt %>%
-      formatCurrency('TotalSalary', '$', digits = 0) %>%
-      formatRound(intersect(
-        c('CumulativeOwnership', 'GeometricMeanOwnership'),
-        names(display_lineups)
-      ), 1)
-    
-    return(dt)
+    ) %>%
+      formatCurrency('TotalSalary', currency = "$", interval = 3, mark = ",", digits = 0) %>%
+      formatRound(c('CumulativeOwnership', 'GeometricMeanOwnership'), digits = 1)
   })
   
   output$download_random_lineups <- downloadHandler(
     filename = function() {
-      paste0("CFB_Showdown_Portfolio_",
-             format(Sys.time(), "%Y%m%d_%H%M%S"),
-             ".csv")
+      if (!is.null(rv$contest_type) && rv$contest_type == "classic") {
+        paste0("classic_portfolio_", Sys.Date(), ".csv")
+      } else {
+        paste0("showdown_portfolio_", Sys.Date(), ".csv")
+      }
     },
     content = function(file) {
-      req(length(rv$lineup_builds) > 0)
+      if (length(rv$lineup_builds) == 0) {
+        write.csv(data.frame(Message = "No lineups to download"), file, row.names = FALSE)
+        return()
+      }
       
-      # Combine all builds
-      all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b)
-        b$lineups))
+      all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b) b$lineups))
       
-      # Keep all columns in the download
-      write.csv(all_lineups, file, row.names = FALSE)
+      is_classic <- !is.null(rv$contest_type) && rv$contest_type == "classic"
+      
+      if (is_classic) {
+        # CLASSIC MODE - Format like optimal lineups download
+        player_pos_lookup <- rv$simulation_results %>%
+          distinct(Player, Pos, DFS_ID) %>%
+          mutate(PlayerDisplay = paste0(Player, " (", DFS_ID, ")"))
+        
+        formatted_lineups <- list()
+        
+        for (i in 1:nrow(all_lineups)) {
+          lineup_row <- all_lineups[i, ]
+          
+          players <- c(
+            lineup_row$Player1, lineup_row$Player2, lineup_row$Player3,
+            lineup_row$Player4, lineup_row$Player5, lineup_row$Player6,
+            lineup_row$Player7, lineup_row$Player8, lineup_row$Player9
+          )
+          
+          player_data <- player_pos_lookup %>%
+            filter(PlayerDisplay %in% players)
+          
+          qbs <- player_data %>% filter(Pos == "QB") %>% pull(PlayerDisplay)
+          rbs <- player_data %>% filter(Pos == "RB") %>% pull(PlayerDisplay)
+          wrs <- player_data %>% filter(Pos == "WR") %>% pull(PlayerDisplay)
+          tes <- player_data %>% filter(Pos == "TE") %>% pull(PlayerDisplay)
+          dsts <- player_data %>% filter(Pos == "DST") %>% pull(PlayerDisplay)
+          
+          formatted_lineups[[i]] <- data.frame(
+            BuildLabel = lineup_row$BuildLabel,
+            LineupNum = lineup_row$LineupNum,
+            QB = if(length(qbs) >= 1) qbs[1] else "",
+            RB = if(length(rbs) >= 1) rbs[1] else "",
+            RB = if(length(rbs) >= 2) rbs[2] else "",
+            WR = if(length(wrs) >= 1) wrs[1] else "",
+            WR = if(length(wrs) >= 2) wrs[2] else "",
+            WR = if(length(wrs) >= 3) wrs[3] else "",
+            TE = if(length(tes) >= 1) tes[1] else "",
+            FLEX = if(length(rbs) >= 3) rbs[3] else if(length(wrs) >= 4) wrs[4] else if(length(tes) >= 2) tes[2] else "",
+            DST = if(length(dsts) >= 1) dsts[1] else "",
+            TotalSalary = ifelse(!is.null(lineup_row$TotalSalary), lineup_row$TotalSalary, 0),
+            CumulativeOwnership = ifelse(!is.null(lineup_row$CumulativeOwnership), lineup_row$CumulativeOwnership, 0),
+            GeometricMeanOwnership = ifelse(!is.null(lineup_row$GeometricMeanOwnership), lineup_row$GeometricMeanOwnership, 0),
+            stringsAsFactors = FALSE
+          )
+        }
+        
+        download_data <- bind_rows(formatted_lineups)
+        write.csv(download_data, file, row.names = FALSE)
+        
+      } else {
+        # SHOWDOWN MODE - Keep original format with IDs
+        write.csv(all_lineups, file, row.names = FALSE)
+      }
     }
   )
   
