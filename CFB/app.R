@@ -3872,6 +3872,7 @@ server <- function(input, output, session) {
       display_data$Flex_PoolLev <- display_data$Pool_Flex_Pct - display_data$Flex_Own
       display_data$Total_PoolLev <- display_data$Pool_Total_Pct - display_data$TotalOwn
       
+
       # Filter to only players that appear in filtered pool
       display_data <- display_data %>%
         filter(Pool_Total_Pct > 0) %>%
@@ -3880,19 +3881,19 @@ server <- function(input, output, session) {
           Pos,
           Team,
           Salary,
-          CPT_Own,
-          Pool_CPT_Pct,
-          CPT_PoolLev,
-          Flex_Own,
-          Pool_Flex_Pct,
-          Flex_PoolLev,
-          TotalOwn,
-          Pool_Total_Pct,
-          Total_PoolLev
+          CPT_OP = CPT_Own,
+          CPT_Pool = Pool_CPT_Pct,
+          CPT_Lev = CPT_PoolLev,
+          Flex_OP = Flex_Own,
+          Flex_Pool = Pool_Flex_Pct,
+          Flex_Lev = Flex_PoolLev,
+          Total_OP = TotalOwn,
+          Total_Pool = Pool_Total_Pct,
+          Total_Lev = Total_PoolLev
         ) %>%
-        arrange(desc(Pool_Total_Pct))
+        arrange(desc(Total_Pool))
       
-
+      
       dt <- datatable(
         display_data,
         options = list(
@@ -3916,15 +3917,15 @@ server <- function(input, output, session) {
       
       numeric_cols <- intersect(
         c(
-          'CPT_Own',
-          'Pool_CPT_Pct',
-          'CPT_PoolLev',
-          'Flex_Own',
-          'Pool_Flex_Pct',
-          'Flex_PoolLev',
-          'TotalOwn',
-          'Pool_Total_Pct',
-          'Total_PoolLev'
+          'CPT_OP',
+          'CPT_Pool',
+          'CPT_Lev',
+          'Flex_OP',
+          'Flex_Pool',
+          'Flex_Lev',
+          'Total_OP',
+          'Total_Pool',
+          'Total_Lev'
         ),
         names(display_data)
       )
@@ -4052,10 +4053,10 @@ server <- function(input, output, session) {
       display_data <- display_data %>%
         filter(Portfolio_Total_Exposure > 0) %>%
         select(Player, Pos, Team, Salary, 
-               CPT_Own, Portfolio_CPT_Exposure, CPT_Leverage,
-               Flex_Own, Portfolio_Flex_Exposure, Flex_Leverage,
-               TotalOwn, Portfolio_Total_Exposure, Total_Leverage) %>%
-        arrange(desc(Portfolio_Total_Exposure))
+               CPT_OP = CPT_Own, CPT_Port = Portfolio_CPT_Exposure, CPT_Lev = CPT_Leverage,
+               Flex_OP = Flex_Own, Flex_Port = Portfolio_Flex_Exposure, Flex_Lev = Flex_Leverage,
+               Total_OP = TotalOwn, Total_Port = Portfolio_Total_Exposure, Total_Lev = Total_Leverage) %>%
+        arrange(desc(Total_Port))
       
       # Create caption with lineup count
       caption_text <- sprintf("Portfolio Analysis (%s total lineups across %s builds)", 
@@ -4079,9 +4080,9 @@ server <- function(input, output, session) {
       }
       
       numeric_cols <- intersect(
-        c('CPT_Own', 'Portfolio_CPT_Exposure', 'CPT_Leverage',
-          'Flex_Own', 'Portfolio_Flex_Exposure', 'Flex_Leverage',
-          'TotalOwn', 'Portfolio_Total_Exposure', 'Total_Leverage'), 
+        c('CPT_OP', 'CPT_Port', 'CPT_Lev',
+          'Flex_OP', 'Flex_Port', 'Flex_Lev',
+          'Total_OP', 'Total_Port', 'Total_Lev'), 
         names(display_data)
       )
       if(length(numeric_cols) > 0) {
