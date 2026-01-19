@@ -4175,6 +4175,9 @@ server <- function(input, output, session) {
       # Combine all builds
       all_lineups <- do.call(rbind, lapply(rv$lineup_builds, function(b) b$lineups))
       
+      # Randomize the order
+      all_lineups <- all_lineups[sample(nrow(all_lineups)), ]
+      
       # Keep all columns in the download
       write.csv(all_lineups, file, row.names = FALSE)
     }
