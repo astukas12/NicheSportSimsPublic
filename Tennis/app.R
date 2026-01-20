@@ -108,37 +108,25 @@ custom_css <- "
   }
 "
 
-# Load historical score data (from the repository)
 load_historical_data <- function() {
-  # Attempt to load data from the package directory
-  score_history_path <- "ScoreHistory.csv"
+  # Load new tennis database
+  db_path <- "tennis_clean_database.xlsx"
   
-  if (file.exists(score_history_path)) {
-    score_history <- read.csv(score_history_path)
-    
-    # Convert data types as needed
-    score_history <- score_history %>%
-      mutate(
-        Tour = as.factor(Tour),
-        surface = as.factor(surface),
-        best_of = as.integer(best_of),
-        w_dk_score = as.numeric(w_dk_score),
-        l_dk_score = as.numeric(l_dk_score),
-        WIO = as.numeric(WIO),
-        LIO = as.numeric(LIO),
-        straight_sets = as.integer(straight_sets)
-      )
-    
-    return(score_history)
+  if (file.exists(db_path)) {
+    tennis_db <- read_excel(db_path, sheet = "Clean_Data")
+    setDT(tennis_db)
+    return(tennis_db)
   } else {
-    # If file doesn't exist, return NULL and app will prompt user to upload
-    message("Historical score data not found in package. User will need to upload.")
+    message("Historical score data not found. User will need to upload.")
     return(NULL)
   }
 }
 
 # Load historical data
 SCORE_HISTORY <- load_historical_data()
+
+
+
 
 # Global constants
 DK_ROSTER_SIZE <- 6
@@ -170,6 +158,52 @@ probability_to_odds <- function(prob) {
   } else {
     return((100 - prob * 100) / prob)
   }
+}
+
+# NEW: Weighted pool function for similarity matching
+get_weighted_pool <- function(player_name, winner_prob, loser_prob, 
+                              tour, surface, best_of, straight_sets,
+                              top_n = 100, prob_band = 7.5, player_multiplier = 2) {
+  
+  # Store parameters in new variables to avoid column name conflicts
+  target_tour <- tour
+  target_surface <- surface
+  target_best_of <- best_of
+  target_straight_sets <- straight_sets
+  
+  # Filter using explicit parameter references
+  pool <- SCORE_HISTORY[
+    SCORE_HISTORY$tour == target_tour & 
+      SCORE_HISTORY$surface == target_surface & 
+      SCORE_HISTORY$best_of == target_best_of & 
+      SCORE_HISTORY$w_straight_sets == target_straight_sets
+  ]
+  
+  if (nrow(pool) == 0) return(NULL)
+  
+  pool[, odds_diff := abs(winner_prob_pct - winner_prob) + abs(loser_prob_pct - loser_prob)]
+  setorder(pool, odds_diff)
+  pool <- pool[1:min(top_n, .N)]
+  
+  pool[, base_weight := pmax(1, 11 - odds_diff)]
+  pool[, is_player := (winner_name == player_name)]
+  pool[, final_weight := ifelse(is_player, base_weight * player_multiplier, base_weight)]
+  pool[, final_weight := round(final_weight)]
+  
+  return(pool)
+}
+
+# NEW: Sample from weighted pool
+sample_from_pool <- function(pool, n_samples) {
+  if (is.null(pool) || nrow(pool) == 0) return(NULL)
+  
+  expanded_indices <- rep(1:nrow(pool), times = pool$final_weight)
+  sampled_indices <- sample(expanded_indices, n_samples, replace = TRUE)
+  
+  return(data.frame(
+    winner_score = pool$w_dk_score[sampled_indices],
+    loser_score = pool$l_dk_score[sampled_indices]
+  ))
 }
 
 # Memory management functions
@@ -573,7 +607,7 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
   hist_dt <- as.data.table(historical_data)
   
   # Create indexes on historical data
-  setkey(hist_dt, Tour, best_of, straight_sets)
+  setkey(hist_dt, tour, best_of, w_straight_sets)
   
   # Get all unique matches
   matches <- unique(dk_dt$`Game Info`)
@@ -684,34 +718,29 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
           winner_prob <- ifelse(outcome_info$winner == p1$Name, p1_ml_prob, p2_ml_prob)
           loser_prob <- ifelse(outcome_info$loser == p1$Name, p1_ml_prob, p2_ml_prob)
           
-          # Find similar historical matches
+          # Find similar historical matches (NEW WEIGHTED METHOD)
           tour <- p1$Tour
-          is_straight_sets <- as.integer(outcome_info$outcome == "SS")
+          is_straight_sets <- (outcome_info$outcome == "SS")
           best_of_value <- ifelse(tour == "WTA", 3, 5)
-          #best_of_value <- 3
           
-          similar_matches <- hist_dt[
-            Tour == tour & best_of == best_of_value & straight_sets == is_straight_sets
-          ]
+          # Get player name for this outcome
+          player_name <- p1$Name
           
-          if (nrow(similar_matches) < 10) {
-            similar_matches <- hist_dt[Tour == tour & best_of == best_of_value]
-          }
-          if (nrow(similar_matches) < 10) {
-            similar_matches <- hist_dt[Tour == tour]
-          }
+          # Get weighted pool using new function
+          outcome_pool <- get_weighted_pool(
+            player_name = player_name,
+            winner_prob = winner_prob,
+            loser_prob = loser_prob,
+            tour = tour,
+            surface = p1$Surface,
+            best_of = best_of_value,
+            straight_sets = is_straight_sets
+          )
           
-          if (nrow(similar_matches) > 0) {
-            # Calculate similarity and get top matches
-            similar_matches[, odds_diff := abs(WIO - winner_prob) + abs(LIO - loser_prob)]
-            setorder(similar_matches, odds_diff)
-            
-            n_similar <- min(50, nrow(similar_matches))
-            top_matches <- similar_matches[1:n_similar]
-            
-            # Pre-sample scores (generate enough for all simulations)
-            sample_size <- min(20000, n_simulations * 2)  # Extra buffer
-            sample_indices <- sample(1:n_similar, sample_size, replace = TRUE)
+          if (!is.null(outcome_pool) && nrow(outcome_pool) > 0) {
+            # Sample matches using new weighted method
+            sample_size <- min(20000, n_simulations * 2)
+            sampled_matches <- sample_from_pool(outcome_pool, sample_size)
             
             score_samples[[length(score_samples) + 1]] <- list(
               outcome_id = paste(outcome_info$winner, outcome_info$outcome, outcome_info$loser, sep = "_"),
@@ -719,12 +748,12 @@ run_batch_simulation <- function(dk_data, historical_data, n_simulations = 50000
               loser = outcome_info$loser,
               outcome = outcome_info$outcome,
               prob = outcome_info$prob,
-              winner_scores = top_matches$w_dk_score[sample_indices],
-              loser_scores = top_matches$l_dk_score[sample_indices],
-              sample_counter = 1  # Track which sample to use next
+              winner_scores = sampled_matches$winner_score,
+              loser_scores = sampled_matches$loser_score,
+              sample_counter = 1
             )
           } else {
-            # Default scores if no historical matches
+            # Fallback if no data
             score_samples[[length(score_samples) + 1]] <- list(
               outcome_id = paste(outcome_info$winner, outcome_info$outcome, outcome_info$loser, sep = "_"),
               winner = outcome_info$winner,
@@ -1244,7 +1273,7 @@ pre_simulate_matches <- function(dk_data, historical_data, n_samples = 10000) {
   hist_dt <- as.data.table(historical_data)
   
   # Create indexes on historical data for faster lookups - now including best_of
-  setkey(hist_dt, Tour, best_of, straight_sets)
+  setkey(hist_dt, tour, best_of, w_straight_sets)
   
   # Get all unique matches
   matches <- unique(dk_dt$`Game Info`)
@@ -2403,6 +2432,7 @@ ui <- dashboardPage(
       menuItem("Input Check", tabName = "upload", icon = icon("upload")),
       menuItem("Match Analysis", tabName = "match_analysis", icon = icon("chart-line")),
       menuItem("Fantasy Projections", tabName = "player_projections", icon = icon("calculator")),
+      menuItem("Score Distributions", tabName = "score_distributions", icon = icon("chart-area")),
       menuItem("Optimal Lineups", tabName = "optimal_lineups", icon = icon("trophy")),
       menuItem("Lineup Builder", tabName = "lineup_builder", icon = icon("percentage"))
     ),
@@ -2471,6 +2501,41 @@ ui <- dashboardPage(
                 box(width = 12,
                     title = "Player Score Distribution",
                     plotlyOutput("player_score_dist") %>% 
+                      withSpinner(color = "#FFD700")
+                )
+              )
+      ),
+      
+      # Score Distributions Tab
+      tabItem(tabName = "score_distributions",
+              fluidRow(
+                box(width = 12,
+                    title = "Player Selection",
+                    status = "primary",
+                    solidHeader = TRUE,
+                    checkboxGroupInput("players_to_plot", 
+                                       "Select Players to Display:",
+                                       choices = NULL,
+                                       selected = NULL,
+                                       inline = TRUE)
+                )
+              ),
+              fluidRow(
+                box(width = 12,
+                    title = "Overall Score Distribution (All Outcomes)",
+                    plotlyOutput("overall_violin_plot", height = "600px") %>% 
+                      withSpinner(color = "#FFD700")
+                )
+              ),
+              fluidRow(
+                box(width = 6,
+                    title = "Straight Set Wins",
+                    plotlyOutput("ss_violin_plot", height = "500px") %>% 
+                      withSpinner(color = "#FFD700")
+                ),
+                box(width = 6,
+                    title = "Non-Straight Set Wins",
+                    plotlyOutput("nss_violin_plot", height = "500px") %>% 
                       withSpinner(color = "#FFD700")
                 )
               )
@@ -3159,7 +3224,158 @@ server <- function(input, output, session) {
     gc(full = TRUE)
   })
   
+  # Update player selection for score distribution plots
+  observe({
+    req(rv$simulation_results)
+    
+    # Get unique players and order by match
+    if (!is.null(rv$dk_data)) {
+      players_ordered <- rv$dk_data %>%
+        arrange(`Game Info`) %>%
+        pull(Name)
+    } else {
+      players_ordered <- unique(rv$simulation_results$Player)
+    }
+    
+    updateCheckboxGroupInput(
+      session,
+      "players_to_plot",
+      choices = players_ordered,
+      selected = head(players_ordered, 6),  # Select first 6 by default
+      inline = FALSE
+    )
+  })
   
+  # Overall violin plot (all outcomes)
+  output$overall_violin_plot <- renderPlotly({
+    req(rv$simulation_results, input$players_to_plot)
+    
+    if (length(input$players_to_plot) == 0) {
+      return(NULL)
+    }
+    
+    # Filter to selected players and winning outcomes only
+    plot_data <- rv$simulation_results %>%
+      filter(Player %in% input$players_to_plot,
+             Result == "Winner") %>%
+      mutate(Player = factor(Player, levels = input$players_to_plot))
+    
+    # Calculate win rates for subtitle
+    win_rates <- plot_data %>%
+      group_by(Player) %>%
+      summarise(
+        total_sims = n(),
+        win_pct = (n() / max(rv$simulation_results$Iteration)) * 100,
+        .groups = "drop"
+      )
+    
+    # Create violin plot
+    p <- ggplot(plot_data, aes(x = Player, y = Score, fill = Player)) +
+      geom_violin(alpha = 0.6, trim = FALSE, scale = "width") +
+      geom_boxplot(width = 0.1, alpha = 0.8, outlier.shape = NA) +
+      stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +
+      coord_flip() +
+      labs(title = "Player Score Distributions (Winning Outcomes Only)",
+           x = "", y = "DK Score") +
+      theme_minimal() +
+      theme(legend.position = "none",
+            plot.title = element_text(face = "bold", size = 14))
+    
+    ggplotly(p, tooltip = c("y", "x")) %>%
+      layout(height = 600, margin = list(l = 150))
+  })
+  
+  # Straight Set Wins violin plot
+  output$ss_violin_plot <- renderPlotly({
+    req(rv$simulation_results, input$players_to_plot)
+    
+    if (length(input$players_to_plot) == 0) {
+      return(NULL)
+    }
+    
+    # Filter to SS wins only
+    plot_data <- rv$simulation_results %>%
+      filter(Player %in% input$players_to_plot,
+             Result == "Winner",
+             Outcome == "SS") %>%
+      mutate(Player = factor(Player, levels = input$players_to_plot))
+    
+    # Calculate SS win rates
+    ss_rates <- rv$simulation_results %>%
+      filter(Player %in% input$players_to_plot) %>%
+      group_by(Player) %>%
+      summarise(
+        ss_win_pct = mean(Result == "Winner" & Outcome == "SS") * 100,
+        .groups = "drop"
+      )
+    
+    # Add percentages to player names
+    plot_data <- plot_data %>%
+      left_join(ss_rates, by = "Player") %>%
+      mutate(Player_Label = paste0(Player, " (", round(ss_win_pct, 1), "%)"))
+    
+    # Create violin plot
+    p <- ggplot(plot_data, aes(x = reorder(Player_Label, ss_win_pct), y = Score, fill = Player)) +
+      geom_violin(alpha = 0.6, trim = FALSE, scale = "width") +
+      geom_boxplot(width = 0.1, alpha = 0.8, outlier.shape = NA) +
+      stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +
+      coord_flip() +
+      labs(title = "Straight Set Wins",
+           subtitle = "Percentages show probability of SS win",
+           x = "", y = "DK Score") +
+      theme_minimal() +
+      theme(legend.position = "none",
+            plot.title = element_text(face = "bold", size = 12))
+    
+    ggplotly(p, tooltip = c("y", "x")) %>%
+      layout(margin = list(l = 200))
+  })
+  
+  # Non-Straight Set Wins violin plot
+  output$nss_violin_plot <- renderPlotly({
+    req(rv$simulation_results, input$players_to_plot)
+    
+    if (length(input$players_to_plot) == 0) {
+      return(NULL)
+    }
+    
+    # Filter to NSS wins only
+    plot_data <- rv$simulation_results %>%
+      filter(Player %in% input$players_to_plot,
+             Result == "Winner",
+             Outcome == "NSS") %>%
+      mutate(Player = factor(Player, levels = input$players_to_plot))
+    
+    # Calculate NSS win rates
+    nss_rates <- rv$simulation_results %>%
+      filter(Player %in% input$players_to_plot) %>%
+      group_by(Player) %>%
+      summarise(
+        nss_win_pct = mean(Result == "Winner" & Outcome == "NSS") * 100,
+        .groups = "drop"
+      )
+    
+    # Add percentages to player names
+    plot_data <- plot_data %>%
+      left_join(nss_rates, by = "Player") %>%
+      mutate(Player_Label = paste0(Player, " (", round(nss_win_pct, 1), "%)"))
+    
+    # Create violin plot
+    p <- ggplot(plot_data, aes(x = reorder(Player_Label, nss_win_pct), y = Score, fill = Player)) +
+      geom_violin(alpha = 0.6, trim = FALSE, scale = "width") +
+      geom_boxplot(width = 0.1, alpha = 0.8, outlier.shape = NA) +
+      stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +
+      coord_flip() +
+      labs(title = "Non-Straight Set Wins",
+           subtitle = "Percentages show probability of NSS win",
+           x = "", y = "DK Score") +
+      theme_minimal() +
+      theme(legend.position = "none",
+            plot.title = element_text(face = "bold", size = 12))
+    
+    ggplotly(p, tooltip = c("y", "x")) %>%
+      layout(margin = list(l = 200))
+  })
   
   
   # Optimization status display
@@ -3436,6 +3652,171 @@ server <- function(input, output, session) {
       
       return(dt %>% formatCurrency('TotalSalary', currency = "$", digits = 0))
     }
+    
+    # Reactive to store comparable matches data
+    rv$comparable_matches <- NULL
+    
+    output$download_comparable_matches <- downloadHandler(
+      filename = function() {
+        paste0("tennis_comparable_matches_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+      },
+      content = function(file) {
+        req(rv$dk_data, SCORE_HISTORY)
+        
+        withProgress(message = 'Generating comparable matches...', value = 0, {
+          
+          all_comparable_matches <- list()
+          matches <- unique(rv$dk_data$`Game Info`)
+          
+          for (match_idx in seq_along(matches)) {
+            match_name <- matches[match_idx]
+            incProgress(1/length(matches), detail = paste("Processing", match_name))
+            
+            match_players <- rv$dk_data[rv$dk_data$`Game Info` == match_name, ]
+            
+            if (nrow(match_players) != 2) next
+            
+            p1 <- match_players[1, ]
+            p2 <- match_players[2, ]
+            
+            # Skip walkover matches
+            is_walkover <- any(c(p1$Tour, p2$Tour) %in% c("WD", "WO"))
+            if (is_walkover) next
+            
+            # Calculate probabilities (same as simulation)
+            p1_ml <- odds_to_probability(as.numeric(p1$ML))
+            p2_ml <- odds_to_probability(as.numeric(p2$ML))
+            total_ml_prob <- p1_ml + p2_ml
+            p1_ml_prob <- p1_ml / total_ml_prob
+            p2_ml_prob <- p2_ml / total_ml_prob
+            
+            # Calculate SS probabilities
+            p1_ss <- odds_to_probability(as.numeric(p1$SS))
+            p2_ss <- odds_to_probability(as.numeric(p2$SS))
+            p1_nss <- p1_ml - p1_ss
+            p2_nss <- p2_ml - p2_ss
+            
+            # Normalize
+            p1_ss_prob <- p1_ss / total_ml_prob
+            p2_ss_prob <- p2_ss / total_ml_prob
+            p1_nss_prob <- p1_nss / total_ml_prob
+            p2_nss_prob <- p2_nss / total_ml_prob
+            
+            # Convert to percentages
+            p1_ml_prob_pct <- p1_ml_prob * 100
+            p2_ml_prob_pct <- p2_ml_prob * 100
+            
+            # Determine best_of SAME WAY AS SIMULATION
+            tour <- p1$Tour
+            best_of_value <- ifelse(tour == "WTA", 3, 5)
+            
+            # For each player and outcome type
+            for (player_idx in 1:2) {
+              current_player <- match_players[player_idx, ]
+              player_name <- current_player$Name
+              
+              if (player_idx == 1) {
+                winner_prob <- p1_ml_prob_pct
+                loser_prob <- p2_ml_prob_pct
+              } else {
+                winner_prob <- p2_ml_prob_pct
+                loser_prob <- p1_ml_prob_pct
+              }
+              
+              # Get comparable matches for both SS and NSS
+              for (is_ss in c(TRUE, FALSE)) {
+                
+                outcome_label <- ifelse(is_ss, "SS", "NSS")
+                
+                cat(sprintf("\nGetting pool for: %s, Outcome: %s\n", player_name, outcome_label))
+                cat(sprintf("  Filters: tour=%s, surface=%s, best_of=%d, straight_sets=%s\n",
+                            current_player$Tour, current_player$Surface, best_of_value, is_ss))
+                
+                # Get weighted pool
+                comparable_pool <- get_weighted_pool(
+                  player_name = player_name,
+                  winner_prob = winner_prob,
+                  loser_prob = loser_prob,
+                  tour = current_player$Tour,
+                  surface = current_player$Surface,
+                  best_of = best_of_value,
+                  straight_sets = is_ss,
+                  top_n = 100,
+                  prob_band = 7.5,
+                  player_multiplier = 2
+                )
+                
+                if (!is.null(comparable_pool) && nrow(comparable_pool) > 0) {
+                  
+                  cat(sprintf("  Found %d comparable matches\n", nrow(comparable_pool)))
+                  
+                  # VERIFY the filters worked
+                  verify_tour <- all(comparable_pool$tour == current_player$Tour)
+                  verify_surface <- all(comparable_pool$surface == current_player$Surface)
+                  verify_best_of <- all(comparable_pool$best_of == best_of_value)
+                  verify_ss <- all(comparable_pool$w_straight_sets == is_ss)
+                  
+                  if (!verify_tour || !verify_surface || !verify_best_of || !verify_ss) {
+                    cat("  WARNING: Filter verification FAILED!\n")
+                    cat(sprintf("    Tour match: %s, Surface match: %s, BestOf match: %s, SS match: %s\n",
+                                verify_tour, verify_surface, verify_best_of, verify_ss))
+                  }
+                  
+                  # Add metadata
+                  export_data <- data.frame(
+                    Target_Player = player_name,
+                    Target_Match = match_name,
+                    Target_Outcome = outcome_label,
+                    Target_Tour = current_player$Tour,
+                    Target_Surface = current_player$Surface,
+                    Target_BestOf = best_of_value,
+                    Target_WinProb = round(winner_prob, 1),
+                    Target_LossProb = round(loser_prob, 1),
+                    Historical_Winner = comparable_pool$winner_name,
+                    Historical_Loser = comparable_pool$loser_name,
+                    Historical_Tour = comparable_pool$tour,
+                    Historical_Surface = comparable_pool$surface,
+                    Historical_BestOf = comparable_pool$best_of,
+                    Historical_StraightSets = comparable_pool$w_straight_sets,
+                    Historical_WinProb = round(comparable_pool$winner_prob_pct, 1),
+                    Historical_LossProb = round(comparable_pool$loser_prob_pct, 1),
+                    Odds_Difference = round(comparable_pool$odds_diff, 2),
+                    Winner_Score = comparable_pool$w_dk_score,
+                    Loser_Score = comparable_pool$l_dk_score,
+                    Is_Player_Match = comparable_pool$is_player,
+                    Base_Weight = comparable_pool$base_weight,
+                    Final_Weight = comparable_pool$final_weight,
+                    stringsAsFactors = FALSE
+                  )
+                  
+                  all_comparable_matches[[length(all_comparable_matches) + 1]] <- export_data
+                } else {
+                  cat("  No comparable matches found\n")
+                }
+              }
+            }
+          }
+          
+          # Combine all data
+          if (length(all_comparable_matches) > 0) {
+            final_data <- bind_rows(all_comparable_matches)
+            
+            # Sort by player, outcome, then weight
+            final_data <- final_data %>%
+              arrange(Target_Player, Target_Outcome, desc(Final_Weight))
+            
+            write.csv(final_data, file, row.names = FALSE)
+            
+            cat(sprintf("\nExported %d comparable matches for %d players\n", 
+                        nrow(final_data), 
+                        length(unique(final_data$Target_Player))))
+          } else {
+            write.csv(data.frame(Message = "No comparable matches found"), file, row.names = FALSE)
+          }
+        })
+      }
+    )
+    
     
     # CLASSIC DISPLAY (original code follows)
     # Use ranked data if available, otherwise fall back to unranked
@@ -3914,28 +4295,28 @@ server <- function(input, output, session) {
     
     if (slate_size <= 10) {
       # 8-10 matches cash
-      updateSliderInput(session, "weight_totalew", value = 3)
+      updateSliderInput(session, "weight_totalew", value = 0)
       updateSliderInput(session, "weight_win6pct", value = 0)
-      updateSliderInput(session, "weight_win5pluspct", value = 3)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
       updateSliderInput(session, "weight_top1count", value = 2)
-      updateSliderInput(session, "weight_score80th", value = 0)
-      updateSliderInput(session, "weight_medianscore", value = 2)
+      updateSliderInput(session, "weight_score80th", value = 2)
+      updateSliderInput(session, "weight_medianscore", value = 4)
     } else if (slate_size <= 16) {
       # 11-16 matches cash
-      updateSliderInput(session, "weight_totalew", value = 3)
-      updateSliderInput(session, "weight_win6pct", value = 0)
-      updateSliderInput(session, "weight_win5pluspct", value = 3)
-      updateSliderInput(session, "weight_top1count", value = 1)
-      updateSliderInput(session, "weight_score80th", value = 1)
-      updateSliderInput(session, "weight_medianscore", value = 2)
-    } else {
-      # 16+ matches cash
       updateSliderInput(session, "weight_totalew", value = 2)
-      updateSliderInput(session, "weight_win6pct", value = 3)
-      updateSliderInput(session, "weight_win5pluspct", value = 1)
+      updateSliderInput(session, "weight_win6pct", value = 0)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
       updateSliderInput(session, "weight_top1count", value = 0)
       updateSliderInput(session, "weight_score80th", value = 2)
-      updateSliderInput(session, "weight_medianscore", value = 2)
+      updateSliderInput(session, "weight_medianscore", value = 4)
+    } else {
+      # 16+ matches cash
+      updateSliderInput(session, "weight_totalew", value = 0)
+      updateSliderInput(session, "weight_win6pct", value = 2)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
+      updateSliderInput(session, "weight_top1count", value = 0)
+      updateSliderInput(session, "weight_score80th", value = 2)
+      updateSliderInput(session, "weight_medianscore", value = 4)
     }
     showNotification("Cash game strategy applied!", type = "message")
   })
@@ -3946,26 +4327,26 @@ server <- function(input, output, session) {
     if (slate_size <= 10) {
       # 8-10 matches GPP
       updateSliderInput(session, "weight_totalew", value = 0)
-      updateSliderInput(session, "weight_win6pct", value = 0)
-      updateSliderInput(session, "weight_win5pluspct", value = 3)
-      updateSliderInput(session, "weight_top1count", value = 6)
-      updateSliderInput(session, "weight_score80th", value = 1)
+      updateSliderInput(session, "weight_win6pct", value = 1)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
+      updateSliderInput(session, "weight_top1count", value = 5)
+      updateSliderInput(session, "weight_score80th", value = 2)
       updateSliderInput(session, "weight_medianscore", value = 0)
     } else if (slate_size <= 16) {
       # 11-16 matches GPP
       updateSliderInput(session, "weight_totalew", value = 0)
       updateSliderInput(session, "weight_win6pct", value = 5)
-      updateSliderInput(session, "weight_win5pluspct", value = 2)
+      updateSliderInput(session, "weight_win5pluspct", value = 0)
       updateSliderInput(session, "weight_top1count", value = 2)
-      updateSliderInput(session, "weight_score80th", value = 1)
+      updateSliderInput(session, "weight_score80th", value = 3)
       updateSliderInput(session, "weight_medianscore", value = 0)
     } else {
       # 16+ matches GPP
       updateSliderInput(session, "weight_totalew", value = 0)
-      updateSliderInput(session, "weight_win6pct", value = 7)
-      updateSliderInput(session, "weight_win5pluspct", value = 1)
+      updateSliderInput(session, "weight_win6pct", value = 6)
+      updateSliderInput(session, "weight_win5pluspct", value = 0)
       updateSliderInput(session, "weight_top1count", value = 1)
-      updateSliderInput(session, "weight_score80th", value = 1)
+      updateSliderInput(session, "weight_score80th", value = 4)
       updateSliderInput(session, "weight_medianscore", value = 0)
     }
     showNotification("GPP strategy applied!", type = "message")
@@ -3977,26 +4358,26 @@ server <- function(input, output, session) {
     if (slate_size <= 10) {
       # 8-10 matches SE
       updateSliderInput(session, "weight_totalew", value = 0)
-      updateSliderInput(session, "weight_win6pct", value = 0)
-      updateSliderInput(session, "weight_win5pluspct", value = 5)
+      updateSliderInput(session, "weight_win6pct", value = 2)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
       updateSliderInput(session, "weight_top1count", value = 3)
-      updateSliderInput(session, "weight_score80th", value = 2)
+      updateSliderInput(session, "weight_score80th", value = 3)
       updateSliderInput(session, "weight_medianscore", value = 0)
     } else if (slate_size <= 16) {
       # 11-16 matches SE
-      updateSliderInput(session, "weight_totalew", value = 1)
-      updateSliderInput(session, "weight_win6pct", value = 3)
-      updateSliderInput(session, "weight_win5pluspct", value = 3)
+      updateSliderInput(session, "weight_totalew", value = 0)
+      updateSliderInput(session, "weight_win6pct", value = 4)
+      updateSliderInput(session, "weight_win5pluspct", value = 2)
       updateSliderInput(session, "weight_top1count", value = 2)
-      updateSliderInput(session, "weight_score80th", value = 1)
+      updateSliderInput(session, "weight_score80th", value = 2)
       updateSliderInput(session, "weight_medianscore", value = 0)
     } else {
       # 16+ matches SE
-      updateSliderInput(session, "weight_totalew", value = 1)
+      updateSliderInput(session, "weight_totalew", value = 0)
       updateSliderInput(session, "weight_win6pct", value = 5)
       updateSliderInput(session, "weight_win5pluspct", value = 2)
       updateSliderInput(session, "weight_top1count", value = 1)
-      updateSliderInput(session, "weight_score80th", value = 1)
+      updateSliderInput(session, "weight_score80th", value = 2)
       updateSliderInput(session, "weight_medianscore", value = 0)
     }
     showNotification("Single Entry strategy applied!", type = "message")
