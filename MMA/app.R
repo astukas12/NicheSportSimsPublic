@@ -6947,6 +6947,9 @@ server <- function(input, output, session) {
       # Combine all builds
       all_lineups <- do.call(rbind, lapply(rv$dk_lineup_builds, function(b) b$lineups))
       
+      # Randomize the order
+      all_lineups <- all_lineups[sample(nrow(all_lineups)), ]
+      
       # Create a copy for downloading
       download_data <- as.data.frame(all_lineups)
       
