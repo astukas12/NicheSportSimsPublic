@@ -4251,12 +4251,20 @@ server <- function(input, output, session) {
               
               # Lock/Exclude/Label/Count
               fluidRow(
-                column(3, selectizeInput("sd_locked_fighters", "Lock Fighters:", 
+                column(3, selectizeInput("sd_locked_captain", "Lock Captain:", 
+                                         choices = if(!is.null(rv$sd_optimal_lineups)) {
+                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
+                                             captains <- unique(rv$sd_optimal_lineups$Captain)
+                                             captains <- captains[!is.na(captains) & captains != ""]
+                                             c("None" = "", sort(captains))
+                                           } else NULL
+                                         } else NULL,
+                                         multiple = FALSE, selected = "",
+                                         options = list(placeholder = 'Lock captain (optional)'))),
+                
+                column(3, selectizeInput("sd_locked_fighters", "Lock Fighters (non-captain):", 
                                          choices = if(!is.null(rv$sd_optimal_lineups)) {
                                            all_fighters <- c()
-                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
-                                             all_fighters <- c(all_fighters, rv$sd_optimal_lineups$Captain)
-                                           }
                                            for(i in 1:5) {
                                              col <- paste0("Fighter", i)
                                              if(col %in% names(rv$sd_optimal_lineups)) {
@@ -4270,12 +4278,22 @@ server <- function(input, output, session) {
                                          options = list(plugins = list('remove_button'), 
                                                         placeholder = 'Lock fighters (optional)',
                                                         maxItems = 5))),
-                column(3, selectizeInput("sd_excluded_fighters", "Exclude Fighters:", 
+                
+                column(3, selectizeInput("sd_excluded_captain", "Exclude Captain:", 
+                                         choices = if(!is.null(rv$sd_optimal_lineups)) {
+                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
+                                             captains <- unique(rv$sd_optimal_lineups$Captain)
+                                             captains <- captains[!is.na(captains) & captains != ""]
+                                             sort(captains)
+                                           } else NULL
+                                         } else NULL,
+                                         multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Exclude captains'))),
+                
+                column(3, selectizeInput("sd_excluded_fighters", "Exclude Fighters (non-captain):", 
                                          choices = if(!is.null(rv$sd_optimal_lineups)) {
                                            all_fighters <- c()
-                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
-                                             all_fighters <- c(all_fighters, rv$sd_optimal_lineups$Captain)
-                                           }
                                            for(i in 1:5) {
                                              col <- paste0("Fighter", i)
                                              if(col %in% names(rv$sd_optimal_lineups)) {
@@ -4287,10 +4305,18 @@ server <- function(input, output, session) {
                                          } else NULL,
                                          multiple = TRUE,
                                          options = list(plugins = list('remove_button'), 
-                                                        placeholder = 'Exclude fighters'))),
+                                                        placeholder = 'Exclude fighters')))
+              ),
+              
+              # Build label and lineup count on second row
+              fluidRow(
                 column(3, textInput("sd_build_label", "Build Label:", 
                                     value = "", 
                                     placeholder = "e.g., 'Chalk', 'Contrarian'")),
+                column(3, numericInput("sd_num_random_lineups", "Number of Lineups:", 
+                                       value = 20, min = 1, max = 150)),
+                column(6, "")  # Empty columns
+              ),
                 column(3, numericInput("sd_num_random_lineups", "Number of Lineups:", 
                                        value = 20, min = 1, max = 150))
               ),
@@ -4364,7 +4390,6 @@ server <- function(input, output, session) {
               solidHeader = TRUE,
               DTOutput("sd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
-      )
     )
   })
   
@@ -7533,7 +7558,7 @@ server <- function(input, output, session) {
   output$sd_filtered_pool_stats_table <- renderDT({
     req(rv$simulation_complete)
     
-    filtered_pool <- sd_filtered_optimal_lineups()
+    filtered_pool <- as.data.frame(sd_filtered_optimal_lineups())
     
     if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
       return(datatable(data.frame(Message = "No lineups in filtered pool"),
@@ -7735,27 +7760,36 @@ server <- function(input, output, session) {
         Top5Count >= input$sd_min_top5_count
       )
     
-    # Apply exclude filter
-    if(!is.null(input$sd_excluded_fighters) && length(input$sd_excluded_fighters) > 0) {
-      # FIXED: Use Fighter1-5 instead of Player1-5
-      fighter_cols <- c("Captain", paste0("Fighter", 1:5))
-      
-      for(excluded_fighter in input$sd_excluded_fighters) {
-        for(col in fighter_cols) {
-          if(col %in% names(filtered)) {
-            filtered <- filtered[filtered[[col]] != excluded_fighter, ]
-          }
-        }
+    cat("After Top filters:", nrow(filtered), "lineups\n")
+    
+    # Apply CAPTAIN LOCK (single captain)
+    if(!is.null(input$sd_locked_captain) && input$sd_locked_captain != "") {
+      if("Captain" %in% names(filtered)) {
+        before <- nrow(filtered)
+        filtered <- filtered[filtered$Captain == input$sd_locked_captain, ]
+        cat("After captain lock (", input$sd_locked_captain, "):", nrow(filtered), 
+            "(removed", before - nrow(filtered), ")\n")
       }
     }
     
-    # Apply lock filter
+    # Apply CAPTAIN EXCLUDE (multiple captains)
+    if(!is.null(input$sd_excluded_captain) && length(input$sd_excluded_captain) > 0) {
+      if("Captain" %in% names(filtered)) {
+        before <- nrow(filtered)
+        for(excluded_captain in input$sd_excluded_captain) {
+          filtered <- filtered[filtered$Captain != excluded_captain, ]
+        }
+        cat("After captain exclude:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+      }
+    }
+    
+    # Apply FIGHTER LOCK (non-captain positions: Fighter1-5)
     if(!is.null(input$sd_locked_fighters) && length(input$sd_locked_fighters) > 0) {
-      # FIXED: Use Fighter1-5 instead of Player1-5
-      fighter_cols <- c("Captain", paste0("Fighter", 1:5))
+      fighter_cols <- paste0("Fighter", 1:5)
       
       for(locked_fighter in input$sd_locked_fighters) {
-        # Keep only lineups that contain this fighter
+        before <- nrow(filtered)
+        # Keep only lineups that contain this fighter in Fighter1-5 positions
         has_fighter <- rep(FALSE, nrow(filtered))
         for(col in fighter_cols) {
           if(col %in% names(filtered)) {
@@ -7763,8 +7797,27 @@ server <- function(input, output, session) {
           }
         }
         filtered <- filtered[has_fighter, ]
+        cat("After fighter lock (", locked_fighter, "):", nrow(filtered), 
+            "(removed", before - nrow(filtered), ")\n")
       }
     }
+    
+    # Apply FIGHTER EXCLUDE (non-captain positions: Fighter1-5)
+    if(!is.null(input$sd_excluded_fighters) && length(input$sd_excluded_fighters) > 0) {
+      fighter_cols <- paste0("Fighter", 1:5)
+      
+      before <- nrow(filtered)
+      for(excluded_fighter in input$sd_excluded_fighters) {
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            filtered <- filtered[filtered[[col]] != excluded_fighter, ]
+          }
+        }
+      }
+      cat("After fighter exclude:", nrow(filtered), "(removed", before - nrow(filtered), ")\n")
+    }
+    
+    cat("Final filtered pool:", nrow(filtered), "lineups\n\n")
     
     return(filtered)
   })
@@ -8299,7 +8352,10 @@ server <- function(input, output, session) {
       # Combine all builds
       all_lineups <- do.call(rbind, lapply(rv$sd_lineup_builds, function(b) b$lineups))
       
-      # Create a copy for downloading
+      # Randomize the order
+      all_lineups <- all_lineups[sample(nrow(all_lineups)), ]
+      
+       # Create a copy for downloading
       download_data <- as.data.frame(all_lineups)
       
       # Create a name-to-SDID mapping from the simulation results
