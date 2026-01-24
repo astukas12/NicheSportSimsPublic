@@ -435,7 +435,7 @@ run_contest_simulator_optimized <- function(optimal_lineups, simulation_results,
   # OPTIMIZATION: Pre-calculate ALL chalk scores for ALL simulations ONCE
   cat("Pre-calculating chalk field scores for all simulations...\n")
   chalk_scores_matrix <- precalculate_all_chalk_scores(chalk_field, score_matrix, platform)
-  cat("✓ Chalk scores pre-calculated\n\n")
+  cat("b Chalk scores pre-calculated\n\n")
   
   cat("=== Starting Contest Simulations ===\n")
   
@@ -2491,6 +2491,7 @@ count_sd_optimal_lineups <- function(sim_results) {
 }
 
 
+
 # Calculate SD fighter exposure
 calculate_sd_fighter_exposure <- function(optimal_lineups, fighter_info, random_lineups = NULL) {
   if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
@@ -2605,86 +2606,6 @@ calculate_sd_filtered_pool_stats <- function(optimal_lineups, filters) {
   return(list(count = nrow(filtered_lineups)))
 }
 
-# Generate random SD lineups
-generate_random_sd_lineups <- function(optimal_lineups, filters) {
-  setDT(optimal_lineups)
-  filtered_lineups <- copy(optimal_lineups)
-  
-  # Apply filters
-  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
-  }
-  
-  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
-  }
-  
-  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
-  }
-  
-  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
-  }
-  
-  # Apply fighter exclusion filter
-  if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
-    fighter_cols <- c("Captain", paste0("Fighter", 1:5))
-    to_exclude <- rep(FALSE, nrow(filtered_lineups))
-    
-    for(col in fighter_cols) {
-      if(col %in% names(filtered_lineups)) {
-        to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_fighters
-      }
-    }
-    
-    filtered_lineups <- filtered_lineups[!to_exclude]
-  }
-  
-  # Check if any lineups match filters
-  if (nrow(filtered_lineups) == 0) {
-    return(NULL)
-  }
-  
-  # Sample lineups using Top1Count as weight
-  weight_col <- "Top1Count"
-  selected_lineups <- data.table()
-  selected_indices <- integer(0)
-  
-  attempts <- 0
-  max_attempts <- filters$num_lineups * 10
-  
-  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
-    attempts <- attempts + 1
-    
-    # Available lineups
-    available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0) break
-    
-    # Sample based on weights
-    weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
-    
-    selected_idx <- tryCatch({
-      sample(available_indices, 1, prob = weights)
-    }, error = function(e) {
-      sample(available_indices, 1)
-    })
-    
-    # Add lineup immediately
-    selected_lineups <- rbind(selected_lineups, filtered_lineups[selected_idx])
-    selected_indices <- c(selected_indices, selected_idx)
-  }
-  
-  if (nrow(selected_lineups) == 0) return(NULL)
-  
-  # Keep only needed columns
-  keep_cols <- c("Captain", paste0("Fighter", 1:5), 
-                 "Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalSalary")
-  keep_cols <- intersect(keep_cols, names(selected_lineups))
-  
-  return(as.data.frame(selected_lineups[, ..keep_cols]))
-}
 
 
 
@@ -2874,273 +2795,6 @@ calculate_dk_filtered_pool_stats <- function(optimal_lineups, filters) {
 }
 
 
-
-# Simplified DraftKings random lineup generation
-generate_random_dk_lineups <- function(optimal_lineups, filters) {
-  # Convert to data.table for efficiency
-  setDT(optimal_lineups)
-  filtered_lineups <- copy(optimal_lineups)
-  
-  # Apply filters
-  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
-  }
-  
-  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
-  }
-  
-  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
-  }
-  
-  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
-  }
-  
-  
-  # Apply ownership range filters
-  if (!is.null(filters$cumulative_ownership_range) && length(filters$cumulative_ownership_range) == 2 && "CumulativeOwnership" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[CumulativeOwnership >= filters$cumulative_ownership_range[1] & 
-                                           CumulativeOwnership <= filters$cumulative_ownership_range[2]]
-  }
-  
-  if (!is.null(filters$geometric_mean_range) && length(filters$geometric_mean_range) == 2 && "GeometricMeanOwnership" %in% names(filtered_lineups)) {
-    filtered_lineups <- filtered_lineups[GeometricMeanOwnership >= filters$geometric_mean_range[1] & 
-                                           GeometricMeanOwnership <= filters$geometric_mean_range[2]]
-  }
-  
-  # Check if any lineups match filters
-  if (nrow(filtered_lineups) == 0) {
-    return(NULL)
-  }
-  
-  # Prepare for tracking
-  fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
-  all_fighters <- unique(unlist(filtered_lineups[, ..fighter_cols]))
-  fighter_counts <- setNames(numeric(length(all_fighters)), all_fighters)
-  
-  # Sample lineups using Top1Count as weight
-  weight_col <- "Top1Count"
-  selected_lineups <- data.table()
-  selected_indices <- integer(0)
-  
-  # Sampling with minimal attempt tracking
-  attempts <- 0
-  max_attempts <- filters$num_lineups * 10
-  
-  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
-    attempts <- attempts + 1
-    
-    # Available lineups
-    available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0) break
-    
-    # Sample based on weights
-    weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
-    
-    selected_idx <- tryCatch({
-      sample(available_indices, 1, prob = weights)
-    }, error = function(e) {
-      sample(available_indices, 1)
-    })
-    
-    # Add lineup immediately
-    selected_lineups <- rbind(selected_lineups, filtered_lineups[selected_idx])
-    selected_indices <- c(selected_indices, selected_idx)
-    
-    # Update fighter counts for exposure calculation
-    candidates_fighters <- unlist(filtered_lineups[selected_idx, ..fighter_cols])
-    fighter_counts[candidates_fighters] <- fighter_counts[candidates_fighters] + 1
-  }
-  
-  if (nrow(selected_lineups) == 0) return(NULL)
-  
-  # Calculate exposure for attribute
-  final_exposure <- (fighter_counts / nrow(selected_lineups)) * 100
-  attr(selected_lineups, "exposure") <- final_exposure
-  
-  # Keep only needed columns
-  keep_cols <- c(fighter_cols, "Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalSalary")
-  keep_cols <- intersect(keep_cols, names(selected_lineups))
-  
-  if(!is.null(selected_lineups) && nrow(selected_lineups) > 0) {
-    # Create ownership mapping from fighter_counts attribute or calculate from filtered_lineups
-    ownership_map <- NULL
-    if(!is.null(filtered_lineups) && "DKOwn" %in% names(filtered_lineups)) {
-      # Get ownership data from the first occurrence of each fighter
-      ownership_data <- filtered_lineups[, .(DKOwn = first(DKOwn)), by = Name]
-      ownership_map <- setNames(ownership_data$DKOwn, ownership_data$Name)
-    }
-    
-    if(!is.null(ownership_map)) {
-      selected_lineups <- calculate_lineup_ownership_stats(selected_lineups, ownership_map, "dk")
-    }
-  }
-  
-  return(as.data.frame(selected_lineups[, ..keep_cols]))
-}
-
-generate_random_fd_lineups <- function(optimal_lineups, filters) {
-  # Apply filters with early return if empty
-  if(is.null(optimal_lineups) || nrow(optimal_lineups) == 0) {
-    return(NULL)
-  }
-  
-  # Convert to data.table for better performance
-  filtered_lineups <- as.data.table(optimal_lineups)
-  
-  # Apply min threshold filters efficiently with data.table syntax
-  if (!is.null(filters$min_top1_count) && filters$min_top1_count > 0) {
-    filtered_lineups <- filtered_lineups[Top1Count >= filters$min_top1_count]
-  }
-  
-  if (!is.null(filters$min_top2_count) && filters$min_top2_count > 0) {
-    filtered_lineups <- filtered_lineups[Top2Count >= filters$min_top2_count]
-  }
-  
-  if (!is.null(filters$min_top3_count) && filters$min_top3_count > 0) {
-    filtered_lineups <- filtered_lineups[Top3Count >= filters$min_top3_count]
-  }
-  
-  if (!is.null(filters$min_top5_count) && filters$min_top5_count > 0) {
-    filtered_lineups <- filtered_lineups[Top5Count >= filters$min_top5_count]
-  }
-  
-  # Exclude specific fighters efficiently
-  if (!is.null(filters$excluded_fighters) && length(filters$excluded_fighters) > 0) {
-    fighter_cols <- paste0("Fighter", 1:FD_ROSTER_SIZE)
-    to_exclude <- rep(FALSE, nrow(filtered_lineups))
-    
-    for(col in fighter_cols) {
-      to_exclude <- to_exclude | filtered_lineups[[col]] %in% filters$excluded_fighters
-    }
-    
-    # Also check MVP column
-    if("MVP" %in% names(filtered_lineups)) {
-      to_exclude <- to_exclude | filtered_lineups$MVP %in% filters$excluded_fighters
-    }
-    
-    filtered_lineups <- filtered_lineups[!to_exclude]
-  }
-  
-  # Early return if no lineups match the filters
-  if (nrow(filtered_lineups) == 0) {
-    return(NULL)
-  }
-  
-  # Pre-allocate for tracking
-  fighter_cols <- paste0("Fighter", 1:FD_ROSTER_SIZE)
-  all_fighters <- unique(unlist(filtered_lineups[, ..fighter_cols]))
-  fighter_counts <- setNames(numeric(length(all_fighters)), all_fighters)
-  
-  # Track MVP selections separately
-  mvp_fighters <- NULL
-  if("MVP" %in% names(filtered_lineups)) {
-    mvp_fighters <- unique(filtered_lineups$MVP)
-    mvp_counts <- setNames(numeric(length(mvp_fighters)), mvp_fighters)
-  }
-  
-  # Use the selected lineups data.table
-  selected_lineups <- data.table()
-  selected_indices <- integer(0)
-  
-  # Use Top1Count as weight for sampling
-  weight_col <- "Top1Count"
-  
-  # Sampling loop with early termination if we can't find enough lineups
-  attempts <- 0
-  max_attempts <- filters$num_lineups * 10
-  
-  # For logging progress
-  if(filters$num_lineups > 50) {
-    cat("Generating", filters$num_lineups, "FanDuel lineups from a pool of", 
-        nrow(filtered_lineups), "filtered lineups...\n")
-  }
-  
-  # Progress reporting for larger lineup sets
-  report_interval <- max(1, ceiling(filters$num_lineups / 5))
-  
-  while (nrow(selected_lineups) < filters$num_lineups && attempts < max_attempts) {
-    attempts <- attempts + 1
-    
-    # Available lineups (those not already selected)
-    available_indices <- setdiff(1:nrow(filtered_lineups), selected_indices)
-    if (length(available_indices) == 0) break
-    
-    # Sample based on weights (probabilities) - handle edge cases
-    weights <- filtered_lineups[[weight_col]][available_indices]
-    if (sum(weights) == 0) weights <- rep(1, length(available_indices))
-    
-    selected_idx <- tryCatch({
-      sample(available_indices, 1, prob = weights)
-    }, error = function(e) {
-      sample(available_indices, 1)
-    })
-    
-    # Get the selected lineup
-    candidate_lineup <- filtered_lineups[selected_idx]
-    
-    # Get fighters from this lineup
-    candidate_fighters <- unlist(candidate_lineup[, ..fighter_cols])
-    
-    # Update fighter counts
-    for(fighter in candidate_fighters) {
-      fighter_counts[fighter] <- fighter_counts[fighter] + 1
-    }
-    
-    # Track MVP separately
-    if("MVP" %in% names(candidate_lineup)) {
-      mvp <- candidate_lineup$MVP
-      if(!is.null(mvp) && mvp %in% names(mvp_counts)) {
-        mvp_counts[mvp] <- mvp_counts[mvp] + 1
-      }
-    }
-    
-    # Add lineup unconditionally
-    selected_lineups <- rbind(selected_lineups, candidate_lineup)
-    selected_indices <- c(selected_indices, selected_idx)
-    
-    # Progress reporting for larger lineup sets
-    if(filters$num_lineups > 50 && nrow(selected_lineups) %% report_interval == 0) {
-      cat("Generated", nrow(selected_lineups), "of", filters$num_lineups, "lineups...\n")
-    }
-    
-    # Periodic cleanup for very large lineup sets
-    if (attempts %% 1000 == 0) gc(verbose = FALSE)
-  }
-  
-  # Return NULL if no lineups were selected
-  if (nrow(selected_lineups) == 0) return(NULL)
-  
-  # Calculate exposure percentages for each fighter
-  final_exposure <- (fighter_counts / nrow(selected_lineups)) * 100
-  attr(selected_lineups, "exposure") <- final_exposure
-  
-  # Calculate MVP exposure if available
-  if(!is.null(mvp_counts)) {
-    mvp_exposure <- (mvp_counts / nrow(selected_lineups)) * 100
-    attr(selected_lineups, "mvp_exposure") <- mvp_exposure
-  }
-  
-  if(!is.null(selected_lineups) && nrow(selected_lineups) > 0) {
-    # Create ownership mapping from fighter_counts attribute or calculate from filtered_lineups
-    ownership_map <- NULL
-    if(!is.null(filtered_lineups) && "FDOwn" %in% names(filtered_lineups)) {
-      # Get ownership data from the first occurrence of each fighter
-      ownership_data <- filtered_lineups[, .(FDOwn = first(FDOwn)), by = Name]
-      ownership_map <- setNames(ownership_data$FDOwn, ownership_data$Name)
-    }
-    
-    if(!is.null(ownership_map)) {
-      selected_lineups <- calculate_lineup_ownership_stats(selected_lineups, ownership_map, "fd")
-    }
-  }
-  
-  # Return the data frame with exposure attribute
-  return(as.data.frame(selected_lineups))
-}
 
 calculate_dk_fighter_exposure <- function(optimal_lineups, fantasy_analysis, random_lineups = NULL) {
   # Quick validation
@@ -3645,14 +3299,20 @@ server <- function(input, output, session) {
     fd_fantasy_analysis = NULL,
     dk_optimal_lineups = NULL,
     fd_optimal_lineups = NULL,
+    sd_optimal_lineups = NULL,
     dk_fighter_exposure = NULL,
     fd_fighter_exposure = NULL,
+    sd_fighter_exposure = NULL,
     dk_random_lineups = NULL,
     fd_random_lineups = NULL,
+    sd_random_lineups = NULL,
     file_uploaded = FALSE,
     simulation_complete = FALSE,
     contest_sim_results = NULL,
-    contest_chalk_field = NULL
+    contest_chalk_field = NULL,
+    dk_lineup_builds = list(),
+    fd_lineup_builds = list(),
+    sd_lineup_builds = list()
   )
   
   
@@ -4057,6 +3717,39 @@ server <- function(input, output, session) {
              legend = list(orientation = "h", y = -0.2))
   })
   
+  observeEvent(rv$dk_optimal_lineups, {
+    if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
+      
+      # Get all unique fighters from optimal lineups
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      all_fighters <- c()
+      
+      for(col in fighter_cols) {
+        if(col %in% names(rv$dk_optimal_lineups)) {
+          all_fighters <- c(all_fighters, rv$dk_optimal_lineups[[col]])
+        }
+      }
+      
+      all_fighters <- unique(all_fighters)
+      all_fighters <- all_fighters[!is.na(all_fighters) & all_fighters != ""]
+      all_fighters <- sort(all_fighters)
+      
+      # Update lock dropdown
+      updateSelectizeInput(session, "dk_locked_fighters",
+                           choices = all_fighters,
+                           server = FALSE)
+      
+      # Update exclude dropdown
+      updateSelectizeInput(session, "dk_excluded_fighters",
+                           choices = all_fighters,
+                           server = FALSE)
+      
+      cat("??? DK dropdowns updated with", length(all_fighters), "fighters\n")
+    }
+  })
+  
+
+  
   # Generate dynamic fantasy UI based on available platforms
   output$fantasy_ui <- renderUI({
     req(rv$simulation_results)
@@ -4159,6 +3852,11 @@ server <- function(input, output, session) {
     }
   })
   
+  
+  # ============================================================================
+  # COMPLETE LINEUP BUILDER UI REPLACEMENT
+  # Replace lines 4163-4415 with this entire block
+  # ============================================================================
   
   output$lineup_builder_ui <- renderUI({
     # Check if any optimal lineups exist
@@ -4296,18 +3994,26 @@ server <- function(input, output, session) {
         )
       ),
       
-      # DraftKings UI
+      # ========== DRAFTKINGS UI ==========
       conditionalPanel(
         condition = "(input.lineup_builder_platform == 'dk' || (input.lineup_builder_platform == null && output.has_dk_lineups == 'true')) && output.has_dk_lineups == 'true'",
+        
+        # Filters Box
         fluidRow(
           box(width = 12,
               title = "DraftKings Lineup Filters",
+              status = "primary",
+              solidHeader = TRUE,
+              
+              # Top count filters
               fluidRow(
                 column(3, numericInput("dk_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
                 column(3, numericInput("dk_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
                 column(3, numericInput("dk_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
                 column(3, numericInput("dk_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
               ),
+              
+              # Ownership filters
               fluidRow(
                 column(6, sliderInput("dk_cumulative_ownership_range", "Cumulative Ownership Range:",
                                       min = dk_cum_range[1], max = dk_cum_range[2], 
@@ -4316,105 +4022,351 @@ server <- function(input, output, session) {
                                       min = dk_geom_range[1], max = dk_geom_range[2], 
                                       value = dk_geom_range, step = 1, post = "%"))
               ),
+              
+              # Lock/Exclude/Label/Count
               fluidRow(
-                column(6, selectizeInput("dk_excluded_fighters", "Exclude Fighters:", choices = NULL, multiple = TRUE,
-                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select fighters to exclude'))),
-                column(6, numericInput("dk_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
+                column(3, selectizeInput("dk_locked_fighters", "Lock Fighters:", 
+                                         choices = if(!is.null(rv$dk_optimal_lineups)) {
+                                           fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+                                           all_fighters <- unique(unlist(rv$dk_optimal_lineups[,..fighter_cols]))
+                                           sort(all_fighters[!is.na(all_fighters) & all_fighters != ""])
+                                         } else NULL,
+                                         multiple = TRUE, selected = character(0),
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Lock fighters (optional)',
+                                                        maxItems = 5))),
+                column(3, selectizeInput("dk_excluded_fighters", "Exclude Fighters:", 
+                                         choices = if(!is.null(rv$dk_optimal_lineups)) {
+                                           fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+                                           all_fighters <- unique(unlist(rv$dk_optimal_lineups[,..fighter_cols]))
+                                           sort(all_fighters[!is.na(all_fighters) & all_fighters != ""])
+                                         } else NULL,
+                                         multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Exclude fighters'))),
+                column(3, textInput("dk_build_label", "Build Label:", 
+                                    value = "", 
+                                    placeholder = "e.g., 'Chalk', 'Contrarian'")),
+                column(3, numericInput("dk_num_random_lineups", "Number of Lineups:", 
+                                       value = 20, min = 1, max = 150))
               ),
+              
+              # Filtered pool display and buttons
               fluidRow(
-                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("dk_filtered_pool_size"))),
+                column(6, div(
+                  class = "well well-sm", 
+                  div(
+                    style = "display: flex; justify-content: space-between; align-items: center;",
+                    h4("Filtered Pool:", style = "margin: 0;"),
+                    h4(textOutput("dk_filtered_pool_count", inline = TRUE), 
+                       style = "margin: 0; font-weight: bold; color: #000000;")
+                  ),
+                  textOutput("dk_filtered_pool_size")
+                )),
                 column(6, div(style = "margin-top: 20px;",
-                              actionButton("generate_dk_lineups", "Randomize DraftKings Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                              actionButton("generate_dk_lineups", "Add Lineups to Portfolio", 
+                                           class = "btn-primary btn-lg", style = "width: 100%;"),
                               br(), br(),
-                              downloadButton("download_dk_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
+                              actionButton("clear_dk_builds", "Clear All Builds", 
+                                           class = "btn-warning", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_dk_random_lineups", "Download Portfolio", 
+                                             style = "width: 100%;")))
               )
           )
         ),
+        
+        # Filtered Pool Statistics Table
         fluidRow(
-          box(width = 12, title = "DraftKings Fighter Exposure Analysis",
+          box(
+            width = 12, 
+            title = div(
+              style = "display: flex; justify-content: space-between; align-items: center;",
+              span("Filtered Pool Fighter Statistics"),
+              span(textOutput("dk_filtered_pool_stats_count", inline = TRUE), 
+                   style = "font-size: 20px; font-weight: bold; color: #000000;")
+            ),
+            status = "info",
+            solidHeader = TRUE,
+            DTOutput("dk_filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Build Summary Table
+        fluidRow(
+          box(
+            width = 12,
+            title = "Lineup Builds Summary",
+            status = "warning",
+            solidHeader = TRUE,
+            DTOutput("dk_builds_summary_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Fighter Exposure Analysis (All Builds)
+        fluidRow(
+          box(width = 12, 
+              title = "Fighter Exposure Analysis (All Builds)",
+              status = "info",
+              solidHeader = TRUE,
               DTOutput("dk_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
+        
+        # All Generated Lineups
         fluidRow(
-          box(width = 12, title = "Generated DraftKings Lineups",
+          box(width = 12, 
+              title = "All Generated Lineups",
+              status = "success",
+              solidHeader = TRUE,
               DTOutput("dk_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       ),
       
-      # FanDuel UI (unchanged)
+      # ========== FANDUEL UI ==========
       conditionalPanel(
         condition = "input.lineup_builder_platform == 'fd' && output.has_fd_lineups == 'true'",
+        
+        # Filters Box
         fluidRow(
           box(width = 12,
               title = "FanDuel Lineup Filters",
+              status = "primary",
+              solidHeader = TRUE,
+              
+              # Top count filters
               fluidRow(
                 column(3, numericInput("fd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
                 column(3, numericInput("fd_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
                 column(3, numericInput("fd_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
                 column(3, numericInput("fd_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
               ),
+              
+              # Lock/Exclude/Label/Count (no ownership filters for FanDuel)
               fluidRow(
-                column(6, selectizeInput("fd_excluded_fighters", "Exclude Fighters:", choices = NULL, multiple = TRUE,
-                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select fighters to exclude'))),
-                column(6, numericInput("fd_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
+                column(3, selectizeInput("fd_locked_fighters", "Lock Fighters:", 
+                                         choices = NULL, multiple = TRUE, selected = character(0),
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Lock fighters (optional)',
+                                                        maxItems = 5))),
+                column(3, selectizeInput("fd_excluded_fighters", "Exclude Fighters:", 
+                                         choices = NULL, multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Exclude fighters'))),
+                column(3, textInput("fd_build_label", "Build Label:", 
+                                    value = "", 
+                                    placeholder = "e.g., 'Chalk', 'Contrarian'")),
+                column(3, numericInput("fd_num_random_lineups", "Number of Lineups:", 
+                                       value = 20, min = 1, max = 150))
               ),
+              
+              # Filtered pool display and buttons
               fluidRow(
-                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("fd_filtered_pool_size"))),
+                column(6, div(
+                  class = "well well-sm", 
+                  div(
+                    style = "display: flex; justify-content: space-between; align-items: center;",
+                    h4("Filtered Pool:", style = "margin: 0;"),
+                    h4(textOutput("fd_filtered_pool_count", inline = TRUE), 
+                       style = "margin: 0; font-weight: bold; color: #000000;")
+                  ),
+                  textOutput("fd_filtered_pool_size")
+                )),
                 column(6, div(style = "margin-top: 20px;",
-                              actionButton("generate_fd_lineups", "Randomize FanDuel Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                              actionButton("generate_fd_lineups", "Add Lineups to Portfolio", 
+                                           class = "btn-primary btn-lg", style = "width: 100%;"),
                               br(), br(),
-                              downloadButton("download_fd_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
+                              actionButton("clear_fd_builds", "Clear All Builds", 
+                                           class = "btn-warning", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_fd_random_lineups", "Download Portfolio", 
+                                             style = "width: 100%;")))
               )
           )
         ),
+        
+        # Filtered Pool Statistics Table
         fluidRow(
-          box(width = 12, title = "FanDuel Fighter Exposure Analysis",
+          box(
+            width = 12, 
+            title = div(
+              style = "display: flex; justify-content: space-between; align-items: center;",
+              span("Filtered Pool Fighter Statistics"),
+              span(textOutput("fd_filtered_pool_stats_count", inline = TRUE), 
+                   style = "font-size: 20px; font-weight: bold; color: #000000;")
+            ),
+            status = "info",
+            solidHeader = TRUE,
+            DTOutput("fd_filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Build Summary Table
+        fluidRow(
+          box(
+            width = 12,
+            title = "Lineup Builds Summary",
+            status = "warning",
+            solidHeader = TRUE,
+            DTOutput("fd_builds_summary_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Fighter Exposure Analysis (All Builds)
+        fluidRow(
+          box(width = 12, 
+              title = "Fighter Exposure Analysis (All Builds)",
+              status = "info",
+              solidHeader = TRUE,
               DTOutput("fd_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
+        
+        # All Generated Lineups
         fluidRow(
-          box(width = 12, title = "Generated FanDuel Lineups",
+          box(width = 12, 
+              title = "All Generated Lineups",
+              status = "success",
+              solidHeader = TRUE,
               DTOutput("fd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       ),
       
-      # DK Showdown UI
+      # ========== DK SHOWDOWN UI ==========
       conditionalPanel(
         condition = "input.lineup_builder_platform == 'sd' && output.has_sd_lineups == 'true'",
+        
+        # Filters Box
         fluidRow(
           box(width = 12,
               title = "DK Showdown Lineup Filters",
+              status = "primary",
+              solidHeader = TRUE,
+              
+              # Top count filters
               fluidRow(
                 column(3, numericInput("sd_min_top1_count", "Min Top 1 Count:", value = 0, min = 0)),
                 column(3, numericInput("sd_min_top2_count", "Min Top 2 Count:", value = 0, min = 0)),
                 column(3, numericInput("sd_min_top3_count", "Min Top 3 Count:", value = 0, min = 0)),
                 column(3, numericInput("sd_min_top5_count", "Min Top 5 Count:", value = 0, min = 0))
               ),
+              
+              # Lock/Exclude/Label/Count
               fluidRow(
-                column(6, selectizeInput("sd_excluded_fighters", "Exclude Fighters:", choices = NULL, multiple = TRUE,
-                                         options = list(plugins = list('remove_button'), placeholder = 'Click to select fighters to exclude'))),
-                column(6, numericInput("sd_num_random_lineups", "Number of Lineups to Generate:", value = 20, min = 1, max = 150))
+                column(3, selectizeInput("sd_locked_fighters", "Lock Fighters:", 
+                                         choices = if(!is.null(rv$sd_optimal_lineups)) {
+                                           all_fighters <- c()
+                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
+                                             all_fighters <- c(all_fighters, rv$sd_optimal_lineups$Captain)
+                                           }
+                                           for(i in 1:5) {
+                                             col <- paste0("Fighter", i)
+                                             if(col %in% names(rv$sd_optimal_lineups)) {
+                                               all_fighters <- c(all_fighters, rv$sd_optimal_lineups[[col]])
+                                             }
+                                           }
+                                           all_fighters <- unique(all_fighters)
+                                           sort(all_fighters[!is.na(all_fighters) & all_fighters != ""])
+                                         } else NULL,
+                                         multiple = TRUE, selected = character(0),
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Lock fighters (optional)',
+                                                        maxItems = 5))),
+                column(3, selectizeInput("sd_excluded_fighters", "Exclude Fighters:", 
+                                         choices = if(!is.null(rv$sd_optimal_lineups)) {
+                                           all_fighters <- c()
+                                           if("Captain" %in% names(rv$sd_optimal_lineups)) {
+                                             all_fighters <- c(all_fighters, rv$sd_optimal_lineups$Captain)
+                                           }
+                                           for(i in 1:5) {
+                                             col <- paste0("Fighter", i)
+                                             if(col %in% names(rv$sd_optimal_lineups)) {
+                                               all_fighters <- c(all_fighters, rv$sd_optimal_lineups[[col]])
+                                             }
+                                           }
+                                           all_fighters <- unique(all_fighters)
+                                           sort(all_fighters[!is.na(all_fighters) & all_fighters != ""])
+                                         } else NULL,
+                                         multiple = TRUE,
+                                         options = list(plugins = list('remove_button'), 
+                                                        placeholder = 'Exclude fighters'))),
+                column(3, textInput("sd_build_label", "Build Label:", 
+                                    value = "", 
+                                    placeholder = "e.g., 'Chalk', 'Contrarian'")),
+                column(3, numericInput("sd_num_random_lineups", "Number of Lineups:", 
+                                       value = 20, min = 1, max = 150))
               ),
+              
+              # Filtered pool display and buttons
               fluidRow(
-                column(6, div(class = "well well-sm", h4("Filtered Pool Statistics:"), textOutput("sd_filtered_pool_size"))),
+                column(6, div(
+                  class = "well well-sm", 
+                  div(
+                    style = "display: flex; justify-content: space-between; align-items: center;",
+                    h4("Filtered Pool:", style = "margin: 0;"),
+                    h4(textOutput("sd_filtered_pool_count", inline = TRUE), 
+                       style = "margin: 0; font-weight: bold; color: #000000;")
+                  ),
+                  textOutput("sd_filtered_pool_size")
+                )),
                 column(6, div(style = "margin-top: 20px;",
-                              actionButton("generate_sd_lineups", "Randomize DK Showdown Lineups", class = "btn-primary btn-lg", style = "width: 100%;"),
+                              actionButton("generate_sd_lineups", "Add Lineups to Portfolio", 
+                                           class = "btn-primary btn-lg", style = "width: 100%;"),
                               br(), br(),
-                              downloadButton("download_sd_random_lineups", "Download Selected Lineups", style = "width: 100%;")))
+                              actionButton("clear_sd_builds", "Clear All Builds", 
+                                           class = "btn-warning", style = "width: 100%;"),
+                              br(), br(),
+                              downloadButton("download_sd_random_lineups", "Download Portfolio", 
+                                             style = "width: 100%;")))
               )
           )
         ),
+        
+        # Filtered Pool Statistics Table
         fluidRow(
-          box(width = 12, title = "DK Showdown Fighter Exposure Analysis",
+          box(
+            width = 12, 
+            title = div(
+              style = "display: flex; justify-content: space-between; align-items: center;",
+              span("Filtered Pool Fighter Statistics"),
+              span(textOutput("sd_filtered_pool_stats_count", inline = TRUE), 
+                   style = "font-size: 20px; font-weight: bold; color: #000000;")
+            ),
+            status = "info",
+            solidHeader = TRUE,
+            DTOutput("sd_filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Build Summary Table
+        fluidRow(
+          box(
+            width = 12,
+            title = "Lineup Builds Summary",
+            status = "warning",
+            solidHeader = TRUE,
+            DTOutput("sd_builds_summary_table") %>% withSpinner(color = "#FFD700")
+          )
+        ),
+        
+        # Fighter Exposure Analysis (All Builds)
+        fluidRow(
+          box(width = 12, 
+              title = "Fighter Exposure Analysis (All Builds)",
+              status = "info",
+              solidHeader = TRUE,
               DTOutput("sd_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
         ),
+        
+        # All Generated Lineups
         fluidRow(
-          box(width = 12, title = "Generated DK Showdown Lineups",
+          box(width = 12, 
+              title = "All Generated Lineups",
+              status = "success",
+              solidHeader = TRUE,
               DTOutput("sd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
         )
       )
     )
   })
-  
-  
   
   # DraftKings fantasy projections
   output$dk_fantasy_projections <- renderDT({
@@ -4682,12 +4634,7 @@ server <- function(input, output, session) {
           fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
           fighter_choices <- setNames(fighter_names, fighter_labels)
           
-          updateSelectizeInput(
-            session = session,
-            inputId = "dk_excluded_fighters",
-            choices = fighter_choices
-          )
-          
+    
           # FORCE TABLE TO APPEAR - Use isolate to prevent infinite loops
           isolate({
             # Trigger a reactive dependency by modifying and restoring the data
@@ -4715,70 +4662,7 @@ server <- function(input, output, session) {
     })
   })
   
-  observeEvent(rv$dk_optimal_lineups, {
-    if(!is.null(rv$dk_optimal_lineups) && nrow(rv$dk_optimal_lineups) > 0) {
-      # Ensure fighter exposure is calculated immediately
-      if(is.null(rv$dk_fighter_exposure)) {
-        # Create fighter mapping from simulation results
-        fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
-        lineup_fighters <- c()
-        for(col in fighter_cols) {
-          if(col %in% names(rv$dk_optimal_lineups)) {
-            lineup_fighters <- c(lineup_fighters, rv$dk_optimal_lineups[[col]])
-          }
-        }
-        lineup_fighters <- unique(lineup_fighters)
-        
-        fighter_mapping <- data.frame(
-          Name = lineup_fighters,  
-          DKSalary = NA_real_,
-          DKOwn = NA_real_
-        )
-        
-        # Get mapping from simulation results
-        if(!is.null(rv$simulation_results)) {
-          unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
-                                                       c("Name", "DKSalary", "DKOwn")]
-          
-          # Match each fighter
-          for(i in 1:nrow(fighter_mapping)) {
-            name <- fighter_mapping$Name[i]
-            matches <- which(unique_sim_fighters$Name == name)
-            if(length(matches) > 0) {
-              match_idx <- matches[1]
-              fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
-              fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
-            }
-          }
-          
-          # Calculate fighter exposure (without random lineups initially)
-          rv$dk_fighter_exposure <- calculate_dk_fighter_exposure(
-            rv$dk_optimal_lineups, 
-            fighter_mapping,
-            NULL  # No random lineups initially
-          )
-          
-          # Initialize filtered pool rates
-          if(!is.null(rv$dk_fighter_exposure)) {
-            rv$dk_fighter_exposure$FilteredPoolRate <- rv$dk_fighter_exposure$OptimalRate
-            
-            # Update fighter choices for exclusion dropdown
-            fighter_data <- rv$dk_fighter_exposure
-            fighter_names <- fighter_data$Name
-            fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
-            fighter_choices <- setNames(fighter_names, fighter_labels)
-            
-            updateSelectizeInput(
-              session = session,
-              inputId = "dk_excluded_fighters",
-              choices = fighter_choices
-            )
-          }
-        }
-      }
-    }
-  }, ignoreNULL = TRUE, ignoreInit = TRUE)
-  
+ 
   observeEvent(input$run_fd_optimization, {
     req(rv$simulation_results, rv$has_fanduel)
     
@@ -5237,127 +5121,183 @@ server <- function(input, output, session) {
   
   
   
+
+  
+  # DraftKings filtered pool reactive
+  dk_filtered_optimal_lineups <- reactive({
+    req(rv$dk_optimal_lineups)
+    
+    optimal <- rv$dk_optimal_lineups
+    
+    # Apply Top Count filters
+    filtered <- optimal %>%
+      filter(
+        Top1Count >= input$dk_min_top1_count,
+        Top2Count >= input$dk_min_top2_count,
+        Top3Count >= input$dk_min_top3_count,
+        Top5Count >= input$dk_min_top5_count
+      )
+    
+    # Apply ownership filters if columns exist
+    if("CumulativeOwnership" %in% names(filtered)) {
+      filtered <- filtered %>%
+        filter(
+          CumulativeOwnership >= input$dk_cumulative_ownership_range[1],
+          CumulativeOwnership <= input$dk_cumulative_ownership_range[2]
+        )
+    }
+    
+    if("GeometricMeanOwnership" %in% names(filtered)) {
+      filtered <- filtered %>%
+        filter(
+          GeometricMeanOwnership >= input$dk_geometric_mean_range[1],
+          GeometricMeanOwnership <= input$dk_geometric_mean_range[2]
+        )
+    }
+    
+    # Apply exclude filter
+    if(!is.null(input$dk_excluded_fighters) && length(input$dk_excluded_fighters) > 0) {
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      
+      for(excluded_fighter in input$dk_excluded_fighters) {
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            filtered <- filtered[filtered[[col]] != excluded_fighter, ]
+          }
+        }
+      }
+    }
+    
+    # Apply lock filter
+    if(!is.null(input$dk_locked_fighters) && length(input$dk_locked_fighters) > 0) {
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      
+      for(locked_fighter in input$dk_locked_fighters) {
+        # Keep only lineups that contain this fighter
+        has_fighter <- rep(FALSE, nrow(filtered))
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            has_fighter <- has_fighter | (filtered[[col]] == locked_fighter)
+          }
+        }
+        filtered <- filtered[has_fighter, ]
+      }
+    }
+    
+    return(filtered)
+  })
+  
+  # DK filtered pool size display
   output$dk_filtered_pool_size <- renderText({
-    # Safely handle NULL cases
-    if(is.null(rv$dk_optimal_lineups) || nrow(rv$dk_optimal_lineups) == 0) {
-      return("Number of lineups in filtered pool: 0")
+    filtered <- dk_filtered_optimal_lineups()
+    
+    if(is.null(filtered) || nrow(filtered) == 0) {
+      return("No lineups match current filters")
     }
     
-    # Create filters with safe defaults
-    filters <- list(
-      min_top1_count = if(!is.null(input$dk_min_top1_count)) input$dk_min_top1_count else 0,
-      min_top2_count = if(!is.null(input$dk_min_top2_count)) input$dk_min_top2_count else 0,
-      min_top3_count = if(!is.null(input$dk_min_top3_count)) input$dk_min_top3_count else 0,
-      min_top5_count = if(!is.null(input$dk_min_top5_count)) input$dk_min_top5_count else 0,
-      cumulative_ownership_range = if(!is.null(input$dk_cumulative_ownership_range)) {
-        input$dk_cumulative_ownership_range
-      } else {
-        # Use actual data range as default
-        if("CumulativeOwnership" %in% names(rv$dk_optimal_lineups)) {
-          cum_vals <- rv$dk_optimal_lineups$CumulativeOwnership[!is.na(rv$dk_optimal_lineups$CumulativeOwnership)]
-          if(length(cum_vals) > 0) c(min(cum_vals), max(cum_vals)) else c(0, 100)
-        } else c(0, 100)
-      },
-      geometric_mean_range = if(!is.null(input$dk_geometric_mean_range)) {
-        input$dk_geometric_mean_range
-      } else {
-        # Use actual data range as default
-        if("GeometricMeanOwnership" %in% names(rv$dk_optimal_lineups)) {
-          geom_vals <- rv$dk_optimal_lineups$GeometricMeanOwnership[!is.na(rv$dk_optimal_lineups$GeometricMeanOwnership)]
-          if(length(geom_vals) > 0) c(min(geom_vals), max(geom_vals)) else c(0, 100)
-        } else c(0, 100)
-      },
-      excluded_fighters = if(!is.null(input$dk_excluded_fighters)) input$dk_excluded_fighters else character(0)
+    paste0(
+      nrow(filtered), " lineups in filtered pool ",
+      "(", round(nrow(filtered) / nrow(rv$dk_optimal_lineups) * 100, 1), "% of total)"
     )
-    
-    # Calculate stats with error handling
-    stats <- tryCatch({
-      calculate_dk_filtered_pool_stats(rv$dk_optimal_lineups, filters)
-    }, error = function(e) {
-      message("Error calculating filtered pool stats: ", e$message)
-      list(count = nrow(rv$dk_optimal_lineups), thresholds = NULL)
-    })
-    
-    paste("Number of lineups in filtered pool:", stats$count)
   })
   
-  
-  # FanDuel filtered pool stats
-  output$fd_filtered_pool_size <- renderText({
-    # Safely handle NULL cases
-    if(is.null(rv$fd_optimal_lineups) || nrow(rv$fd_optimal_lineups) == 0) {
-      return("Number of lineups in filtered pool: 0")
-    }
-    
-    # Create filters with NULL checks
-    filters <- list(
-      min_top1_count = if(!is.null(input$fd_min_top1_count)) input$fd_min_top1_count else 0,
-      min_top2_count = if(!is.null(input$fd_min_top2_count)) input$fd_min_top2_count else 0,
-      min_top3_count = if(!is.null(input$fd_min_top3_count)) input$fd_min_top3_count else 0,
-      min_top5_count = if(!is.null(input$fd_min_top5_count)) input$fd_min_top5_count else 0,
-      excluded_fighters = if(!is.null(input$fd_excluded_fighters)) input$fd_excluded_fighters else character(0)
-    )
-    
-    # Calculate stats with error handling
-    stats <- tryCatch({
-      calculate_fd_filtered_pool_stats(rv$fd_optimal_lineups, filters)
-    }, error = function(e) {
-      list(count = 0, thresholds = NULL)
-    })
-    
-    paste("Number of lineups in filtered pool:", stats$count)
+  # DK filtered pool count (for title display)
+  output$dk_filtered_pool_count <- renderText({
+    filtered <- dk_filtered_optimal_lineups()
+    if(is.null(filtered) || nrow(filtered) == 0) return("0")
+    return(format(nrow(filtered), big.mark = ","))
   })
   
+  # DK filtered pool stats count (for stats table title)
+  output$dk_filtered_pool_stats_count <- renderText({
+    filtered <- dk_filtered_optimal_lineups()
+    if(is.null(filtered) || nrow(filtered) == 0) return("0 lineups")
+    return(paste0(format(nrow(filtered), big.mark = ","), " lineups"))
+  })
   
-  
-  
-  # Generate random DraftKings lineups
   observeEvent(input$generate_dk_lineups, {
     req(rv$dk_optimal_lineups)
     
-    # Create filters for lineup generation
-    filters <- list(
-      min_top1_count = input$dk_min_top1_count,
-      min_top2_count = input$dk_min_top2_count,
-      min_top3_count = input$dk_min_top3_count,
-      min_top5_count = input$dk_min_top5_count,
-      cumulative_ownership_range = input$dk_cumulative_ownership_range,
-      geometric_mean_range = input$dk_geometric_mean_range,
-      num_lineups = input$dk_num_random_lineups
-    )
+    filtered_pool <- dk_filtered_optimal_lineups()
+    
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      showModal(modalDialog(
+        title = "Error",
+        "No lineups match the selected filters. Try adjusting your criteria.",
+        easyClose = TRUE
+      ))
+      return()
+    }
+    
+    # Get number of lineups to generate
+    num_lineups <- input$dk_num_random_lineups
+    
+    # Get build label (or generate default)
+    build_label <- if(!is.null(input$dk_build_label) && nchar(trimws(input$dk_build_label)) > 0) {
+      trimws(input$dk_build_label)
+    } else {
+      paste0("Build ", length(rv$dk_lineup_builds) + 1)
+    }
     
     # Show progress
     withProgress(message = 'Generating lineups...', value = 0, {
-      # Generate random lineups
-      rv$dk_random_lineups <- generate_random_dk_lineups(rv$dk_optimal_lineups, filters)
+      # Sample from filtered pool
+      if(nrow(filtered_pool) <= num_lineups) {
+        # If filtered pool is smaller, take all
+        sampled_lineups <- filtered_pool
+      } else {
+        # Weight by Top1Count
+        weights <- filtered_pool$Top1Count + 1  # Add 1 to avoid zero weights
+        sampled_indices <- sample(1:nrow(filtered_pool), size = num_lineups, 
+                                  prob = weights, replace = FALSE)
+        sampled_lineups <- filtered_pool[sampled_indices, ]
+      }
       
-      # Update fighter exposure data using the same mapping approach from optimization
+      # Add build metadata
+      sampled_lineups$BuildLabel <- build_label
+      sampled_lineups$LineupNum <- 1:nrow(sampled_lineups)
+      
+      # Store this build
+      build_data <- list(
+        label = build_label,
+        timestamp = Sys.time(),
+        filters = list(
+          min_top1 = input$dk_min_top1_count,
+          min_top2 = input$dk_min_top2_count,
+          min_top3 = input$dk_min_top3_count,
+          min_top5 = input$dk_min_top5_count,
+          locked = input$dk_locked_fighters,
+          excluded = input$dk_excluded_fighters,
+          cum_own = input$dk_cumulative_ownership_range,
+          geom_own = input$dk_geometric_mean_range
+        ),
+        lineups = sampled_lineups
+      )
+      
+      # Add to builds list
+      rv$dk_lineup_builds[[length(rv$dk_lineup_builds) + 1]] <- build_data
+      
+      # Combine all builds for display
+      all_lineups <- do.call(rbind, lapply(rv$dk_lineup_builds, function(b) b$lineups))
+      rv$dk_random_lineups <- all_lineups
+      
+      # Update fighter exposure
       if(!is.null(rv$dk_random_lineups)) {
-        # First, let's preserve the existing fighter mapping data
         existing_mapping <- NULL
-        
-        # Check if the current fighter exposure table has mapping data
         if(!is.null(rv$dk_fighter_exposure)) {
-          # Extract the mapping columns from the exposure data
-          existing_mapping <- rv$dk_fighter_exposure[, c( "Name", "DKSalary", "DKOwn")]
+          existing_mapping <- rv$dk_fighter_exposure[, c("Name", "DKSalary", "DKOwn")]
         }
         
-        # If we don't have existing mapping, create a new one
         if(is.null(existing_mapping) || nrow(existing_mapping) == 0) {
-          # Get all unique fighters from optimal lineups and random lineups
           fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
-          
-          # Get fighters from both lineup sets
           all_fighters <- c()
           
-          # From optimal lineups
           for(col in fighter_cols) {
             if(col %in% names(rv$dk_optimal_lineups)) {
               all_fighters <- c(all_fighters, rv$dk_optimal_lineups[[col]])
             }
           }
           
-          # From random lineups
           for(col in fighter_cols) {
             if(col %in% names(rv$dk_random_lineups)) {
               all_fighters <- c(all_fighters, rv$dk_random_lineups[[col]])
@@ -5365,36 +5305,29 @@ server <- function(input, output, session) {
           }
           all_fighters <- unique(all_fighters)
           
-          # Create a fighter mapping from simulation results
           fighter_mapping <- data.frame(
             Name = all_fighters,
             DKSalary = NA_real_,
             DKOwn = NA_real_
           )
           
-          # Get mapping from simulation results
           unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
                                                        c("Name", "DKSalary", "DKOwn")]
           
-          # Match each fighter
           for(i in 1:nrow(fighter_mapping)) {
-            dk_id <- fighter_mapping$DKID[i]
-            matches <- which(unique_sim_fighters$DKID == dk_id)
-            
+            name <- fighter_mapping$Name[i]
+            matches <- which(unique_sim_fighters$Name == name)
             if(length(matches) > 0) {
               match_idx <- matches[1]
               fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
               fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
               fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
-              
             }
           }
         } else {
-          # Use the existing mapping
           fighter_mapping <- existing_mapping
         }
         
-        # Calculate fighter exposure with the mapping and random lineups
         rv$dk_fighter_exposure <- calculate_dk_fighter_exposure(
           rv$dk_optimal_lineups, 
           fighter_mapping, 
@@ -5402,22 +5335,246 @@ server <- function(input, output, session) {
         )
       }
       
-      # Show message based on result
-      if(is.null(rv$dk_random_lineups)) {
-        showModal(modalDialog(
-          title = "Error",
-          "No lineups match the selected filters. Try adjusting your criteria.",
-          easyClose = TRUE
-        ))
-      } else {
-        showModal(modalDialog(
-          title = "Success",
-          sprintf("Generated %d DraftKings lineups successfully!", nrow(rv$dk_random_lineups)),
-          easyClose = TRUE
-        ))
-      }
+      showModal(modalDialog(
+        title = "Success",
+        sprintf("Added %d lineups to build '%s'! Total portfolio: %d lineups across %d builds.", 
+                nrow(sampled_lineups), build_label, nrow(rv$dk_random_lineups), 
+                length(rv$dk_lineup_builds)),
+        easyClose = TRUE
+      ))
     })
   })
+  
+  # Clear DK builds
+  observeEvent(input$clear_dk_builds, {
+    rv$dk_lineup_builds <- list()
+    rv$dk_random_lineups <- NULL
+    
+    # Recalculate exposure with just optimal lineups
+    if(!is.null(rv$dk_optimal_lineups) && !is.null(rv$simulation_results)) {
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      lineup_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(rv$dk_optimal_lineups)) {
+          lineup_fighters <- c(lineup_fighters, rv$dk_optimal_lineups[[col]])
+        }
+      }
+      lineup_fighters <- unique(lineup_fighters)
+      
+      fighter_mapping <- data.frame(
+        Name = lineup_fighters,  
+        DKSalary = NA_real_,
+        DKOwn = NA_real_
+      )
+      
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "DKSalary", "DKOwn")]
+      
+      for(i in 1:nrow(fighter_mapping)) {
+        name <- fighter_mapping$Name[i]
+        matches <- which(unique_sim_fighters$Name == name)
+        if(length(matches) > 0) {
+          match_idx <- matches[1]
+          fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
+          fighter_mapping$DKSalary[i] <- unique_sim_fighters$DKSalary[match_idx]
+          fighter_mapping$DKOwn[i] <- unique_sim_fighters$DKOwn[match_idx]
+        }
+      }
+      
+      rv$dk_fighter_exposure <- calculate_dk_fighter_exposure(
+        rv$dk_optimal_lineups, 
+        fighter_mapping
+      )
+      
+      if(!is.null(rv$dk_fighter_exposure)) {
+        rv$dk_fighter_exposure$FilteredPoolRate <- rv$dk_fighter_exposure$OptimalRate
+      }
+    }
+    
+    showModal(modalDialog(
+      title = "Portfolio Cleared",
+      "All DraftKings builds have been cleared.",
+      easyClose = TRUE
+    ))
+  })
+  
+  output$dk_filtered_pool_stats_table <- renderDT({
+    req(rv$simulation_complete)
+    
+    filtered_pool <- dk_filtered_optimal_lineups()
+    
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      return(datatable(data.frame(Message = "No lineups in filtered pool"),
+                       options = list(dom = 't'), rownames = FALSE))
+    }
+    
+    tryCatch({
+      # Get fighter columns
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      
+      # Extract all fighters from filtered pool
+      all_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(filtered_pool)) {
+          all_fighters <- c(all_fighters, filtered_pool[[col]])
+        }
+      }
+      
+      # Count appearances
+      fighter_counts <- as.data.frame(table(all_fighters))
+      names(fighter_counts) <- c("Name", "Appearances")
+      
+      # Calculate FilteredPoolRate
+      fighter_counts$FilteredPoolRate <- round(
+        (fighter_counts$Appearances / nrow(filtered_pool)) * 100, 1
+      )
+      
+      # Get fighter info from simulation results (salary and ownership)
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "DKSalary", "DKOwn")]
+      
+      # Merge with fighter info
+      fighter_stats <- merge(fighter_counts, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Convert DKOwn to percentage and calculate Leverage
+      fighter_stats$Own <- fighter_stats$DKOwn * 100
+      fighter_stats$Leverage <- round(fighter_stats$FilteredPoolRate - fighter_stats$Own, 1)
+      
+      # Select and order columns (NO OptimalRate)
+      fighter_stats <- fighter_stats[, c("Name", "DKSalary", "FilteredPoolRate", "Own", "Leverage")]
+      fighter_stats <- fighter_stats[order(-fighter_stats$FilteredPoolRate), ]
+      
+      # Create caption
+      caption_text <- sprintf("Filtered Pool: %s lineups", 
+                              format(nrow(filtered_pool), big.mark = ","))
+      
+      # Create display
+      dt <- datatable(
+        fighter_stats,
+        caption = caption_text,
+        options = list(
+          scrollX = TRUE,
+          pageLength = 25,
+          dom = 'ftp',
+          order = list(list(2, 'desc')),  # Sort by FilteredPoolRate
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("DKSalary" %in% names(fighter_stats)) {
+        dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(c('FilteredPoolRate', 'Own', 'Leverage'), 
+                                names(fighter_stats))
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add color bar to FilteredPoolRate
+      dt <- dt %>% formatStyle(
+        'FilteredPoolRate',
+        background = styleColorBar(range(fighter_stats$FilteredPoolRate, na.rm = TRUE), '#32CD32'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
+  })
+  
+  # DK Builds Summary Table
+  output$dk_builds_summary_table <- renderDT({
+    req(length(rv$dk_lineup_builds) > 0)
+    
+    # Create summary of each build
+    build_summary <- data.frame(
+      BuildLabel = character(),
+      NumLineups = integer(),
+      LockedFighters = character(),
+      ExcludedFighters = character(),
+      MinTop1 = integer(),
+      AvgTop1Count = numeric(),
+      Timestamp = character(),
+      stringsAsFactors = FALSE
+    )
+    
+    for(i in 1:length(rv$dk_lineup_builds)) {
+      build <- rv$dk_lineup_builds[[i]]
+      
+      locked_str <- if(length(build$filters$locked) > 0) {
+        paste(build$filters$locked, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      excluded_str <- if(length(build$filters$excluded) > 0) {
+        paste(build$filters$excluded, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      build_summary <- rbind(build_summary, data.frame(
+        BuildLabel = build$label,
+        NumLineups = nrow(build$lineups),
+        LockedFighters = locked_str,
+        ExcludedFighters = excluded_str,
+        MinTop1 = build$filters$min_top1,
+        AvgTop1Count = round(mean(build$lineups$Top1Count, na.rm = TRUE), 1),
+        Timestamp = format(build$timestamp, "%Y-%m-%d %H:%M:%S"),
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+    # Add totals row
+    totals_row <- data.frame(
+      BuildLabel = "TOTAL PORTFOLIO",
+      NumLineups = sum(build_summary$NumLineups),
+      LockedFighters = "",
+      ExcludedFighters = "",
+      MinTop1 = NA,
+      AvgTop1Count = round(mean(rv$dk_random_lineups$Top1Count, na.rm = TRUE), 1),
+      Timestamp = "",
+      stringsAsFactors = FALSE
+    )
+    
+    build_summary <- rbind(build_summary, totals_row)
+    
+    dt <- datatable(
+      build_summary,
+      options = list(
+        scrollX = TRUE,
+        pageLength = -1,
+        dom = 't',
+        columnDefs = list(
+          list(targets = "_all", className = 'dt-center')
+        )
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe'
+    ) %>%
+      formatStyle(
+        'BuildLabel',
+        target = 'row',
+        fontWeight = styleEqual('TOTAL PORTFOLIO', 'bold'),
+        backgroundColor = styleEqual('TOTAL PORTFOLIO', '#ffffcc')
+      )
+    
+    return(dt)
+  })
+  
   
   # Dedicated reactive for DraftKings fighter exposure - ensures it loads immediately
   observe({
@@ -5471,73 +5628,167 @@ server <- function(input, output, session) {
         fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
         fighter_choices <- setNames(fighter_names, fighter_labels)
         
-        updateSelectizeInput(
-          session = session,
-          inputId = "dk_excluded_fighters",
-          choices = fighter_choices
-        )
-      }
+            }
     }
   })
+  
+  # FanDuel filtered pool reactive
+  fd_filtered_optimal_lineups <- reactive({
+    req(rv$fd_optimal_lineups)
+    
+    optimal <- rv$fd_optimal_lineups
+    
+    # Apply Top Count filters
+    filtered <- optimal %>%
+      filter(
+        Top1Count >= input$fd_min_top1_count,
+        Top2Count >= input$fd_min_top2_count,
+        Top3Count >= input$fd_min_top3_count,
+        Top5Count >= input$fd_min_top5_count
+      )
+    
+    # Apply exclude filter
+    if(!is.null(input$fd_excluded_fighters) && length(input$fd_excluded_fighters) > 0) {
+      fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
+      
+      for(excluded_fighter in input$fd_excluded_fighters) {
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            filtered <- filtered[filtered[[col]] != excluded_fighter, ]
+          }
+        }
+      }
+    }
+    
+    # Apply lock filter
+    if(!is.null(input$fd_locked_fighters) && length(input$fd_locked_fighters) > 0) {
+      fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
+      
+      for(locked_fighter in input$fd_locked_fighters) {
+        # Keep only lineups that contain this fighter
+        has_fighter <- rep(FALSE, nrow(filtered))
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            has_fighter <- has_fighter | (filtered[[col]] == locked_fighter)
+          }
+        }
+        filtered <- filtered[has_fighter, ]
+      }
+    }
+    
+    return(filtered)
+  })
+  
+  # FD filtered pool size display
+  output$fd_filtered_pool_size <- renderText({
+    filtered <- fd_filtered_optimal_lineups()
+    
+    if(is.null(filtered) || nrow(filtered) == 0) {
+      return("No lineups match current filters")
+    }
+    
+    paste0(
+      nrow(filtered), " lineups in filtered pool ",
+      "(", round(nrow(filtered) / nrow(rv$fd_optimal_lineups) * 100, 1), "% of total)"
+    )
+  })
+  
+  # FD filtered pool count (for title display)
+  output$fd_filtered_pool_count <- renderText({
+    filtered <- fd_filtered_optimal_lineups()
+    if(is.null(filtered) || nrow(filtered) == 0) return("0")
+    return(format(nrow(filtered), big.mark = ","))
+  })
+  
+  # FD filtered pool stats count (for stats table title)
+  output$fd_filtered_pool_stats_count <- renderText({
+    filtered <- fd_filtered_optimal_lineups()
+    if(is.null(filtered) || nrow(filtered) == 0) return("0 lineups")
+    return(paste0(format(nrow(filtered), big.mark = ","), " lineups"))
+  })
+  
+  # ===== FD LINEUP GENERATION HANDLER =====
+  # REPLACE observeEvent(input$generate_fd_lineups, { ... })
   
   observeEvent(input$generate_fd_lineups, {
     req(rv$fd_optimal_lineups)
     
-    # Create filters for lineup generation
-    filters <- list(
-      min_top1_count = input$fd_min_top1_count,
-      min_top2_count = input$fd_min_top2_count,
-      min_top3_count = input$fd_min_top3_count,
-      min_top5_count = input$fd_min_top5_count,
-      excluded_fighters = input$fd_excluded_fighters,
-      num_lineups = input$fd_num_random_lineups
-    )
+    filtered_pool <- fd_filtered_optimal_lineups()
     
-    # Show progress dialog
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      showModal(modalDialog(
+        title = "Error",
+        "No lineups match the selected filters. Try adjusting your criteria.",
+        easyClose = TRUE
+      ))
+      return()
+    }
+    
+    # Get number of lineups to generate
+    num_lineups <- input$fd_num_random_lineups
+    
+    # Get build label (or generate default)
+    build_label <- if(!is.null(input$fd_build_label) && nchar(trimws(input$fd_build_label)) > 0) {
+      trimws(input$fd_build_label)
+    } else {
+      paste0("Build ", length(rv$fd_lineup_builds) + 1)
+    }
+    
+    # Show progress
     withProgress(message = 'Generating lineups...', value = 0, {
-      setProgress(0.1, detail = "Filtering lineup pool...")
-      
-      # Show modal for larger lineup sets
-      if(filters$num_lineups > 50) {
-        showModal(modalDialog(
-          title = "Generating FanDuel Lineups",
-          "Generating randomized FanDuel lineups. This may take a moment for larger sets...",
-          footer = NULL,
-          easyClose = FALSE
-        ))
+      # Sample from filtered pool
+      if(nrow(filtered_pool) <= num_lineups) {
+        sampled_lineups <- filtered_pool
+      } else {
+        weights <- filtered_pool$Top1Count + 1
+        sampled_indices <- sample(1:nrow(filtered_pool), size = num_lineups, 
+                                  prob = weights, replace = FALSE)
+        sampled_lineups <- filtered_pool[sampled_indices, ]
       }
       
-      # Generate random lineups with optimized function
-      rv$fd_random_lineups <- generate_random_fd_lineups(rv$fd_optimal_lineups, filters)
+      # Add build metadata
+      sampled_lineups$BuildLabel <- build_label
+      sampled_lineups$LineupNum <- 1:nrow(sampled_lineups)
       
-      setProgress(0.6, detail = "Updating fighter exposure data...")
+      # Store this build
+      build_data <- list(
+        label = build_label,
+        timestamp = Sys.time(),
+        filters = list(
+          min_top1 = input$fd_min_top1_count,
+          min_top2 = input$fd_min_top2_count,
+          min_top3 = input$fd_min_top3_count,
+          min_top5 = input$fd_min_top5_count,
+          locked = input$fd_locked_fighters,
+          excluded = input$fd_excluded_fighters
+        ),
+        lineups = sampled_lineups
+      )
       
-      # Update fighter exposure data using the existing mapping
+      # Add to builds list
+      rv$fd_lineup_builds[[length(rv$fd_lineup_builds) + 1]] <- build_data
+      
+      # Combine all builds for display
+      all_lineups <- do.call(rbind, lapply(rv$fd_lineup_builds, function(b) b$lineups))
+      rv$fd_random_lineups <- all_lineups
+      
+      # Update fighter exposure
       if(!is.null(rv$fd_random_lineups)) {
-        # First, use the existing fighter exposure data if available
         existing_mapping <- NULL
-        
         if(!is.null(rv$fd_fighter_exposure)) {
-          # Extract mapping columns
           existing_mapping <- rv$fd_fighter_exposure[, c("Name", "FDSalary", "FDOwn")]
         }
         
-        # If we don't have existing mapping, create one from scratch
         if(is.null(existing_mapping) || nrow(existing_mapping) == 0) {
-          # Get all unique fighters from optimal lineups and random lineups
-          fighter_cols <- paste0("Fighter", 1:FD_ROSTER_SIZE)
-          
-          # Combine fighters from both lineup sets
+          fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
           all_fighters <- c()
           
-          # From optimal lineups
           for(col in fighter_cols) {
             if(col %in% names(rv$fd_optimal_lineups)) {
               all_fighters <- c(all_fighters, rv$fd_optimal_lineups[[col]])
             }
           }
           
-          # From random lineups
           for(col in fighter_cols) {
             if(col %in% names(rv$fd_random_lineups)) {
               all_fighters <- c(all_fighters, rv$fd_random_lineups[[col]])
@@ -5545,39 +5796,29 @@ server <- function(input, output, session) {
           }
           all_fighters <- unique(all_fighters)
           
-          # Create a fighter mapping
           fighter_mapping <- data.frame(
-            Name = lineup_fighters,  
+            Name = all_fighters,
             FDSalary = NA_real_,
             FDOwn = NA_real_
           )
           
-          # Get mapping from simulation results
-          unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$FDName), 
-                                                       c( "Name", "FDSalary", "FDOwn")]
+          unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                       c("Name", "FDSalary", "FDOwn")]
           
-          # Match each fighter
           for(i in 1:nrow(fighter_mapping)) {
-            fd_id <- fighter_mapping$FDID[i]
-            matches <- which(unique_sim_fighters$FDID == fd_id)
-            
+            name <- fighter_mapping$Name[i]
+            matches <- which(unique_sim_fighters$Name == name)
             if(length(matches) > 0) {
               match_idx <- matches[1]
               fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
               fighter_mapping$FDSalary[i] <- unique_sim_fighters$FDSalary[match_idx]
               fighter_mapping$FDOwn[i] <- unique_sim_fighters$FDOwn[match_idx]
-              
-              
             }
           }
         } else {
-          # Use the existing mapping
           fighter_mapping <- existing_mapping
         }
         
-        setProgress(0.8, detail = "Calculating fighter exposure...")
-        
-        # Calculate fighter exposure with the mapping and random lineups
         rv$fd_fighter_exposure <- calculate_fd_fighter_exposure(
           rv$fd_optimal_lineups, 
           fighter_mapping, 
@@ -5585,26 +5826,221 @@ server <- function(input, output, session) {
         )
       }
       
-      # Remove modal if we used one
-      if(filters$num_lineups > 50) {
-        removeModal()
+      showModal(modalDialog(
+        title = "Success",
+        sprintf("Added %d lineups to build '%s'! Total portfolio: %d lineups across %d builds.", 
+                nrow(sampled_lineups), build_label, nrow(rv$fd_random_lineups), 
+                length(rv$fd_lineup_builds)),
+        easyClose = TRUE
+      ))
+    })
+  })
+  
+  # ===== FD CLEAR BUILDS HANDLER =====
+  # Add this new handler
+  
+  observeEvent(input$clear_fd_builds, {
+    rv$fd_lineup_builds <- list()
+    rv$fd_random_lineups <- NULL
+    
+    # Recalculate exposure with just optimal lineups
+    if(!is.null(rv$fd_optimal_lineups) && !is.null(rv$simulation_results)) {
+      fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
+      lineup_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(rv$fd_optimal_lineups)) {
+          lineup_fighters <- c(lineup_fighters, rv$fd_optimal_lineups[[col]])
+        }
+      }
+      lineup_fighters <- unique(lineup_fighters)
+      
+      fighter_mapping <- data.frame(
+        Name = lineup_fighters,  
+        FDSalary = NA_real_,
+        FDOwn = NA_real_
+      )
+      
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "FDSalary", "FDOwn")]
+      
+      for(i in 1:nrow(fighter_mapping)) {
+        name <- fighter_mapping$Name[i]
+        matches <- which(unique_sim_fighters$Name == name)
+        if(length(matches) > 0) {
+          match_idx <- matches[1]
+          fighter_mapping$Name[i] <- unique_sim_fighters$Name[match_idx]
+          fighter_mapping$FDSalary[i] <- unique_sim_fighters$FDSalary[match_idx]
+          fighter_mapping$FDOwn[i] <- unique_sim_fighters$FDOwn[match_idx]
+        }
       }
       
-      # Show appropriate message
-      if(is.null(rv$fd_random_lineups)) {
-        showModal(modalDialog(
-          title = "Error",
-          "No lineups match the selected filters. Try adjusting your criteria.",
-          easyClose = TRUE
-        ))
-      } else {
-        showModal(modalDialog(
-          title = "Success",
-          sprintf("Generated %d FanDuel lineups successfully!", nrow(rv$fd_random_lineups)),
-          easyClose = TRUE
-        ))
+      rv$fd_fighter_exposure <- calculate_fd_fighter_exposure(
+        rv$fd_optimal_lineups, 
+        fighter_mapping
+      )
+      
+      if(!is.null(rv$fd_fighter_exposure)) {
+        rv$fd_fighter_exposure$FilteredPoolRate <- rv$fd_fighter_exposure$OptimalRate
       }
+    }
+    
+    showModal(modalDialog(
+      title = "Portfolio Cleared",
+      "All FanDuel builds have been cleared.",
+      easyClose = TRUE
+    ))
+  })
+  
+  # ===== FD NEW TABLE OUTPUTS =====
+  
+  # FD Filtered Pool Statistics Table
+  output$fd_filtered_pool_stats_table <- renderDT({
+    req(rv$simulation_complete)
+    
+    filtered_pool <- fd_filtered_optimal_lineups()
+    
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      return(datatable(data.frame(Message = "No lineups in filtered pool"),
+                       options = list(dom = 't'), rownames = FALSE))
+    }
+    
+    tryCatch({
+      fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
+      
+      all_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(filtered_pool)) {
+          all_fighters <- c(all_fighters, filtered_pool[[col]])
+        }
+      }
+      
+      fighter_counts <- as.data.frame(table(all_fighters))
+      names(fighter_counts) <- c("Name", "Appearances")
+      
+      fighter_counts$FilteredPoolRate <- round(
+        (fighter_counts$Appearances / nrow(filtered_pool)) * 100, 2
+      )
+      
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "FDSalary", "FDOwn")]
+      
+      fighter_stats <- merge(fighter_counts, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      if(!is.null(rv$fd_fighter_exposure)) {
+        optimal_rates <- rv$fd_fighter_exposure[, c("Name", "OptimalRate")]
+        fighter_stats <- merge(fighter_stats, optimal_rates, by = "Name", all.x = TRUE)
+      }
+      
+      fighter_stats <- fighter_stats[order(-fighter_stats$FilteredPoolRate), ]
+      
+      dt <- datatable(
+        fighter_stats,
+        options = list(
+          scrollX = TRUE,
+          pageLength = 25,
+          dom = 'tip',
+          order = list(list(2, 'desc')),
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe'
+      )
+      
+      if("FDSalary" %in% names(fighter_stats)) {
+        dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      if("FDOwn" %in% names(fighter_stats)) {
+        dt <- dt %>% formatPercentage('FDOwn', digits = 1)
+      }
+      dt <- dt %>% formatRound(c('FilteredPoolRate', 'OptimalRate'), digits = 2)
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
     })
+  })
+  
+  # FD Builds Summary Table
+  output$fd_builds_summary_table <- renderDT({
+    req(length(rv$fd_lineup_builds) > 0)
+    
+    build_summary <- data.frame(
+      BuildLabel = character(),
+      NumLineups = integer(),
+      LockedFighters = character(),
+      ExcludedFighters = character(),
+      MinTop1 = integer(),
+      AvgTop1Count = numeric(),
+      Timestamp = character(),
+      stringsAsFactors = FALSE
+    )
+    
+    for(i in 1:length(rv$fd_lineup_builds)) {
+      build <- rv$fd_lineup_builds[[i]]
+      
+      locked_str <- if(length(build$filters$locked) > 0) {
+        paste(build$filters$locked, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      excluded_str <- if(length(build$filters$excluded) > 0) {
+        paste(build$filters$excluded, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      build_summary <- rbind(build_summary, data.frame(
+        BuildLabel = build$label,
+        NumLineups = nrow(build$lineups),
+        LockedFighters = locked_str,
+        ExcludedFighters = excluded_str,
+        MinTop1 = build$filters$min_top1,
+        AvgTop1Count = round(mean(build$lineups$Top1Count, na.rm = TRUE), 1),
+        Timestamp = format(build$timestamp, "%Y-%m-%d %H:%M:%S"),
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+    totals_row <- data.frame(
+      BuildLabel = "TOTAL PORTFOLIO",
+      NumLineups = sum(build_summary$NumLineups),
+      LockedFighters = "",
+      ExcludedFighters = "",
+      MinTop1 = NA,
+      AvgTop1Count = round(mean(rv$fd_random_lineups$Top1Count, na.rm = TRUE), 1),
+      Timestamp = "",
+      stringsAsFactors = FALSE
+    )
+    
+    build_summary <- rbind(build_summary, totals_row)
+    
+    dt <- datatable(
+      build_summary,
+      options = list(
+        scrollX = TRUE,
+        pageLength = -1,
+        dom = 't',
+        columnDefs = list(
+          list(targets = "_all", className = 'dt-center')
+        )
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe'
+    ) %>%
+      formatStyle(
+        'BuildLabel',
+        target = 'row',
+        fontWeight = styleEqual('TOTAL PORTFOLIO', 'bold'),
+        backgroundColor = styleEqual('TOTAL PORTFOLIO', '#ffffcc')
+      )
+    
+    return(dt)
   })
   
   # DK filter change observer for real-time updates
@@ -5847,152 +6283,364 @@ server <- function(input, output, session) {
     dt
   })
   
-  
-  # DraftKings fighter exposure table
-  output$dk_fighter_exposure_table <- renderDT({
-    req(rv$dk_fighter_exposure)
+  output$sd_fighter_exposure_table <- renderDT({
+    req(rv$sd_random_lineups)
+    req(length(rv$sd_lineup_builds) > 0)
     
-    # Clone the data for display
-    display_data <- rv$dk_fighter_exposure
-    
-    # Always show the table, but conditionally format columns based on whether random lineups exist
-    has_random_lineups <- !is.null(rv$dk_random_lineups) && nrow(rv$dk_random_lineups) > 0
-    
-    # Hide DKID column if it exists
-    if("DKID" %in% names(display_data)) {
-      display_data$DKID <- NULL
-    }
-    
-    # Reorder columns to put metrics in a logical order
-    base_cols <- c("Name", "DKSalary", "DKOwn", "OptimalRate", "FilteredPoolRate")
-    
-    # Only include Exposure and Leverage columns if we have random lineups
-    if(has_random_lineups) {
-      col_order <- c(base_cols, "Exposure", "Leverage")
-    } else {
-      col_order <- base_cols
-      # Remove these columns from display if no random lineups
-      display_data$Exposure <- NULL
-      display_data$Leverage <- NULL
-    }
-    
-    # Add remaining columns
-    remaining_cols <- setdiff(names(display_data), col_order)
-    col_order <- c(col_order, remaining_cols)
-    
-    # Reorder columns (only if they exist)
-    display_data <- display_data[, intersect(col_order, names(display_data)), drop = FALSE]
-    
-    # Create the datatable
-    dt <- datatable(
-      display_data,
-      options = list(
-        pageLength = -1,
-        dom = "t",
-        scrollX = TRUE,
-        order = list(list(3, 'desc')),  # Sort by OptimalRate (4th column, 0-indexed = 3)
-        rownames = FALSE
-      ),
-      rownames = FALSE
-    )
-    
-    # Apply formatting
-    if("DKSalary" %in% names(display_data)) {
-      dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, mark = ",", digits = 0)
-    }
-    
-    # Format DKOwn as percentage if present
-    if("DKOwn" %in% names(display_data)) {
-      dt <- dt %>% formatPercentage('DKOwn', digits = 1)
-    }
-    
-    # Format numeric columns with 1 decimal place
-    numeric_cols <- intersect(
-      c('OptimalRate', 'FilteredPoolRate', 'Exposure', 'Leverage'),
-      names(display_data)
-    )
-    
-    if(length(numeric_cols) > 0) {
-      dt <- dt %>% formatRound(numeric_cols, digits = 1)
-    }
-    
-    return(dt)
+    tryCatch({
+      # Combine all builds
+      all_lineups <- rv$sd_random_lineups
+      total_lineups <- nrow(all_lineups)
+      
+      # Get all unique fighters from portfolio
+      # IMPORTANT: Uses Captain + Fighter1-5 (NOT Player1-5!)
+      all_fighters <- c()
+      
+      if("Captain" %in% names(all_lineups)) {
+        all_fighters <- c(all_fighters, all_lineups$Captain)
+      }
+      
+      for(i in 1:5) {
+        col <- paste0("Fighter", i)
+        if(col %in% names(all_lineups)) {
+          all_fighters <- c(all_fighters, all_lineups[[col]])
+        }
+      }
+      
+      all_fighters <- unique(all_fighters)
+      
+      # Create exposure stats
+      display_data <- data.frame(
+        Name = all_fighters,
+        CPT_Exposure = 0,
+        Flex_Exposure = 0,
+        stringsAsFactors = FALSE
+      )
+      
+      # Calculate captain and flex exposure for each fighter
+      for(i in 1:nrow(display_data)) {
+        fighter <- display_data$Name[i]
+        
+        # Captain exposure
+        if("Captain" %in% names(all_lineups)) {
+          cpt_count <- sum(all_lineups$Captain == fighter, na.rm = TRUE)
+          display_data$CPT_Exposure[i] <- round((cpt_count / total_lineups) * 100, 1)
+        }
+        
+        # Flex exposure (Fighter1-5)
+        flex_count <- 0
+        for(j in 1:5) {
+          col <- paste0("Fighter", j)
+          if(col %in% names(all_lineups)) {
+            flex_count <- flex_count + sum(all_lineups[[col]] == fighter, na.rm = TRUE)
+          }
+        }
+        display_data$Flex_Exposure[i] <- round((flex_count / total_lineups) * 100, 1)
+      }
+      
+      # Total exposure
+      display_data$Total_Exposure <- display_data$CPT_Exposure + display_data$Flex_Exposure
+      
+      # Get fighter info from simulation results
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "SDSal")]
+      
+      # Merge with fighter info
+      display_data <- merge(display_data, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Showdown doesn't have ownership, hardcode to 0
+      display_data$Own <- 0
+      
+      # Calculate leverage for each category
+      display_data$CPT_Leverage <- round(display_data$CPT_Exposure - display_data$Own, 1)
+      display_data$Flex_Leverage <- round(display_data$Flex_Exposure - display_data$Own, 1)
+      display_data$Total_Leverage <- round(display_data$Total_Exposure - display_data$Own, 1)
+      
+      # Filter to only fighters with exposure > 0 and select columns
+      display_data <- display_data[display_data$Total_Exposure > 0, ]
+      display_data <- display_data[, c("Name", "SDSal", 
+                                       "CPT_Exposure", "Flex_Exposure", "Total_Exposure", "Own",
+                                       "CPT_Leverage", "Flex_Leverage", "Total_Leverage")]
+      display_data <- display_data[order(-display_data$Total_Exposure), ]
+      
+      # Create caption
+      caption_text <- sprintf("Portfolio Exposure (%s lineups across %s builds)", 
+                              format(total_lineups, big.mark = ","),
+                              length(rv$sd_lineup_builds))
+      
+      # Create datatable
+      dt <- datatable(
+        display_data,
+        caption = caption_text,
+        options = list(
+          pageLength = 25,
+          dom = "ftp",
+          scrollX = TRUE,
+          order = list(list(4, 'desc')),  # Sort by Total_Exposure
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("SDSal" %in% names(display_data)) {
+        dt <- dt %>% formatCurrency('SDSal', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(
+        c('CPT_Exposure', 'Flex_Exposure', 'Total_Exposure', 'Own',
+          'CPT_Leverage', 'Flex_Leverage', 'Total_Leverage'), 
+        names(display_data)
+      )
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add gold color bar to Total_Exposure
+      dt <- dt %>% formatStyle(
+        'Total_Exposure',
+        background = styleColorBar(range(display_data$Total_Exposure, na.rm = TRUE), '#FFD700'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
   })
   
+  
+  
+  output$dk_fighter_exposure_table <- renderDT({
+    req(rv$dk_random_lineups)
+    req(length(rv$dk_lineup_builds) > 0)
+    
+    tryCatch({
+      # Combine all builds
+      all_lineups <- rv$dk_random_lineups
+      total_lineups <- nrow(all_lineups)
+      
+      # Get all unique fighters from portfolio
+      fighter_cols <- paste0("Fighter", 1:DK_ROSTER_SIZE)
+      
+      # Extract all fighters safely
+      all_fighters <- c()
+      for(col in fighter_cols) {
+        if(col %in% names(all_lineups)) {
+          all_fighters <- c(all_fighters, all_lineups[[col]])
+        }
+      }
+      all_fighters <- unique(all_fighters)
+      
+      # Create exposure stats
+      display_data <- data.frame(
+        Name = all_fighters,
+        Exposure = 0,
+        stringsAsFactors = FALSE
+      )
+      
+      # Calculate exposure for each fighter
+      for(i in 1:nrow(display_data)) {
+        fighter <- display_data$Name[i]
+        
+        # Count appearances across all fighter columns
+        count <- 0
+        for(col in fighter_cols) {
+          if(col %in% names(all_lineups)) {
+            count <- count + sum(all_lineups[[col]] == fighter, na.rm = TRUE)
+          }
+        }
+        display_data$Exposure[i] <- round((count / total_lineups) * 100, 1)
+      }
+      
+      # Get fighter info from simulation results (salary and ownership)
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "DKSalary", "DKOwn")]
+      
+      # Merge with fighter info
+      display_data <- merge(display_data, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Convert DKOwn to percentage
+      display_data$Own <- display_data$DKOwn * 100
+      
+      # Calculate Leverage
+      display_data$Leverage <- round(display_data$Exposure - display_data$Own, 1)
+      
+      # Filter to only fighters with exposure > 0 and select columns
+      display_data <- display_data[display_data$Exposure > 0, ]
+      display_data <- display_data[, c("Name", "DKSalary", "Exposure", "Own", "Leverage")]
+      display_data <- display_data[order(-display_data$Exposure), ]
+      
+      # Create caption
+      caption_text <- sprintf("Portfolio Exposure (%s lineups across %s builds)", 
+                              format(total_lineups, big.mark = ","),
+                              length(rv$dk_lineup_builds))
+      
+      # Create datatable
+      dt <- datatable(
+        display_data,
+        caption = caption_text,
+        options = list(
+          pageLength = 25,
+          dom = "ftp",
+          scrollX = TRUE,
+          order = list(list(2, 'desc')),  # Sort by Exposure
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("DKSalary" %in% names(display_data)) {
+        dt <- dt %>% formatCurrency('DKSalary', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(c('Exposure', 'Own', 'Leverage'), 
+                                names(display_data))
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add gold color bar to Exposure
+      dt <- dt %>% formatStyle(
+        'Exposure',
+        background = styleColorBar(range(display_data$Exposure, na.rm = TRUE), '#FFD700'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
+  })
+  
+  
+  # ===== FD EXPOSURE TABLE =====
+  # Replace output$fd_fighter_exposure_table
   
   output$fd_fighter_exposure_table <- renderDT({
-    req(rv$fd_fighter_exposure)
+    req(rv$fd_random_lineups)
+    req(length(rv$fd_lineup_builds) > 0)
     
-    # Clone the data for display
-    display_data <- rv$fd_fighter_exposure
-    
-    # If random lineups don't exist, remove the Exposure and Leverage columns
-    if(is.null(rv$fd_random_lineups) || nrow(rv$fd_random_lineups) == 0) {
-      # Make sure these columns don't appear if they somehow exist
-      display_data$Exposure <- NULL
-      display_data$Leverage <- NULL
-    }
-    
-    # Hide FDID column
-    display_data$FDID <- NULL
-    
-    # Reorder columns to put metrics in a logical order
-    col_order <- c("Name", "FDSalary", "FDOwn", "OptimalRate", "FilteredPoolRate", "MVPRate")
-    
-    # Add Exposure and Leverage if they exist
-    if("Exposure" %in% names(display_data)) {
-      col_order <- c(col_order, "Exposure")
-    }
-    if("MVPExposure" %in% names(display_data)) {
-      col_order <- c(col_order, "MVPExposure")
-    }
-    if("Leverage" %in% names(display_data)) {
-      col_order <- c(col_order, "Leverage")
-    }
-    
-    # Add remaining columns
-    remaining_cols <- setdiff(names(display_data), col_order)
-    col_order <- c(col_order, remaining_cols)
-    
-    # Reorder columns (only if they exist)
-    display_data <- display_data[, intersect(col_order, names(display_data))]
-    
-    # Create the datatable
-    dt <- datatable(
-      display_data,
-      options = list(
-        pageLength = -1,
-        dom = "t",
-        scrollX = TRUE,
-        order = list(list(3, 'desc')),  # Sort by OptimalRate by default (adjusted for new column order)
-        rownames = FALSE  # Remove row numbers
-      ),
-      rownames = FALSE
-    )
-    
-    # Apply formatting
-    if("FDSalary" %in% names(display_data)) {
-      dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, mark = ",", digits = 0)
-    }
-    
-    # Format FDOwn as percentage if present
-    if("FDOwn" %in% names(display_data)) {
-      dt <- dt %>% formatPercentage('FDOwn', digits = 1)
-    }
-    
-    # Format numeric columns with 1 decimal place
-    numeric_cols <- intersect(
-      c('OptimalRate', 'FilteredPoolRate', 'MVPRate', 'Exposure', 'MVPExposure', 'Leverage'),
-      names(display_data)
-    )
-    
-    if(length(numeric_cols) > 0) {
-      dt <- dt %>% formatRound(numeric_cols, digits = 1)
-    }
-    
-    
-    return(dt)
+    tryCatch({
+      # Combine all builds
+      all_lineups <- rv$fd_random_lineups
+      total_lineups <- nrow(all_lineups)
+      
+      # Get all unique fighters from portfolio (MVP + Fighter1-5)
+      fighter_cols <- c("MVP", paste0("Fighter", 1:(FD_ROSTER_SIZE-1)))
+      all_fighters <- unique(unlist(all_lineups[, fighter_cols]))
+      
+      # Create exposure stats
+      display_data <- data.frame(
+        Name = all_fighters,
+        Exposure = 0,
+        stringsAsFactors = FALSE
+      )
+      
+      # Calculate exposure for each fighter
+      for(i in 1:nrow(display_data)) {
+        fighter <- display_data$Name[i]
+        
+        # Count appearances across all fighter columns
+        count <- 0
+        for(col in fighter_cols) {
+          if(col %in% names(all_lineups)) {
+            count <- count + sum(all_lineups[[col]] == fighter, na.rm = TRUE)
+          }
+        }
+        display_data$Exposure[i] <- round((count / total_lineups) * 100, 1)
+      }
+      
+      # Get fighter info from simulation results (salary and ownership)
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "FDSalary", "FDOwn")]
+      
+      # Merge with fighter info
+      display_data <- merge(display_data, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Convert FDOwn to percentage
+      display_data$Own <- display_data$FDOwn * 100
+      
+      # Calculate Leverage
+      display_data$Leverage <- round(display_data$Exposure - display_data$Own, 1)
+      
+      # Filter to only fighters with exposure > 0
+      display_data <- display_data %>%
+        filter(Exposure > 0) %>%
+        select(Name, FDSalary, Exposure, Own, Leverage) %>%
+        arrange(desc(Exposure))
+      
+      # Create caption
+      caption_text <- sprintf("Portfolio Exposure (%s lineups across %s builds)", 
+                              format(total_lineups, big.mark = ","),
+                              length(rv$fd_lineup_builds))
+      
+      # Create datatable
+      dt <- datatable(
+        display_data,
+        caption = caption_text,
+        options = list(
+          pageLength = 25,
+          dom = "ftp",
+          scrollX = TRUE,
+          order = list(list(2, 'desc')),  # Sort by Exposure
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("FDSalary" %in% names(display_data)) {
+        dt <- dt %>% formatCurrency('FDSalary', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(c('Exposure', 'Own', 'Leverage'), 
+                                names(display_data))
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add gold color bar to Exposure
+      dt <- dt %>% formatStyle(
+        'Exposure',
+        background = styleColorBar(range(display_data$Exposure, na.rm = TRUE), '#FFD700'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
   })
+  
   
   output$dk_random_lineups_table <- renderDT({
     req(rv$dk_random_lineups)
@@ -6291,32 +6939,28 @@ server <- function(input, output, session) {
   
   output$download_dk_random_lineups <- downloadHandler(
     filename = function() {
-      paste("dk_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+      paste0("MMA_DK_Portfolio_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
     },
     content = function(file) {
-      # Check if random lineups exist
-      if(is.null(rv$dk_random_lineups) || nrow(rv$dk_random_lineups) == 0) {
-        # Create an empty dataframe with appropriate columns if no lineups exist
-        empty_data <- data.frame(matrix(ncol = DK_ROSTER_SIZE, nrow = 0))
-        colnames(empty_data) <- paste0("Fighter", 1:DK_ROSTER_SIZE)
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
+      req(length(rv$dk_lineup_builds) > 0)
+      
+      # Combine all builds
+      all_lineups <- do.call(rbind, lapply(rv$dk_lineup_builds, function(b) b$lineups))
       
       # Create a copy for downloading
-      download_data <- as.data.frame(rv$dk_random_lineups)
+      download_data <- as.data.frame(all_lineups)
       
       # Create a name-to-DKID mapping from the simulation results
       name_to_id_map <- unique(rv$simulation_results[, c("Name", "DKID")])
       
-      # Replace fighter names with DKIDs in the download data
+      # Replace fighter names with "Name (ID)" format
       for(i in 1:DK_ROSTER_SIZE) {
         col <- paste0("Fighter", i)
         if(col %in% names(download_data)) {
           download_data[[col]] <- sapply(download_data[[col]], function(name) {
             match_idx <- which(name_to_id_map$Name == name)
             if(length(match_idx) > 0) {
-              name_to_id_map$DKID[match_idx[1]]
+              paste0(name, " (", name_to_id_map$DKID[match_idx[1]], ")")
             } else {
               name  # Fallback to name if ID not found
             }
@@ -6324,10 +6968,13 @@ server <- function(input, output, session) {
         }
       }
       
+      # Keep all columns including BuildLabel, LineupNum, and all metrics
       write.csv(download_data, file, row.names = FALSE)
     },
     contentType = "text/csv"
   )
+  
+
   
   output$download_fd_optimal_lineups <- downloadHandler(
     filename = function() {
@@ -6456,132 +7103,22 @@ server <- function(input, output, session) {
     contentType = "text/csv"  # Explicitly set MIME type for CSV
   )
   
+  
   output$download_fd_random_lineups <- downloadHandler(
     filename = function() {
-      paste("fd_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+      paste0("MMA_FD_Portfolio_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
     },
     content = function(file) {
-      # Check if random lineups exist
-      if(is.null(rv$fd_random_lineups) || nrow(rv$fd_random_lineups) == 0) {
-        empty_data <- data.frame(
-          MVP = character(0),
-          Fighter1 = character(0),
-          Fighter2 = character(0),
-          Fighter3 = character(0), 
-          Fighter4 = character(0),
-          Fighter5 = character(0),
-          Top1Count = integer(0),
-          Top2Count = integer(0),
-          Top3Count = integer(0),
-          Top5Count = integer(0),
-          TotalSalary = integer(0),
-          stringsAsFactors = FALSE
-        )
-        write.csv(empty_data, file, row.names = FALSE)
-        return()
-      }
+      req(length(rv$fd_lineup_builds) > 0)
       
-      # Get the original lineup data
-      original_data <- as.data.frame(rv$fd_random_lineups)
+      # Combine all builds
+      all_lineups <- do.call(rbind, lapply(rv$fd_lineup_builds, function(b) b$lineups))
       
-      # Create a name-to-FDID mapping from simulation results
-      name_to_id_map <- NULL
-      if(!is.null(rv$simulation_results)) {
-        # Create a direct mapping from fighter names to FDID
-        name_map <- rv$simulation_results[!duplicated(rv$simulation_results$Name), c("Name", "FDID")]
-        # Remove rows with NA in either column
-        name_map <- name_map[!is.na(name_map$Name) & !is.na(name_map$FDID), ]
-        if(nrow(name_map) > 0) {
-          name_to_id_map <- setNames(name_map$FDID, name_map$Name)
-        }
-      }
-      
-      # Prepare final data with required columns
-      download_data <- data.frame(
-        MVP = character(nrow(original_data)),
-        Fighter1 = character(nrow(original_data)),
-        Fighter2 = character(nrow(original_data)),
-        Fighter3 = character(nrow(original_data)),
-        Fighter4 = character(nrow(original_data)),
-        Fighter5 = character(nrow(original_data)),
-        stringsAsFactors = FALSE
-      )
-      
-      # Add the count and salary columns if they exist
-      for(col in c("Top1Count", "Top2Count", "Top3Count", "Top5Count", "TotalSalary")) {
-        if(col %in% names(original_data)) {
-          download_data[[col]] <- original_data[[col]]
-        } else {
-          download_data[[col]] <- NA
-        }
-      }
-      
-      # Process each row
-      for(i in 1:nrow(original_data)) {
-        # Get MVP
-        mvp_name <- NA_character_
-        if("MVP" %in% names(original_data)) {
-          mvp_name <- as.character(original_data$MVP[i])
-        }
-        
-        # Get all fighters for this lineup
-        fighters_list <- c()
-        for(j in 1:6) {
-          col_name <- paste0("Fighter", j)
-          if(col_name %in% names(original_data) && !is.na(original_data[[col_name]][i])) {
-            fighter_name <- as.character(original_data[[col_name]][i])
-            if(fighter_name != mvp_name) {
-              fighters_list <- c(fighters_list, fighter_name)
-            }
-          }
-        }
-        
-        # Ensure we have exactly 5 non-MVP fighters
-        while(length(fighters_list) < 5) {
-          fighters_list <- c(fighters_list, NA_character_)
-        }
-        if(length(fighters_list) > 5) {
-          fighters_list <- fighters_list[1:5]
-        }
-        
-        # Assign to download data
-        download_data$MVP[i] <- mvp_name
-        for(j in 1:5) {
-          download_data[[paste0("Fighter", j)]][i] <- fighters_list[j]
-        }
-      }
-      
-      # Replace names with FDIDs if mapping is available
-      if(!is.null(name_to_id_map)) {
-        # Convert MVP column
-        download_data$MVP <- sapply(download_data$MVP, function(name) {
-          if(is.na(name)) return(NA_character_)
-          if(name %in% names(name_to_id_map)) {
-            return(name_to_id_map[name])
-          } else {
-            return(name)  # Fallback to name if ID not found
-          }
-        })
-        
-        # Convert Fighter columns
-        for(i in 1:5) {
-          col <- paste0("Fighter", i)
-          download_data[[col]] <- sapply(download_data[[col]], function(name) {
-            if(is.na(name)) return(NA_character_)
-            if(name %in% names(name_to_id_map)) {
-              return(name_to_id_map[name])
-            } else {
-              return(name)  # Fallback to name if ID not found
-            }
-          })
-        }
-      }
-      
-      write.csv(download_data, file, row.names = FALSE)
+      # FanDuel doesn't use IDs, just keep names as-is
+      write.csv(all_lineups, file, row.names = FALSE)
     },
     contentType = "text/csv"
   )
-  
   
   # Memory cleanup functions
   observe({
@@ -6989,49 +7526,142 @@ server <- function(input, output, session) {
     dt
   })
   
-  # SD fighter exposure table
-  output$sd_fighter_exposure_table <- renderDT({
-    req(rv$sd_fighter_exposure)
+
+  output$sd_filtered_pool_stats_table <- renderDT({
+    req(rv$simulation_complete)
     
-    display_data <- as.data.frame(rv$sd_fighter_exposure)
+    filtered_pool <- sd_filtered_optimal_lineups()
     
-    dt <- datatable(
-      display_data,
-      options = list(
-        pageLength = 50,
-        scrollX = TRUE,
-        dom = "tip",
-        order = list(list(which(names(display_data) == "TotalExp") - 1, 'desc')),
-        columnDefs = list(list(className = 'dt-center', targets = "_all"))
-      ),
-      class = 'cell-border stripe compact',
-      rownames = FALSE
-    )
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      return(datatable(data.frame(Message = "No lineups in filtered pool"),
+                       options = list(dom = 't'), rownames = FALSE))
+    }
     
-    for(col in c("CaptainExp", "FighterExp", "TotalExp")) {
-      if(col %in% names(display_data)) {
-        dt <- dt %>% formatRound(col, digits = 1) %>%
-          formatStyle(
-            col,
-            background = styleColorBar(c(0, max(display_data[[col]], na.rm = TRUE)), '#FFD700'),
-            backgroundSize = '100% 90%',
-            backgroundRepeat = 'no-repeat',
-            backgroundPosition = 'center'
-          )
+    tryCatch({
+      # Get all unique fighters from filtered pool
+      # IMPORTANT: Showdown uses Captain + Fighter1-5 in YOUR data
+      all_fighters <- c()
+      
+      # Add captains
+      if("Captain" %in% names(filtered_pool)) {
+        all_fighters <- c(all_fighters, filtered_pool$Captain)
       }
-    }
-    
-    if("SDSal" %in% names(display_data)) {
-      dt <- dt %>% formatCurrency('SDSal', currency = "$", interval = 3, mark = ",", digits = 0)
-    }
-    
-    if("Proj" %in% names(display_data)) {
-      dt <- dt %>% formatRound('Proj', digits = 1)
-    }
-    
-    dt
-  })
-  
+      
+      # Add fighters 1-5 (NOT Player1-5!)
+      for(i in 1:5) {
+        col <- paste0("Fighter", i)
+        if(col %in% names(filtered_pool)) {
+          all_fighters <- c(all_fighters, filtered_pool[[col]])
+        }
+      }
+      
+      all_fighters <- unique(all_fighters)
+      
+      # Create stats dataframe
+      fighter_stats <- data.frame(
+        Name = all_fighters,
+        CPT_Count = 0,
+        Flex_Count = 0,
+        stringsAsFactors = FALSE
+      )
+      
+      # Count captain appearances
+      for(i in 1:nrow(fighter_stats)) {
+        fighter <- fighter_stats$Name[i]
+        
+        # Captain count
+        if("Captain" %in% names(filtered_pool)) {
+          fighter_stats$CPT_Count[i] <- sum(filtered_pool$Captain == fighter, na.rm = TRUE)
+        }
+        
+        # Flex count (Fighter1-5)
+        flex_count <- 0
+        for(j in 1:5) {
+          col <- paste0("Fighter", j)
+          if(col %in% names(filtered_pool)) {
+            flex_count <- flex_count + sum(filtered_pool[[col]] == fighter, na.rm = TRUE)
+          }
+        }
+        fighter_stats$Flex_Count[i] <- flex_count
+      }
+      
+      # Calculate rates
+      fighter_stats$CPT_Rate <- round((fighter_stats$CPT_Count / nrow(filtered_pool)) * 100, 1)
+      fighter_stats$Flex_Rate <- round((fighter_stats$Flex_Count / nrow(filtered_pool)) * 100, 1)
+      fighter_stats$TotalRate <- fighter_stats$CPT_Rate + fighter_stats$Flex_Rate
+      
+      # Get fighter info from simulation results
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "SDSal")]
+      
+      # Merge with fighter info
+      fighter_stats <- merge(fighter_stats, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Showdown doesn't have ownership, hardcode to 0
+      fighter_stats$Own <- 0
+      
+      # Calculate leverage
+      fighter_stats$CPT_Leverage <- round(fighter_stats$CPT_Rate - fighter_stats$Own, 1)
+      fighter_stats$Flex_Leverage <- round(fighter_stats$Flex_Rate - fighter_stats$Own, 1)
+      fighter_stats$Total_Leverage <- round(fighter_stats$TotalRate - fighter_stats$Own, 1)
+      
+      # Select and order columns
+      fighter_stats <- fighter_stats[, c("Name", "SDSal", "CPT_Rate", "Flex_Rate", "TotalRate", 
+                                         "Own", "CPT_Leverage", "Flex_Leverage", "Total_Leverage")]
+      fighter_stats <- fighter_stats[order(-fighter_stats$TotalRate), ]
+      
+      # Create caption
+      caption_text <- sprintf("Filtered Pool: %s lineups", 
+                              format(nrow(filtered_pool), big.mark = ","))
+      
+      # Create display
+      dt <- datatable(
+        fighter_stats,
+        caption = caption_text,
+        options = list(
+          scrollX = TRUE,
+          pageLength = 25,
+          dom = 'ftp',
+          order = list(list(4, 'desc')),  # Sort by TotalRate
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("SDSal" %in% names(fighter_stats)) {
+        dt <- dt %>% formatCurrency('SDSal', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(c('CPT_Rate', 'Flex_Rate', 'TotalRate', 'Own', 
+                                  'CPT_Leverage', 'Flex_Leverage', 'Total_Leverage'), 
+                                names(fighter_stats))
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add color bar to TotalRate
+      dt <- dt %>% formatStyle(
+        'TotalRate',
+        background = styleColorBar(range(fighter_stats$TotalRate, na.rm = TRUE), '#32CD32'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
+  })  
+
   # SD download handler
   output$download_sd_optimal_lineups <- downloadHandler(
     filename = function() {
@@ -7087,42 +7717,153 @@ server <- function(input, output, session) {
   # DK SHOWDOWN LINEUP BUILDER HANDLERS
   # ==================================================================
   
-  # SD lineup generation
+  
+  sd_filtered_optimal_lineups <- reactive({
+    req(rv$sd_optimal_lineups)
+    
+    optimal <- rv$sd_optimal_lineups
+    
+    # Apply Top Count filters
+    filtered <- optimal %>%
+      filter(
+        Top1Count >= input$sd_min_top1_count,
+        Top2Count >= input$sd_min_top2_count,
+        Top3Count >= input$sd_min_top3_count,
+        Top5Count >= input$sd_min_top5_count
+      )
+    
+    # Apply exclude filter
+    if(!is.null(input$sd_excluded_fighters) && length(input$sd_excluded_fighters) > 0) {
+      # FIXED: Use Fighter1-5 instead of Player1-5
+      fighter_cols <- c("Captain", paste0("Fighter", 1:5))
+      
+      for(excluded_fighter in input$sd_excluded_fighters) {
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            filtered <- filtered[filtered[[col]] != excluded_fighter, ]
+          }
+        }
+      }
+    }
+    
+    # Apply lock filter
+    if(!is.null(input$sd_locked_fighters) && length(input$sd_locked_fighters) > 0) {
+      # FIXED: Use Fighter1-5 instead of Player1-5
+      fighter_cols <- c("Captain", paste0("Fighter", 1:5))
+      
+      for(locked_fighter in input$sd_locked_fighters) {
+        # Keep only lineups that contain this fighter
+        has_fighter <- rep(FALSE, nrow(filtered))
+        for(col in fighter_cols) {
+          if(col %in% names(filtered)) {
+            has_fighter <- has_fighter | (filtered[[col]] == locked_fighter)
+          }
+        }
+        filtered <- filtered[has_fighter, ]
+      }
+    }
+    
+    return(filtered)
+  })
+  
+  # SD filtered pool size display
+  output$sd_filtered_pool_size <- renderText({
+    filtered <- sd_filtered_optimal_lineups()
+    
+    if(is.null(filtered) || nrow(filtered) == 0) {
+      return("No lineups match current filters")
+    }
+    
+    paste0(
+      nrow(filtered), " lineups in filtered pool ",
+      "(", round(nrow(filtered) / nrow(rv$sd_optimal_lineups) * 100, 1), "% of total)"
+    )
+  })
+  
+  # SD filtered pool count (for title display)
+  output$sd_filtered_pool_count <- renderText({
+    filtered <- sd_filtered_optimal_lineups()
+    if(is.null(filtered) || nrow(filtered) == 0) return("0")
+    return(format(nrow(filtered), big.mark = ","))
+  })
+  
+
+  
   observeEvent(input$generate_sd_lineups, {
     req(rv$sd_optimal_lineups)
     
-    # Create filters for lineup generation (no ownership filters)
-    filters <- list(
-      min_top1_count = input$sd_min_top1_count,
-      min_top2_count = input$sd_min_top2_count,
-      min_top3_count = input$sd_min_top3_count,
-      min_top5_count = input$sd_min_top5_count,
-      num_lineups = input$sd_num_random_lineups,
-      excluded_fighters = input$sd_excluded_fighters
-    )
+    filtered_pool <- sd_filtered_optimal_lineups()
+    
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      showModal(modalDialog(
+        title = "Error",
+        "No lineups match the selected filters. Try adjusting your criteria.",
+        easyClose = TRUE
+      ))
+      return()
+    }
+    
+    # Get number of lineups to generate
+    num_lineups <- input$sd_num_random_lineups
+    
+    # Get build label (or generate default)
+    build_label <- if(!is.null(input$sd_build_label) && nchar(trimws(input$sd_build_label)) > 0) {
+      trimws(input$sd_build_label)
+    } else {
+      paste0("Build ", length(rv$sd_lineup_builds) + 1)
+    }
     
     # Show progress
-    withProgress(message = 'Generating SD lineups...', value = 0, {
-      # Generate random lineups
-      rv$sd_random_lineups <- generate_random_sd_lineups(rv$sd_optimal_lineups, filters)
+    withProgress(message = 'Generating lineups...', value = 0, {
+      # Sample from filtered pool
+      if(nrow(filtered_pool) <= num_lineups) {
+        sampled_lineups <- filtered_pool
+      } else {
+        weights <- filtered_pool$Top1Count + 1
+        sampled_indices <- sample(1:nrow(filtered_pool), size = num_lineups, 
+                                  prob = weights, replace = FALSE)
+        sampled_lineups <- filtered_pool[sampled_indices, ]
+      }
       
-      # Update fighter exposure data
+      # Add build metadata
+      sampled_lineups$BuildLabel <- build_label
+      sampled_lineups$LineupNum <- 1:nrow(sampled_lineups)
+      
+      # Store this build
+      build_data <- list(
+        label = build_label,
+        timestamp = Sys.time(),
+        filters = list(
+          min_top1 = input$sd_min_top1_count,
+          min_top2 = input$sd_min_top2_count,
+          min_top3 = input$sd_min_top3_count,
+          min_top5 = input$sd_min_top5_count,
+          locked = input$sd_locked_fighters,
+          excluded = input$sd_excluded_fighters
+        ),
+        lineups = sampled_lineups
+      )
+      
+      # Add to builds list
+      rv$sd_lineup_builds[[length(rv$sd_lineup_builds) + 1]] <- build_data
+      
+      # Combine all builds for display
+      all_lineups <- do.call(rbind, lapply(rv$sd_lineup_builds, function(b) b$lineups))
+      rv$sd_random_lineups <- all_lineups
+      
+      # Update fighter exposure
       if(!is.null(rv$sd_random_lineups)) {
-        # Get fighter mapping
         existing_mapping <- NULL
-        
         if(!is.null(rv$sd_fighter_exposure)) {
           existing_mapping <- rv$sd_fighter_exposure[, c("Name", "SDSal", "Proj")]
         }
         
         if(is.null(existing_mapping) || nrow(existing_mapping) == 0) {
-          # Get all unique fighters from lineups
           all_fighters <- unique(c(
             rv$sd_optimal_lineups$Captain,
-            unlist(rv$sd_optimal_lineups[, paste0("Fighter", 1:5)])
+            unlist(rv$sd_optimal_lineups[, paste0("Player", 1:5)])
           ))
           
-          # Create fighter mapping from simulation results
           fighter_mapping <- data.frame(
             Name = all_fighters,
             SDSal = NA_real_,
@@ -7130,16 +7871,13 @@ server <- function(input, output, session) {
             stringsAsFactors = FALSE
           )
           
-          # Get mapping from simulation results
           unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
                                                        c("Name", "SDSal")]
           
-          # Get projections from DK fantasy analysis if available
           if(!is.null(rv$dk_fantasy_analysis)) {
             median_scores <- rv$dk_fantasy_analysis[, c("Name", "Median_DKScore")]
           }
           
-          # Match each fighter
           for(i in 1:nrow(fighter_mapping)) {
             name <- fighter_mapping$Name[i]
             matches <- which(unique_sim_fighters$Name == name)
@@ -7148,7 +7886,7 @@ server <- function(input, output, session) {
               fighter_mapping$SDSal[i] <- unique_sim_fighters$SDSal[matches[1]]
             }
             
-            if(exists("median_scores")) {
+            if(!is.null(rv$dk_fantasy_analysis)) {
               score_match <- which(median_scores$Name == name)
               if(length(score_match) > 0) {
                 fighter_mapping$Proj[i] <- median_scores$Median_DKScore[score_match[1]]
@@ -7159,7 +7897,6 @@ server <- function(input, output, session) {
           fighter_mapping <- existing_mapping
         }
         
-        # Calculate fighter exposure
         rv$sd_fighter_exposure <- calculate_sd_fighter_exposure(
           rv$sd_optimal_lineups, 
           fighter_mapping, 
@@ -7167,21 +7904,293 @@ server <- function(input, output, session) {
         )
       }
       
-      if(!is.null(rv$sd_random_lineups) && nrow(rv$sd_random_lineups) > 0) {
-        showModal(modalDialog(
-          title = "Success",
-          sprintf("Generated %d DK Showdown lineups successfully!", nrow(rv$sd_random_lineups)),
-          easyClose = TRUE
-        ))
-      } else {
-        showModal(modalDialog(
-          title = "No Lineups Generated",
-          "No lineups matched the selected filters. Try adjusting your filter settings.",
-          easyClose = TRUE
-        ))
-      }
+      showModal(modalDialog(
+        title = "Success",
+        sprintf("Added %d lineups to build '%s'! Total portfolio: %d lineups across %d builds.", 
+                nrow(sampled_lineups), build_label, nrow(rv$sd_random_lineups), 
+                length(rv$sd_lineup_builds)),
+        easyClose = TRUE
+      ))
     })
   })
+  
+  # ===== SD CLEAR BUILDS HANDLER =====
+  # Add this new handler
+  
+  observeEvent(input$clear_sd_builds, {
+    rv$sd_lineup_builds <- list()
+    rv$sd_random_lineups <- NULL
+    
+    # Recalculate exposure with just optimal lineups
+    if(!is.null(rv$sd_optimal_lineups) && !is.null(rv$simulation_results)) {
+      all_fighters <- unique(c(
+        rv$sd_optimal_lineups$Captain,
+        unlist(rv$sd_optimal_lineups[, paste0("Player", 1:5)])
+      ))
+      
+      fighter_mapping <- data.frame(
+        Name = all_fighters,
+        SDSal = NA_real_,
+        Proj = NA_real_,
+        stringsAsFactors = FALSE
+      )
+      
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "SDSal")]
+      
+      if(!is.null(rv$dk_fantasy_analysis)) {
+        median_scores <- rv$dk_fantasy_analysis[, c("Name", "Median_DKScore")]
+      }
+      
+      for(i in 1:nrow(fighter_mapping)) {
+        name <- fighter_mapping$Name[i]
+        matches <- which(unique_sim_fighters$Name == name)
+        
+        if(length(matches) > 0) {
+          fighter_mapping$SDSal[i] <- unique_sim_fighters$SDSal[matches[1]]
+        }
+        
+        if(!is.null(rv$dk_fantasy_analysis)) {
+          score_match <- which(median_scores$Name == name)
+          if(length(score_match) > 0) {
+            fighter_mapping$Proj[i] <- median_scores$Median_DKScore[score_match[1]]
+          }
+        }
+      }
+      
+      rv$sd_fighter_exposure <- calculate_sd_fighter_exposure(
+        rv$sd_optimal_lineups, 
+        fighter_mapping
+      )
+      
+      if(!is.null(rv$sd_fighter_exposure)) {
+        rv$sd_fighter_exposure$FilteredPoolRate <- rv$sd_fighter_exposure$OptimalRate
+      }
+    }
+    
+    showModal(modalDialog(
+      title = "Portfolio Cleared",
+      "All Showdown builds have been cleared.",
+      easyClose = TRUE
+    ))
+  })
+  
+  # ===== SD NEW TABLE OUTPUTS =====
+  
+  output$sd_filtered_pool_stats_table <- renderDT({
+    req(rv$simulation_complete)
+    
+    filtered_pool <- sd_filtered_optimal_lineups()
+    
+    if(is.null(filtered_pool) || nrow(filtered_pool) == 0) {
+      return(datatable(data.frame(Message = "No lineups in filtered pool"),
+                       options = list(dom = 't'), rownames = FALSE))
+    }
+    
+    tryCatch({
+      # Get all unique fighters from filtered pool
+      # IMPORTANT: Showdown uses Captain + Player1-5, NOT Fighter columns
+      all_fighters <- c()
+      
+      # Add captains
+      if("Captain" %in% names(filtered_pool)) {
+        all_fighters <- c(all_fighters, filtered_pool$Captain)
+      }
+      
+      # Add players 1-5
+      for(i in 1:5) {
+        col <- paste0("Player", i)
+        if(col %in% names(filtered_pool)) {
+          all_fighters <- c(all_fighters, filtered_pool[[col]])
+        }
+      }
+      
+      all_fighters <- unique(all_fighters)
+      
+      # Create stats dataframe
+      fighter_stats <- data.frame(
+        Name = all_fighters,
+        CPT_Count = 0,
+        Flex_Count = 0,
+        stringsAsFactors = FALSE
+      )
+      
+      # Count captain appearances
+      for(i in 1:nrow(fighter_stats)) {
+        fighter <- fighter_stats$Name[i]
+        
+        # Captain count
+        if("Captain" %in% names(filtered_pool)) {
+          fighter_stats$CPT_Count[i] <- sum(filtered_pool$Captain == fighter, na.rm = TRUE)
+        }
+        
+        # Flex count (Player1-5)
+        flex_count <- 0
+        for(j in 1:5) {
+          col <- paste0("Player", j)
+          if(col %in% names(filtered_pool)) {
+            flex_count <- flex_count + sum(filtered_pool[[col]] == fighter, na.rm = TRUE)
+          }
+        }
+        fighter_stats$Flex_Count[i] <- flex_count
+      }
+      
+      # Calculate rates
+      fighter_stats$CPT_Rate <- round((fighter_stats$CPT_Count / nrow(filtered_pool)) * 100, 1)
+      fighter_stats$Flex_Rate <- round((fighter_stats$Flex_Count / nrow(filtered_pool)) * 100, 1)
+      fighter_stats$TotalRate <- fighter_stats$CPT_Rate + fighter_stats$Flex_Rate
+      
+      # Get fighter info from simulation results
+      unique_sim_fighters <- rv$simulation_results[!duplicated(rv$simulation_results$Name), 
+                                                   c("Name", "SDSal")]
+      
+      # Merge with fighter info
+      fighter_stats <- merge(fighter_stats, unique_sim_fighters, by = "Name", all.x = TRUE)
+      
+      # Showdown doesn't have ownership, hardcode to 0
+      fighter_stats$Own <- 0
+      
+      # Calculate leverage
+      fighter_stats$CPT_Leverage <- round(fighter_stats$CPT_Rate - fighter_stats$Own, 1)
+      fighter_stats$Flex_Leverage <- round(fighter_stats$Flex_Rate - fighter_stats$Own, 1)
+      fighter_stats$Total_Leverage <- round(fighter_stats$TotalRate - fighter_stats$Own, 1)
+      
+      # Select and order columns
+      fighter_stats <- fighter_stats[, c("Name", "SDSal", "CPT_Rate", "Flex_Rate", "TotalRate", 
+                                         "Own", "CPT_Leverage", "Flex_Leverage", "Total_Leverage")]
+      fighter_stats <- fighter_stats[order(-fighter_stats$TotalRate), ]
+      
+      # Create caption
+      caption_text <- sprintf("Filtered Pool: %s lineups", 
+                              format(nrow(filtered_pool), big.mark = ","))
+      
+      # Create display
+      dt <- datatable(
+        fighter_stats,
+        caption = caption_text,
+        options = list(
+          scrollX = TRUE,
+          pageLength = 25,
+          dom = 'ftp',
+          order = list(list(4, 'desc')),  # Sort by TotalRate
+          columnDefs = list(
+            list(targets = "_all", className = 'dt-center')
+          )
+        ),
+        rownames = FALSE,
+        class = 'cell-border stripe compact'
+      )
+      
+      # Format columns
+      if("SDSal" %in% names(fighter_stats)) {
+        dt <- dt %>% formatCurrency('SDSal', currency = "$", interval = 3, 
+                                    mark = ",", digits = 0)
+      }
+      
+      # Format numeric columns
+      numeric_cols <- intersect(c('CPT_Rate', 'Flex_Rate', 'TotalRate', 'Own', 
+                                  'CPT_Leverage', 'Flex_Leverage', 'Total_Leverage'), 
+                                names(fighter_stats))
+      if(length(numeric_cols) > 0) {
+        dt <- dt %>% formatRound(numeric_cols, digits = 1)
+      }
+      
+      # Add color bar to TotalRate
+      dt <- dt %>% formatStyle(
+        'TotalRate',
+        background = styleColorBar(range(fighter_stats$TotalRate, na.rm = TRUE), '#32CD32'),
+        backgroundSize = '95% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+      
+      return(dt)
+      
+    }, error = function(e) {
+      return(datatable(data.frame(Error = paste("Error:", e$message)),
+                       options = list(dom = 't'), rownames = FALSE))
+    })
+  })
+  
+  
+  # SD Builds Summary Table
+  output$sd_builds_summary_table <- renderDT({
+    req(length(rv$sd_lineup_builds) > 0)
+    
+    build_summary <- data.frame(
+      BuildLabel = character(),
+      NumLineups = integer(),
+      LockedFighters = character(),
+      ExcludedFighters = character(),
+      MinTop1 = integer(),
+      AvgTop1Count = numeric(),
+      Timestamp = character(),
+      stringsAsFactors = FALSE
+    )
+    
+    for(i in 1:length(rv$sd_lineup_builds)) {
+      build <- rv$sd_lineup_builds[[i]]
+      
+      locked_str <- if(length(build$filters$locked) > 0) {
+        paste(build$filters$locked, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      excluded_str <- if(length(build$filters$excluded) > 0) {
+        paste(build$filters$excluded, collapse = ", ")
+      } else {
+        "None"
+      }
+      
+      build_summary <- rbind(build_summary, data.frame(
+        BuildLabel = build$label,
+        NumLineups = nrow(build$lineups),
+        LockedFighters = locked_str,
+        ExcludedFighters = excluded_str,
+        MinTop1 = build$filters$min_top1,
+        AvgTop1Count = round(mean(build$lineups$Top1Count, na.rm = TRUE), 1),
+        Timestamp = format(build$timestamp, "%Y-%m-%d %H:%M:%S"),
+        stringsAsFactors = FALSE
+      ))
+    }
+    
+    totals_row <- data.frame(
+      BuildLabel = "TOTAL PORTFOLIO",
+      NumLineups = sum(build_summary$NumLineups),
+      LockedFighters = "",
+      ExcludedFighters = "",
+      MinTop1 = NA,
+      AvgTop1Count = round(mean(rv$sd_random_lineups$Top1Count, na.rm = TRUE), 1),
+      Timestamp = "",
+      stringsAsFactors = FALSE
+    )
+    
+    build_summary <- rbind(build_summary, totals_row)
+    
+    dt <- datatable(
+      build_summary,
+      options = list(
+        scrollX = TRUE,
+        pageLength = -1,
+        dom = 't',
+        columnDefs = list(
+          list(targets = "_all", className = 'dt-center')
+        )
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe'
+    ) %>%
+      formatStyle(
+        'BuildLabel',
+        target = 'row',
+        fontWeight = styleEqual('TOTAL PORTFOLIO', 'bold'),
+        backgroundColor = styleEqual('TOTAL PORTFOLIO', '#ffffcc')
+      )
+    
+    return(dt)
+  })
+  
   
   # SD filter change observer for real-time pool size updates
   observeEvent(c(input$sd_min_top1_count, input$sd_min_top2_count, input$sd_min_top3_count, 
@@ -7277,42 +8286,42 @@ server <- function(input, output, session) {
     dt
   })
   
-  # SD random lineups download handler
   output$download_sd_random_lineups <- downloadHandler(
     filename = function() {
-      paste("sd_random_lineups_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep="")
+      paste0("MMA_SD_Portfolio_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
     },
     content = function(file) {
-      req(rv$sd_random_lineups)
+      req(length(rv$sd_lineup_builds) > 0)
       
-      display_data <- as.data.frame(rv$sd_random_lineups)
+      # Combine all builds
+      all_lineups <- do.call(rbind, lapply(rv$sd_lineup_builds, function(b) b$lineups))
       
-      # Get ID mappings
-      name_to_cptid_map <- unique(rv$simulation_results[, c("Name", "CPTID")])
-      name_to_sdid_map <- unique(rv$simulation_results[, c("Name", "SDID")])
+      # Create a copy for downloading
+      download_data <- as.data.frame(all_lineups)
       
-      download_data <- display_data
+      # Create a name-to-SDID mapping from the simulation results
+      name_to_id_map <- unique(rv$simulation_results[, c("Name", "SDID")])
       
-      # Add IDs to Captain
+      # Replace fighter names with "Name (ID)" format for Captain
       if("Captain" %in% names(download_data)) {
         download_data$Captain <- sapply(download_data$Captain, function(name) {
-          match_idx <- which(name_to_cptid_map$Name == name)
+          match_idx <- which(name_to_id_map$Name == name)
           if(length(match_idx) > 0) {
-            paste0(name, " (", name_to_cptid_map$CPTID[match_idx[1]], ")")
+            paste0(name, " (", name_to_id_map$SDID[match_idx[1]], ")")
           } else {
             name
           }
         })
       }
       
-      # Add IDs to Fighters
+      # Replace fighter names with "Name (ID)" format for Players 1-5
       for(i in 1:5) {
-        col <- paste0("Fighter", i)
+        col <- paste0("Player", i)
         if(col %in% names(download_data)) {
           download_data[[col]] <- sapply(download_data[[col]], function(name) {
-            match_idx <- which(name_to_sdid_map$Name == name)
+            match_idx <- which(name_to_id_map$Name == name)
             if(length(match_idx) > 0) {
-              paste0(name, " (", name_to_sdid_map$SDID[match_idx[1]], ")")
+              paste0(name, " (", name_to_id_map$SDID[match_idx[1]], ")")
             } else {
               name
             }
@@ -7320,17 +8329,12 @@ server <- function(input, output, session) {
         }
       }
       
-      # Select columns to keep
-      cols_to_keep <- c("Captain", paste0("Fighter", 1:5),
-                        grep("^Top[0-9]+Count$", names(download_data), value = TRUE),
-                        "TotalSalary")
-      cols_to_keep <- intersect(cols_to_keep, names(download_data))
-      download_data <- download_data[, cols_to_keep, drop = FALSE]
-      
+      # Keep all columns including BuildLabel, LineupNum, and all metrics
       write.csv(download_data, file, row.names = FALSE)
     },
     contentType = "text/csv"
   )
+  
   
   # Clean up on session end
   session$onSessionEnded(function() {
