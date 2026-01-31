@@ -8054,9 +8054,9 @@ server <- function(input, output, session) {
         all_fighters <- c(all_fighters, filtered_pool$Captain)
       }
       
-      # Add players 1-5
+      # Add fighters 1-5
       for(i in 1:5) {
-        col <- paste0("Player", i)
+        col <- paste0("Fighter", i)
         if(col %in% names(filtered_pool)) {
           all_fighters <- c(all_fighters, filtered_pool[[col]])
         }
@@ -8081,10 +8081,10 @@ server <- function(input, output, session) {
           fighter_stats$CPT_Count[i] <- sum(filtered_pool$Captain == fighter, na.rm = TRUE)
         }
         
-        # Flex count (Player1-5)
+        # Flex count (Fighter1-5)
         flex_count <- 0
         for(j in 1:5) {
-          col <- paste0("Player", j)
+          col <- paste0("Fighter", j)
           if(col %in% names(filtered_pool)) {
             flex_count <- flex_count + sum(filtered_pool[[col]] == fighter, na.rm = TRUE)
           }
@@ -8359,29 +8359,30 @@ server <- function(input, output, session) {
       # Create a copy for downloading
       download_data <- as.data.frame(all_lineups)
       
-      # Create a name-to-SDID mapping from the simulation results
-      name_to_id_map <- unique(rv$simulation_results[, c("Name", "SDID")])
+      # Create name-to-ID mappings from the simulation results
+      name_to_cptid_map <- unique(rv$simulation_results[, c("Name", "CPTID")])
+      name_to_sdid_map <- unique(rv$simulation_results[, c("Name", "SDID")])
       
-      # Replace fighter names with "Name (ID)" format for Captain
+      # Replace Captain names with "Name (CPTID)" format
       if("Captain" %in% names(download_data)) {
         download_data$Captain <- sapply(download_data$Captain, function(name) {
-          match_idx <- which(name_to_id_map$Name == name)
+          match_idx <- which(name_to_cptid_map$Name == name)
           if(length(match_idx) > 0) {
-            paste0(name, " (", name_to_id_map$SDID[match_idx[1]], ")")
+            paste0(name, " (", name_to_cptid_map$CPTID[match_idx[1]], ")")
           } else {
             name
           }
         })
       }
       
-      # Replace fighter names with "Name (ID)" format for Players 1-5
+      # Replace fighter names with "Name (SDID)" format for Fighter1-5
       for(i in 1:5) {
-        col <- paste0("Player", i)
+        col <- paste0("Fighter", i)
         if(col %in% names(download_data)) {
           download_data[[col]] <- sapply(download_data[[col]], function(name) {
-            match_idx <- which(name_to_id_map$Name == name)
+            match_idx <- which(name_to_sdid_map$Name == name)
             if(length(match_idx) > 0) {
-              paste0(name, " (", name_to_id_map$SDID[match_idx[1]], ")")
+              paste0(name, " (", name_to_sdid_map$SDID[match_idx[1]], ")")
             } else {
               name
             }
