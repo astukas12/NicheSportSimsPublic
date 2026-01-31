@@ -3748,7 +3748,7 @@ server <- function(input, output, session) {
     }
   })
   
-
+  
   
   # Generate dynamic fantasy UI based on available platforms
   output$fantasy_ui <- renderUI({
@@ -4317,79 +4317,79 @@ server <- function(input, output, session) {
                                        value = 20, min = 1, max = 150)),
                 column(6, "")  # Empty columns
               ),
-                column(3, numericInput("sd_num_random_lineups", "Number of Lineups:", 
-                                       value = 20, min = 1, max = 150))
+              column(3, numericInput("sd_num_random_lineups", "Number of Lineups:", 
+                                     value = 20, min = 1, max = 150))
+          ),
+          
+          # Filtered pool display and buttons
+          fluidRow(
+            column(6, div(
+              class = "well well-sm", 
+              div(
+                style = "display: flex; justify-content: space-between; align-items: center;",
+                h4("Filtered Pool:", style = "margin: 0;"),
+                h4(textOutput("sd_filtered_pool_count", inline = TRUE), 
+                   style = "margin: 0; font-weight: bold; color: #000000;")
               ),
-              
-              # Filtered pool display and buttons
-              fluidRow(
-                column(6, div(
-                  class = "well well-sm", 
-                  div(
-                    style = "display: flex; justify-content: space-between; align-items: center;",
-                    h4("Filtered Pool:", style = "margin: 0;"),
-                    h4(textOutput("sd_filtered_pool_count", inline = TRUE), 
-                       style = "margin: 0; font-weight: bold; color: #000000;")
-                  ),
-                  textOutput("sd_filtered_pool_size")
-                )),
-                column(6, div(style = "margin-top: 20px;",
-                              actionButton("generate_sd_lineups", "Add Lineups to Portfolio", 
-                                           class = "btn-primary btn-lg", style = "width: 100%;"),
-                              br(), br(),
-                              actionButton("clear_sd_builds", "Clear All Builds", 
-                                           class = "btn-warning", style = "width: 100%;"),
-                              br(), br(),
-                              downloadButton("download_sd_random_lineups", "Download Portfolio", 
-                                             style = "width: 100%;")))
-              )
+              textOutput("sd_filtered_pool_size")
+            )),
+            column(6, div(style = "margin-top: 20px;",
+                          actionButton("generate_sd_lineups", "Add Lineups to Portfolio", 
+                                       class = "btn-primary btn-lg", style = "width: 100%;"),
+                          br(), br(),
+                          actionButton("clear_sd_builds", "Clear All Builds", 
+                                       class = "btn-warning", style = "width: 100%;"),
+                          br(), br(),
+                          downloadButton("download_sd_random_lineups", "Download Portfolio", 
+                                         style = "width: 100%;")))
           )
-        ),
-        
-        # Filtered Pool Statistics Table
-        fluidRow(
-          box(
-            width = 12, 
-            title = div(
-              style = "display: flex; justify-content: space-between; align-items: center;",
-              span("Filtered Pool Fighter Statistics"),
-              span(textOutput("sd_filtered_pool_stats_count", inline = TRUE), 
-                   style = "font-size: 20px; font-weight: bold; color: #000000;")
-            ),
+        )
+      ),
+      
+      # Filtered Pool Statistics Table
+      fluidRow(
+        box(
+          width = 12, 
+          title = div(
+            style = "display: flex; justify-content: space-between; align-items: center;",
+            span("Filtered Pool Fighter Statistics"),
+            span(textOutput("sd_filtered_pool_stats_count", inline = TRUE), 
+                 style = "font-size: 20px; font-weight: bold; color: #000000;")
+          ),
+          status = "info",
+          solidHeader = TRUE,
+          DTOutput("sd_filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
+        )
+      ),
+      
+      # Build Summary Table
+      fluidRow(
+        box(
+          width = 12,
+          title = "Lineup Builds Summary",
+          status = "warning",
+          solidHeader = TRUE,
+          DTOutput("sd_builds_summary_table") %>% withSpinner(color = "#FFD700")
+        )
+      ),
+      
+      # Fighter Exposure Analysis (All Builds)
+      fluidRow(
+        box(width = 12, 
+            title = "Fighter Exposure Analysis (All Builds)",
             status = "info",
             solidHeader = TRUE,
-            DTOutput("sd_filtered_pool_stats_table") %>% withSpinner(color = "#FFD700")
-          )
-        ),
-        
-        # Build Summary Table
-        fluidRow(
-          box(
-            width = 12,
-            title = "Lineup Builds Summary",
-            status = "warning",
+            DTOutput("sd_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
+      ),
+      
+      # All Generated Lineups
+      fluidRow(
+        box(width = 12, 
+            title = "All Generated Lineups",
+            status = "success",
             solidHeader = TRUE,
-            DTOutput("sd_builds_summary_table") %>% withSpinner(color = "#FFD700")
-          )
-        ),
-        
-        # Fighter Exposure Analysis (All Builds)
-        fluidRow(
-          box(width = 12, 
-              title = "Fighter Exposure Analysis (All Builds)",
-              status = "info",
-              solidHeader = TRUE,
-              DTOutput("sd_fighter_exposure_table") %>% withSpinner(color = "#FFD700"))
-        ),
-        
-        # All Generated Lineups
-        fluidRow(
-          box(width = 12, 
-              title = "All Generated Lineups",
-              status = "success",
-              solidHeader = TRUE,
-              DTOutput("sd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
-        )
+            DTOutput("sd_random_lineups_table") %>% withSpinner(color = "#FFD700"))
+      )
     )
   })
   
@@ -4659,7 +4659,7 @@ server <- function(input, output, session) {
           fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
           fighter_choices <- setNames(fighter_names, fighter_labels)
           
-    
+          
           # FORCE TABLE TO APPEAR - Use isolate to prevent infinite loops
           isolate({
             # Trigger a reactive dependency by modifying and restoring the data
@@ -4687,7 +4687,7 @@ server <- function(input, output, session) {
     })
   })
   
- 
+  
   observeEvent(input$run_fd_optimization, {
     req(rv$simulation_results, rv$has_fanduel)
     
@@ -5146,7 +5146,7 @@ server <- function(input, output, session) {
   
   
   
-
+  
   
   # DraftKings filtered pool reactive
   dk_filtered_optimal_lineups <- reactive({
@@ -5653,7 +5653,7 @@ server <- function(input, output, session) {
         fighter_labels <- paste0(fighter_names, " (", round(fighter_data$OptimalRate, 1), "%)")
         fighter_choices <- setNames(fighter_names, fighter_labels)
         
-            }
+      }
     }
   })
   
@@ -6941,13 +6941,14 @@ server <- function(input, output, session) {
           download_data[[col]] <- sapply(download_data[[col]], function(name) {
             match_idx <- which(name_to_id_map$Name == name)
             if(length(match_idx) > 0) {
-              name_to_id_map$DKID[match_idx[1]]
+              paste0(name, " (", name_to_id_map$DKID[match_idx[1]], ")")
             } else {
               name  # Fallback to name if ID not found
             }
           })
         }
       }
+      
       
       # Keep fighter columns, TopX Count columns, TotalSalary, and ownership metrics
       cols_to_keep <- c(paste0("Fighter", 1:DK_ROSTER_SIZE), 
@@ -7002,7 +7003,7 @@ server <- function(input, output, session) {
     contentType = "text/csv"
   )
   
-
+  
   
   output$download_fd_optimal_lineups <- downloadHandler(
     filename = function() {
@@ -7554,7 +7555,7 @@ server <- function(input, output, session) {
     dt
   })
   
-
+  
   output$sd_filtered_pool_stats_table <- renderDT({
     req(rv$simulation_complete)
     
@@ -7689,7 +7690,7 @@ server <- function(input, output, session) {
                        options = list(dom = 't'), rownames = FALSE))
     })
   })  
-
+  
   # SD download handler
   output$download_sd_optimal_lineups <- downloadHandler(
     filename = function() {
@@ -7843,7 +7844,7 @@ server <- function(input, output, session) {
     return(format(nrow(filtered), big.mark = ","))
   })
   
-
+  
   
   observeEvent(input$generate_sd_lineups, {
     req(rv$sd_optimal_lineups)
@@ -8355,7 +8356,7 @@ server <- function(input, output, session) {
       # Randomize the order
       all_lineups <- all_lineups[sample(nrow(all_lineups)), ]
       
-       # Create a copy for downloading
+      # Create a copy for downloading
       download_data <- as.data.frame(all_lineups)
       
       # Create a name-to-SDID mapping from the simulation results
