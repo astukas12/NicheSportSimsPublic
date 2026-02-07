@@ -607,6 +607,9 @@ server <- function(input, output, session) {
   output$exposure_table <- renderDT({
     req(rv$data, input$username, input$username != "")
     
+    # Make reactive to eliminated fighters
+    eliminated <- rv$eliminated_fighters
+    
     user_data <- rv$data[Username == input$username]
     field_data <- rv$data[Username != input$username]
     
@@ -1177,15 +1180,15 @@ server <- function(input, output, session) {
       )
     ) %>%
       formatStyle(
-        'Your Lineups',
-        background = styleColorBar(c(0, max(display_table$`Your Lineups`)), '#FFE500'),
+        'You %',
+        background = styleColorBar(c(0, 100), '#FFE500'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       ) %>%
       formatStyle(
-        'Field Lineups',
-        background = styleColorBar(c(0, max(display_table$`Field Lineups`)), '#CCCCCC'),
+        'Field %',
+        background = styleColorBar(c(0, 100), '#888888'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
