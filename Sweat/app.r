@@ -1,938 +1,1282 @@
-# Install and load required packages
-if (!require("pacman")) install.packages("pacman")
-pacman::p_load(shiny, dplyr, tidyr, ggplot2, DT, writexl, plotly, shinyWidgets, data.table)
+# Golden Ticket MMA Sweat Tool
+# Optimized for speed and user experience
 
-# Configure maximum file upload size (increase to 100MB)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(shiny, dplyr, tidyr, ggplot2, DT, plotly, shinyWidgets, data.table)
+
 options(shiny.maxRequestSize = 100*1024^2)
 
 # UI Definition
 ui <- fluidPage(
-  titlePanel("NASCAR Contest Sweat Tool"),
   
-  sidebarLayout(
-    sidebarPanel(
-      fileInput("file", "Upload Contest CSV",
-                accept = c("text/csv", "application/vnd.ms-excel")),
-      checkboxInput("results_final", "Contest Results are Final", FALSE)
-    ),
-    
-    mainPanel(
-      tabsetPanel(
-        tabPanel("Contest Analysis",
-                 h4("Entry Group Analysis"),
-                 DTOutput("entry_analysis_table"),
-                 
-                 br(),
-                 h4("Most Duplicated Lineups"),
-                 DTOutput("most_duped_table")
+  # Custom CSS - Golden Ticket Theme
+  tags$head(
+    tags$style(HTML("
+      @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+      
+      /* Base styling */
+      body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #000000;
+        color: #FFFFFF;
+      }
+      
+      /* Header styling */
+      .header-container {
+        background: linear-gradient(135deg, #000000 0%, #1a1a1a 100%);
+        padding: 20px;
+        margin-bottom: 30px;
+        border-bottom: 3px solid #FFE500;
+        box-shadow: 0 4px 6px rgba(255, 229, 0, 0.1);
+      }
+      
+      .logo-title {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      
+      .logo-circle {
+        width: 60px;
+        height: 60px;
+        background: #FFE500;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 24px;
+        color: #000000;
+        box-shadow: 0 4px 8px rgba(255, 229, 0, 0.3);
+      }
+      
+      .app-title {
+        color: #FFE500;
+        font-size: 32px;
+        font-weight: 700;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+      }
+      
+      .app-subtitle {
+        color: #CCCCCC;
+        font-size: 14px;
+        margin: 5px 0 0 0;
+      }
+      
+      /* Panel styling */
+      .well {
+        background-color: #1a1a1a;
+        border: 1px solid #FFE500;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 4px rgba(255, 229, 0, 0.1);
+      }
+      
+      .upload-panel {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+        border: 2px solid #FFE500;
+        border-radius: 12px;
+        padding: 30px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 8px rgba(255, 229, 0, 0.2);
+      }
+      
+      /* Input styling */
+      .form-control, .selectize-input {
+        background-color: #2a2a2a !important;
+        border: 1px solid #FFE500;
+        color: #FFFFFF !important;
+        border-radius: 4px;
+      }
+      
+      .form-control:focus, .selectize-input.focus {
+        background-color: #333333 !important;
+        border-color: #FFE500;
+        box-shadow: 0 0 8px rgba(255, 229, 0, 0.4);
+        color: #FFFFFF !important;
+      }
+      
+      .selectize-input input {
+        color: #FFFFFF !important;
+      }
+      
+      .selectize-input .item {
+        background-color: #FFE500;
+        color: #000000;
+        border: none;
+        padding: 2px 8px;
+        border-radius: 3px;
+      }
+      
+      .selectize-dropdown {
+        background-color: #2a2a2a;
+        border: 1px solid #FFE500;
+        color: #FFFFFF;
+      }
+      
+      .selectize-dropdown-content .option {
+        background-color: #2a2a2a;
+        color: #FFFFFF;
+        padding: 8px 12px;
+      }
+      
+      .selectize-dropdown-content .option:hover,
+      .selectize-dropdown-content .option.active {
+        background-color: #FFE500;
+        color: #000000;
+      }
+      
+      /* Button styling */
+      .btn-primary {
+        background: linear-gradient(135deg, #FFE500 0%, #FFA500 100%);
+        border: none;
+        color: #000000;
+        font-weight: 600;
+        border-radius: 6px;
+        padding: 10px 24px;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(255, 229, 0, 0.3);
+      }
+      
+      .btn-primary:hover {
+        background: linear-gradient(135deg, #FFA500 0%, #FFE500 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(255, 229, 0, 0.4);
+        color: #000000;
+      }
+      
+      .btn-danger {
+        background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+        border: none;
+        color: #FFFFFF;
+        font-weight: 600;
+        border-radius: 6px;
+        padding: 10px 24px;
+        transition: all 0.3s ease;
+      }
+      
+      .btn-danger:hover {
+        background: linear-gradient(135deg, #c82333 0%, #dc3545 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(220, 53, 69, 0.4);
+      }
+      
+      /* Tab styling */
+      .nav-tabs {
+        border-bottom: 2px solid #FFE500;
+        background-color: #1a1a1a;
+        border-radius: 8px 8px 0 0;
+        padding: 10px 10px 0 10px;
+      }
+      
+      .nav-tabs > li > a {
+        color: #CCCCCC;
+        background-color: #2a2a2a;
+        border: 1px solid #444444;
+        margin-right: 5px;
+        border-radius: 6px 6px 0 0;
+        font-weight: 600;
+      }
+      
+      .nav-tabs > li > a:hover {
+        background-color: #333333;
+        border-color: #FFE500;
+        color: #FFE500;
+      }
+      
+      .nav-tabs > li.active > a {
+        background-color: #000000;
+        border-color: #FFE500;
+        border-bottom-color: transparent;
+        color: #FFE500;
+      }
+      
+      .tab-content {
+        background-color: #000000;
+        border: 2px solid #FFE500;
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+        padding: 20px;
+      }
+      
+      /* DataTable styling */
+      .dataTables_wrapper {
+        color: #FFFFFF;
+      }
+      
+      table.dataTable {
+        background-color: #1a1a1a;
+        color: #FFFFFF;
+        border: 1px solid #FFE500;
+      }
+      
+      table.dataTable thead th {
+        background: linear-gradient(135deg, #FFE500 0%, #FFA500 100%);
+        color: #000000;
+        font-weight: 700;
+        border-bottom: 2px solid #FFE500;
+      }
+      
+      table.dataTable tbody tr {
+        background-color: #1a1a1a;
+        color: #FFFFFF;
+      }
+      
+      table.dataTable tbody tr:hover {
+        background-color: #2a2a2a !important;
+      }
+      
+      table.dataTable tbody tr.even {
+        background-color: #252525;
+      }
+      
+      .dataTables_filter input,
+      .dataTables_length select {
+        background-color: #2a2a2a;
+        color: #FFFFFF;
+        border: 1px solid #FFE500;
+        border-radius: 4px;
+      }
+      
+      /* Stat boxes */
+      .stat-box {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+        border: 2px solid #FFE500;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(255, 229, 0, 0.2);
+      }
+      
+      .stat-value {
+        font-size: 36px;
+        font-weight: 700;
+        color: #FFE500;
+        margin: 10px 0;
+      }
+      
+      .stat-label {
+        font-size: 14px;
+        color: #CCCCCC;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      
+      /* Fighter chip styling */
+      .fighter-chip {
+        display: inline-block;
+        background-color: #2a2a2a;
+        color: #FFFFFF;
+        padding: 8px 16px;
+        margin: 4px;
+        border-radius: 20px;
+        border: 1px solid #FFE500;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+      
+      .fighter-chip:hover {
+        background-color: #FFE500;
+        color: #000000;
+        transform: scale(1.05);
+      }
+      
+      .fighter-chip.eliminated {
+        background-color: #dc3545;
+        border-color: #dc3545;
+        color: #FFFFFF;
+        text-decoration: line-through;
+      }
+      
+      /* Plot styling */
+      .js-plotly-plot {
+        background-color: #1a1a1a;
+      }
+      
+      /* Headers */
+      h3, h4, h5 {
+        color: #FFE500;
+        font-weight: 700;
+      }
+      
+      /* Leverage indicators */
+      .positive-leverage {
+        color: #28a745;
+        font-weight: 700;
+      }
+      
+      .negative-leverage {
+        color: #dc3545;
+        font-weight: 700;
+      }
+      
+      /* Progress bar */
+      .progress {
+        background-color: #2a2a2a;
+        border: 1px solid #FFE500;
+      }
+      
+      .progress-bar {
+        background: linear-gradient(135deg, #FFE500 0%, #FFA500 100%);
+      }
+    "))
+  ),
+  
+  # Header
+  div(class = "header-container",
+      div(class = "logo-title",
+          tags$img(src = "logo.jpg", height = "60px", style = "border: 2px solid #FFE500; box-shadow: 0 4px 8px rgba(255, 229, 0, 0.3);"),
+          div(
+            h1(class = "app-title", "MMA Contest Sweat"),
+            p(class = "app-subtitle", "Golden Ticket DFS Analytics")
+          )
+      )
+  ),
+  
+  # Upload Panel
+  div(class = "upload-panel",
+      fluidRow(
+        column(8,
+               fileInput("file", 
+                         label = div(style = "color: #FFE500; font-weight: 600; font-size: 16px;",
+                                     "Upload Contest CSV"),
+                         accept = c("text/csv", ".csv"),
+                         buttonLabel = "Browse...",
+                         placeholder = "No file selected")
         ),
-        
-        tabPanel("Driver Combinations",
-                 div(class = "well",
-                     numericInput("combo_size", "Number of Drivers in Combination", 
-                                  value = 2, min = 2, max = 6),
-                     actionButton("analyze_combos", "Analyze Combinations", 
-                                  class = "btn-primary")
-                 ),
-                 
-                 br(),
-                 h4("Most Common Driver Combinations"),
-                 DTOutput("driver_combos_table")
-        ),
-        
-        tabPanel("Personal Analysis",
-                 div(class = "well",
-                     textInput("personal_username", "Your Username"),
-                     div(style = "display: flex; gap: 10px;",
-                         actionButton("analyze_personal", "Analyze My Entries", 
-                                      class = "btn-primary"),
-                         actionButton("clear_personal", "Clear", 
-                                      class = "btn-secondary")
-                     )
-                 ),
-                 
-                 conditionalPanel(
-                   condition = "input.personal_username != ''",
-                   h4("Your Driver Exposure vs Field"),
-                   DTOutput("personal_exposure_table"),
-                   
-                   br(),
-                   h4("Your Lineup Duplicates Distribution"),
-                   plotlyOutput("personal_dupes_plot")
-                 )
-        ),
-        
-        tabPanel("User Comparison",
-                 div(class = "well",
-                     pickerInput(
-                       inputId = "selected_users",
-                       label = "Select Users to Compare", 
-                       choices = NULL,
-                       multiple = TRUE,
-                       options = list(`live-search` = TRUE)
-                     )
-                 ),
-                 
-                 conditionalPanel(
-                   condition = "input.selected_users.length > 0",
-                   h4("Selected Users Entry Summary"),
-                   DTOutput("user_comparison_table"),
-                   
-                   br(),
-                   h4("Lineup Duplicates Distribution"),
-                   plotlyOutput("user_dupes_plot"),
-                   
-                   br(),
-                   h4("Driver Exposure Comparison"),
-                   plotlyOutput("exposure_comparison_plot")
-                 )
-        ),
-        
-        tabPanel("Final Results",
-                 conditionalPanel(
-                   condition = "input.results_final == true",
-                   div(class = "well",
-                       h4("Entry Group Performance"),
-                       plotlyOutput("group_score_distribution"),
-                       
-                       br(),
-                       h4("Performance by Duplication Level"),
-                       plotlyOutput("duplication_performance"),
-                       
-                       br(),
-                       h4("Top Performers"),
-                       DTOutput("top_performers_table")
-                   )
-                 )
-        ),
-        
-        tabPanel("Live Lineups",
-                 div(class = "well",
-                     h4("Select Dead Drivers"),
-                     pickerInput(
-                       inputId = "dead_drivers",
-                       label = NULL, 
-                       choices = character(0),  # Initialize with empty vector
-                       multiple = TRUE,
-                       options = list(
-                         `live-search` = TRUE,
-                         `actions-box` = TRUE,
-                         `selected-text-format` = "count > 3"
-                       )
-                     ),
-                     actionButton("update_dead", "Update Dead Drivers", 
-                                  class = "btn-primary mt-2")
-                 ),
-                 
-                 h4("Field Analysis"),
-                 DTOutput("field_live_analysis"),
-                 
-                 br(),
-                 div(class = "panel panel-default",
-                     div(class = "panel-heading",
-                         h4("User Analysis", class = "panel-title")),
-                     div(class = "panel-body",
-                         div(class = "row",
-                             div(class = "col-sm-6",
-                                 textInput("live_username", "Enter Username")),
-                             div(class = "col-sm-6",
-                                 div(style = "margin-top: 25px;",
-                                     actionButton("analyze_live_user", "Analyze User", 
-                                                  class = "btn-primary")))
-                         ),
-                         conditionalPanel(
-                           condition = "input.live_username != ''",
-                           div(style = "margin-top: 20px;",
-                               h4("Lineups for User: ", textOutput("current_user", inline = TRUE)),
-                               div(class = "row",
-                                   div(class = "col-sm-3",
-                                       h5(strong("Summary:")),
-                                       uiOutput("live_summary")),
-                                   div(class = "col-sm-9",
-                                       DTOutput("user_live_analysis"))
-                               )
-                           )
-                         )
-                     )
-                 )
+        column(4,
+               div(style = "margin-top: 25px;",
+                   selectizeInput("username", 
+                                  label = div(style = "color: #FFE500; font-weight: 600;", "Your Username"),
+                                  choices = NULL,
+                                  options = list(
+                                    placeholder = 'Start typing username...',
+                                    loadThrottle = 300,
+                                    maxOptions = 50
+                                  ),
+                                  width = "100%")
+               )
         )
       )
+  ),
+  
+  # Main content
+  tabsetPanel(
+    # My Sweat Tab
+    tabPanel("My Sweat",
+             uiOutput("my_sweat_content")
+    ),
+    
+    # Dupe Analysis Tab  
+    tabPanel("Dupe Analysis",
+             uiOutput("dupe_analysis_content")
+    ),
+    
+    # Live Sweat Tab
+    tabPanel("Live Sweat",
+             uiOutput("live_sweat_content")
     )
   )
 )
 
 # Server Logic
 server <- function(input, output, session) {
-  library(memoise)
   
-  # Initialize reactive values
+  # Add resource path for www folder (for logo.jpg)
+  addResourcePath("www", "www")
+  
+  # Reactive values
   rv <- reactiveValues(
     data = NULL,
-    entry_groups = data.frame(
-      group = c("Single Entry", "Small Multi", "Medium Multi", "Large Multi", "Max Entry"),
-      min_entries = c(1, 2, 21, 101, 150),
-      max_entries = c(1, 20, 100, 149, 150)
-    ),
-    all_drivers = NULL,
-    current_dead_drivers = NULL,
-    lineup_counts = NULL,
-    user_entries = NULL,
-    user_groups = NULL,
-    lineup_drivers = list(),  # Changed from new.env() to list()
-    duplication_groups = NULL,
-    personal_user = NULL,    # Added missing values
-    live_user = NULL        # Added missing values
+    fighters = NULL,
+    player_scores = NULL,
+    eliminated_fighters = character(0),
+    lineup_fighters_cache = list(),
+    all_usernames = NULL
   )
   
-  # Clean driver names function - FIXED
-  clean_driver_names <- function(lineup) {
-    # Check if we already processed this lineup
-    if (!lineup %in% names(rv$lineup_drivers)) {
-      drivers <- unlist(strsplit(lineup, " D | D "))
-      drivers <- drivers[drivers != ""]
-      drivers <- trimws(drivers)
-      drivers <- sub("^D ", "", drivers)
-      # Store in our list instead of environment
-      rv$lineup_drivers[[lineup]] <- drivers
+  # Fast fighter extraction with caching
+  extract_fighters <- function(lineup) {
+    if (!lineup %in% names(rv$lineup_fighters_cache)) {
+      fighters <- unlist(strsplit(lineup, " F ", fixed = TRUE))
+      fighters <- trimws(sub("^F ", "", fighters))
+      fighters <- fighters[nzchar(fighters)]
+      rv$lineup_fighters_cache[[lineup]] <- fighters
     }
-    
-    # Return the cached drivers
-    return(rv$lineup_drivers[[lineup]])
+    rv$lineup_fighters_cache[[lineup]]
   }
   
-  # File upload handler
+  # Load and process data
   observeEvent(input$file, {
     req(input$file)
-    withProgress(message = 'Loading data...', value = 0, {
+    
+    withProgress(message = 'Loading contest data...', value = 0, {
+      
+      incProgress(0.2, detail = "Reading CSV...")
+      
       tryCatch({
-        raw_data <- fread(input$file$datapath,
-                          showProgress = FALSE,
-                          fill = TRUE,
-                          sep = ",",
-                          na.strings = c("", "NA", "NULL"))
+        # Fast read with data.table
+        dt <- fread(input$file$datapath, 
+                    showProgress = FALSE,
+                    fill = TRUE,
+                    sep = ",",
+                    na.strings = c("", "NA", "NULL"))
         
-        if (!"EntryName" %in% names(raw_data)) {
-          names(raw_data)[3] <- "EntryName"
+        incProgress(0.2, detail = "Processing lineups...")
+        
+        # Force column names if not found (original approach)
+        if (!"EntryName" %in% names(dt)) {
+          names(dt)[3] <- "EntryName"
         }
-        if (!"Lineup" %in% names(raw_data)) {
-          names(raw_data)[6] <- "Lineup"
+        if (!"Lineup" %in% names(dt)) {
+          names(dt)[6] <- "Lineup"
         }
         
-        # Convert to data.table and process
-        rv$data <- as.data.table(raw_data)[, .(
-          EntryName = trimws(sub(" \\(.*", "", EntryName)),
+        # Find Points column
+        points_col <- grep("Points", names(dt), value = TRUE)[1]
+        
+        # Extract data
+        rv$data <- dt[, .(
+          Username = trimws(sub(" \\(.*", "", EntryName)),
           Lineup = trimws(Lineup),
-          Points = as.numeric(get(grep("Points", names(raw_data), value = TRUE)[1]))
-        )][!is.na(EntryName) & !is.na(Lineup)]
+          Points = as.numeric(get(points_col))
+        )][!is.na(Username) & !is.na(Lineup) & Username != "EntryName" & Username != ""]
         
-        # Pre-calculate common values
-        rv$lineup_counts <- rv$data[, .N, by = Lineup]
-        setkey(rv$lineup_counts, Lineup)
+        setkey(rv$data, Username, Lineup)
         
-        # Pre-calculate user entries and groups
-        rv$user_entries <- rv$data[, .(
-          entries = .N,
-          group = fcase(
-            .N == 1, "Single Entry",
-            .N <= 20, "Small Multi",
-            .N <= 100, "Medium Multi",
-            .N <= 149, "Large Multi",
-            default = "Max Entry"
-          )
-        ), by = EntryName]
-        setkey(rv$user_entries, EntryName)
+        incProgress(0.2, detail = "Extracting player scores...")
         
-        # Pre-calculate duplication groups
-        rv$duplication_groups <- rv$data[, .(
-          dupe_count = .N,
-          dupe_group = fcase(
-            .N == 1, "Unique",
-            .N <= 5, "2-5 Copies",
-            .N <= 10, "6-10 Copies",
-            .N <= 20, "11-20 Copies",
-            default = "20+ Copies"
-          )
-        ), by = Lineup]
-        setkey(rv$duplication_groups, Lineup)
+        # Extract player scores if Player and FPTS columns exist
+        # Also get %Drafted for field exposure
+        if ("Player" %in% names(dt) && "FPTS" %in% names(dt)) {
+          drafted_col <- grep("%Drafted", names(dt), value = TRUE)[1]
+          
+          if (!is.na(drafted_col)) {
+            player_data <- dt[, .(
+              Player = trimws(Player),
+              FPTS = as.numeric(FPTS),
+              FieldExp = as.numeric(gsub("%", "", get(drafted_col)))
+            )][!is.na(Player) & Player != "" & Player != "Player"]
+          } else {
+            player_data <- dt[, .(
+              Player = trimws(Player),
+              FPTS = as.numeric(FPTS)
+            )][!is.na(Player) & Player != "" & Player != "Player"]
+          }
+          
+          if ("FieldExp" %in% names(player_data)) {
+            rv$player_scores <- player_data[, .(
+              FPTS = max(FPTS, na.rm = TRUE),
+              FieldExp = max(FieldExp, na.rm = TRUE)
+            ), by = Player]
+          } else {
+            rv$player_scores <- player_data[, .(
+              FPTS = max(FPTS, na.rm = TRUE)
+            ), by = Player]
+          }
+          
+          setkey(rv$player_scores, Player)
+        } else {
+          # Try column positions as fallback
+          if (ncol(dt) >= 11) {
+            player_data <- dt[, .(
+              Player = trimws(.SD[[8]]),
+              FPTS = as.numeric(.SD[[11]])
+            )][!is.na(Player) & Player != "" & Player != "Player"]
+            
+            rv$player_scores <- player_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
+            setkey(rv$player_scores, Player)
+          }
+        }
         
-        # Update picker input
-        updatePickerInput(
-          session,
-          "selected_users",
-          choices = setNames(
-            rv$user_entries$EntryName,
-            sprintf("%s (%d entries)", 
-                    rv$user_entries$EntryName, 
-                    rv$user_entries$entries)
-          )
-        )
+        incProgress(0.2, detail = "Extracting fighters...")
+        
+        # Extract all unique fighters
+        all_lineups <- unique(rv$data$Lineup)
+        all_fighters <- unique(unlist(lapply(all_lineups, extract_fighters)))
+        rv$fighters <- sort(all_fighters)
+        
+        incProgress(0.2, detail = "Complete!")
+        
+        # Update username dropdown - extract and clean usernames
+        usernames <- unique(rv$data$Username)
+        
+        # Filter out anything that looks like it came from the lineup column
+        usernames <- usernames[!grepl("^F ", usernames)]
+        
+        # Filter out any that match known fighters
+        usernames <- usernames[!usernames %in% rv$fighters]
+        
+        # Remove any empty or NA values
+        usernames <- usernames[!is.na(usernames) & nzchar(usernames)]
+        
+        # Sort alphabetically
+        usernames <- sort(usernames)
+        
+        # Store in reactive value for server-side search
+        rv$all_usernames <- usernames
+        
+        # Update with server-side selectize (only shows matches as you type)
+        updateSelectizeInput(session, "username", 
+                             choices = usernames,
+                             server = TRUE)
         
       }, error = function(e) {
         showNotification(
           paste("Error loading file:", e$message),
           type = "error",
-          duration = NULL
+          duration = 10
         )
       })
     })
   })
   
-  # Entry Analysis Table
-  output$entry_analysis_table <- renderDT({
-    req(rv$data)
+  # My Sweat Content
+  output$my_sweat_content <- renderUI({
+    req(rv$data, input$username, input$username != "")
     
-    total_users <- n_distinct(rv$data$EntryName)
+    user_data <- rv$data[Username == input$username]
+    field_data <- rv$data[Username != input$username]
     
-    entry_analysis <- rv$data %>%
-      group_by(EntryName) %>%
-      summarise(entries = n()) %>%
-      mutate(group = case_when(
-        entries == 1 ~ "Single Entry (1 entry)",
-        entries <= 20 ~ "Small Multi (2-20 entries)",
-        entries <= 100 ~ "Medium Multi (21-100 entries)",
-        entries <= 149 ~ "Large Multi (101-149 entries)",
-        TRUE ~ "Max Entry (150 entries)"
-      )) %>%
-      group_by(group) %>%
-      summarise(
-        Users = n(),
-        `% of Contest` = round(Users / total_users * 100, 1),
-        `Total Entries` = sum(entries)
-      )
+    if (nrow(user_data) == 0) {
+      return(div(class = "well", 
+                 h4("No entries found for selected username", style = "color: #dc3545;")))
+    }
     
-    datatable(
-      entry_analysis,
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 25
-      ),
-      extensions = 'Buttons'
+    # Calculate exposure stats using %Drafted from DK file
+    user_lineups <- unique(user_data$Lineup)
+    n_user_entries <- nrow(user_data)
+    
+    # Get fighter exposures
+    user_fighter_counts <- data.table()
+    for (lineup in user_lineups) {
+      fighters <- extract_fighters(lineup)
+      user_fighter_counts <- rbind(user_fighter_counts, 
+                                   data.table(Fighter = fighters))
+    }
+    user_exposure <- user_fighter_counts[, .(
+      UserExp = .N / n_user_entries * 100
+    ), by = Fighter]
+    
+    # Field exposure from %Drafted column if available
+    if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
+      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+    } else {
+      # Fallback to manual calculation
+      field_lineups <- unique(field_data$Lineup)
+      n_field_entries <- nrow(field_data)
+      
+      field_fighter_counts <- data.table()
+      for (lineup in field_lineups) {
+        fighters <- extract_fighters(lineup)
+        field_fighter_counts <- rbind(field_fighter_counts,
+                                      data.table(Fighter = fighters))
+      }
+      field_exposure <- field_fighter_counts[, .(
+        FieldExp = .N / n_field_entries * 100
+      ), by = Fighter]
+    }
+    
+    # Merge and calculate leverage
+    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data[is.na(UserExp), UserExp := 0]
+    exposure_data[is.na(FieldExp), FieldExp := 0]
+    exposure_data[, Leverage := UserExp - FieldExp]
+    exposure_data <- exposure_data[order(-UserExp)]
+    
+    tagList(
+      h4("Your Fighter Exposure vs Field"),
+      DTOutput("exposure_table"),
+      
+      br(),
+      
+      h4("Positive Leverage Fighters"),
+      plotlyOutput("positive_leverage_plot", height = "400px"),
+      
+      br(),
+      
+      h4("Negative Leverage Fighters"),
+      plotlyOutput("negative_leverage_plot", height = "400px")
     )
   })
   
-  # Optimized Driver Combinations Analysis
-  output$driver_combos_table <- renderDT({
-    req(rv$data, input$analyze_combos)
+  # Exposure Table
+  output$exposure_table <- renderDT({
+    req(rv$data, input$username, input$username != "")
     
-    withProgress(message = 'Analyzing combinations...', value = 0, {
-      # Validate combination size
-      combo_size <- min(input$combo_size, 6)
+    user_data <- rv$data[Username == input$username]
+    field_data <- rv$data[Username != input$username]
+    
+    user_lineups <- unique(user_data$Lineup)
+    n_user_entries <- nrow(user_data)
+    
+    # User exposure
+    user_fighter_counts <- data.table()
+    for (lineup in user_lineups) {
+      fighters <- extract_fighters(lineup)
+      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+    }
+    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    
+    # Field exposure from %Drafted
+    if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
+      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+    } else {
+      # Fallback
+      field_lineups <- unique(field_data$Lineup)
+      n_field_entries <- nrow(field_data)
       
-      # Create a lookup for lineup counts (how many times each lineup appears)
-      lineup_lookup <- as.data.frame(table(rv$data$Lineup))
-      names(lineup_lookup) <- c("Lineup", "Count")
+      field_fighter_counts <- data.table()
+      for (lineup in field_lineups) {
+        fighters <- extract_fighters(lineup)
+        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+      }
+      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
+    }
+    
+    # Merge
+    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data[is.na(UserExp), UserExp := 0]
+    exposure_data[is.na(FieldExp), FieldExp := 0]
+    exposure_data[, Leverage := UserExp - FieldExp]
+    
+    # Add live exposure columns if fighters are eliminated
+    if (length(rv$eliminated_fighters) > 0) {
+      # Calculate live exposures (only counting lineups with this fighter still alive)
       
-      # First get unique lineups to process
-      unique_lineups <- unique(rv$data$Lineup)
-      
-      # Create a hash map to store combination counts
-      combo_counts <- new.env(hash = TRUE, parent = emptyenv())
-      
-      # Process in batches for better UI responsiveness
-      batch_size <- 500
-      n_batches <- ceiling(length(unique_lineups) / batch_size)
-      
-      for (i in seq_len(n_batches)) {
-        incProgress(1/n_batches, 
-                    detail = paste("Processing batch", i, "of", n_batches))
-        
-        start_idx <- (i-1) * batch_size + 1
-        end_idx <- min(i * batch_size, length(unique_lineups))
-        
-        batch_lineups <- unique_lineups[start_idx:end_idx]
-        
-        # Process this batch
-        for (lineup in batch_lineups) {
-          # Get the drivers in this lineup
-          drivers <- clean_driver_names(lineup)
-          
-          # Only process if we have enough drivers
-          if (length(drivers) >= combo_size) {
-            # Get the count of this lineup in the full dataset
-            lineup_count <- lineup_lookup$Count[lineup_lookup$Lineup == lineup]
-            
-            # Generate all combinations of the specified size
-            if (combo_size > 1) {
-              # For combinations of 2+ drivers, use combn
-              combos <- combn(sort(drivers), combo_size, simplify = FALSE)
-              for (combo in combos) {
-                combo_key <- paste(combo, collapse = " | ")
-                if (exists(combo_key, envir = combo_counts)) {
-                  combo_counts[[combo_key]] <- combo_counts[[combo_key]] + lineup_count
-                } else {
-                  combo_counts[[combo_key]] <- lineup_count
-                }
-              }
-            } else {
-              # For single driver "combinations", just count each driver
-              for (driver in drivers) {
-                if (exists(driver, envir = combo_counts)) {
-                  combo_counts[[driver]] <- combo_counts[[driver]] + lineup_count
-                } else {
-                  combo_counts[[driver]] <- lineup_count
-                }
-              }
-            }
-          }
+      # User live exposure
+      user_live_fighter_counts <- data.table()
+      for (lineup in user_lineups) {
+        fighters <- extract_fighters(lineup)
+        # Only count if this lineup has at least 1 live fighter
+        if (any(!fighters %in% rv$eliminated_fighters)) {
+          live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
+          user_live_fighter_counts <- rbind(user_live_fighter_counts, 
+                                            data.table(Fighter = live_fighters))
         }
       }
       
-      # Convert environment to data frame
-      combo_names <- ls(combo_counts)
-      combo_values <- sapply(combo_names, function(name) combo_counts[[name]])
+      if (nrow(user_live_fighter_counts) > 0) {
+        user_live_lineups <- sum(sapply(user_lineups, function(lineup) {
+          any(!extract_fighters(lineup) %in% rv$eliminated_fighters)
+        }))
+        user_live_exposure <- user_live_fighter_counts[, .(
+          UserLiveExp = .N / user_live_lineups * 100
+        ), by = Fighter]
+      } else {
+        user_live_exposure <- data.table(Fighter = character(0), UserLiveExp = numeric(0))
+      }
       
-      # Create result data frame
-      result <- data.frame(
-        Combination = combo_names,
-        Count = combo_values,
-        stringsAsFactors = FALSE
-      ) %>%
-        arrange(desc(Count)) %>%
-        head(50) %>%
-        mutate(`% of Lineups` = round(Count / nrow(rv$data) * 100, 2))
-    })
+      # Field live exposure
+      field_lineups <- unique(field_data$Lineup)
+      field_live_fighter_counts <- data.table()
+      for (lineup in field_lineups) {
+        fighters <- extract_fighters(lineup)
+        if (any(!fighters %in% rv$eliminated_fighters)) {
+          live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
+          field_live_fighter_counts <- rbind(field_live_fighter_counts,
+                                             data.table(Fighter = live_fighters))
+        }
+      }
+      
+      if (nrow(field_live_fighter_counts) > 0) {
+        field_live_lineups <- sum(sapply(field_lineups, function(lineup) {
+          any(!extract_fighters(lineup) %in% rv$eliminated_fighters)
+        }))
+        field_live_exposure <- field_live_fighter_counts[, .(
+          FieldLiveExp = .N / field_live_lineups * 100
+        ), by = Fighter]
+      } else {
+        field_live_exposure <- data.table(Fighter = character(0), FieldLiveExp = numeric(0))
+      }
+      
+      # Merge live exposures
+      exposure_data <- merge(exposure_data, user_live_exposure, by = "Fighter", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_live_exposure, by = "Fighter", all.x = TRUE)
+      exposure_data[is.na(UserLiveExp), UserLiveExp := 0]
+      exposure_data[is.na(FieldLiveExp), FieldLiveExp := 0]
+      exposure_data[, LiveLeverage := UserLiveExp - FieldLiveExp]
+    }
     
-    datatable(
-      result,
+    exposure_data <- exposure_data[order(-UserExp)]
+    
+    # Format for display - keep numeric leverage for coloring
+    if (length(rv$eliminated_fighters) > 0 && "UserLiveExp" %in% names(exposure_data)) {
+      display_data <- exposure_data[, .(
+        Fighter,
+        `Your Exposure` = paste0(round(UserExp, 1), "%"),
+        `Field Exposure` = paste0(round(FieldExp, 1), "%"),
+        Leverage = round(Leverage, 1),
+        `Your Live Exp` = paste0(round(UserLiveExp, 1), "%"),
+        `Field Live Exp` = paste0(round(FieldLiveExp, 1), "%"),
+        LiveLeverage = round(LiveLeverage, 1)
+      )]
+    } else {
+      display_data <- exposure_data[, .(
+        Fighter,
+        `Your Exposure` = paste0(round(UserExp, 1), "%"),
+        `Field Exposure` = paste0(round(FieldExp, 1), "%"),
+        Leverage = round(Leverage, 1)
+      )]
+    }
+    
+    dt_output <- datatable(
+      display_data,
       rownames = FALSE,
       options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 25
-      ),
-      extensions = 'Buttons'
-    )
-  })
-  
-  # Most Duplicated Lineups Table
-  output$most_duped_table <- renderDT({
-    req(rv$data)
-    
-    dupes <- as.data.frame(table(rv$data$Lineup)) %>%
-      setNames(c("Lineup", "Count")) %>%
-      arrange(desc(Count)) %>%
-      head(10) %>%
-      mutate(Rank = row_number()) %>%
-      select(Rank, Lineup, Count)
-    
-    datatable(
-      dupes,
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 10
-      ),
-      extensions = 'Buttons'
-    )
-  })
-  
-  # Personal Analysis
-  observeEvent(input$analyze_personal, {
-    req(rv$data, input$personal_username)
-    rv$personal_user <- input$personal_username
-  })
-  
-  observeEvent(input$clear_personal, {
-    rv$personal_user <- NULL
-    updateTextInput(session, "personal_username", value = "")
-  })
-  
-  # Personal exposure table
-  output$personal_exposure_table <- renderDT({
-    req(rv$data, rv$personal_user)
-    
-    total_contest_entries <- nrow(rv$data)
-    
-    field_exposures <- rv$data %>%
-      pull(Lineup) %>%
-      sapply(clean_driver_names) %>%
-      unlist() %>%
-      table() %>%
-      as.data.frame() %>%
-      setNames(c("Driver", "FieldCount")) %>%
-      mutate(
-        `Field %` = round(FieldCount / total_contest_entries * 100, 1)
+        pageLength = 15,
+        dom = 'frtip',
+        columnDefs = list(
+          list(className = 'dt-center', targets = 1:(ncol(display_data)-1))
+        )
       )
-    
-    user_entries <- rv$data %>%
-      filter(EntryName == rv$personal_user) %>%
-      nrow()
-    
-    user_exposures <- rv$data %>%
-      filter(EntryName == rv$personal_user) %>%
-      pull(Lineup) %>%
-      sapply(clean_driver_names) %>%
-      unlist() %>%
-      table() %>%
-      as.data.frame() %>%
-      setNames(c("Driver", "Count")) %>%
-      mutate(
-        `Your %` = round(Count / user_entries * 100, 1)
-      )
-    
-    exposure_data <- full_join(user_exposures, field_exposures, by = "Driver") %>%
-      mutate(
-        Count = replace_na(Count, 0),
-        FieldCount = replace_na(FieldCount, 0),
-        `Your %` = replace_na(`Your %`, 0),
-        `Field %` = replace_na(`Field %`, 0),
-        `Leverage` = round(`Your %` - `Field %`, 1)
-      ) %>%
-      select(Driver, Count, `Your %`, `Field %`, Leverage) %>%
-      arrange(desc(`Your %`))
-    
-    datatable(
-      exposure_data,
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 25
-      ),
-      extensions = 'Buttons'
     ) %>%
       formatStyle(
         'Leverage',
-        backgroundColor = styleInterval(
-          c(-10, 10),
-          c('#ffb3b3', '#ffffff', '#b3ffb3')
-        )
-      )
-  })
-  
-  # Personal duplicates plot
-  output$personal_dupes_plot <- renderPlotly({
-    req(rv$data, rv$personal_user)
-    
-    lineup_counts <- table(rv$data$Lineup)
-    
-    user_dupes <- rv$data %>%
-      filter(EntryName == rv$personal_user) %>%
-      pull(Lineup) %>%
-      sapply(function(x) lineup_counts[x]) %>%
-      as.numeric()
-    
-    plot_ly(type = "box") %>%
-      add_boxplot(y = user_dupes, name = rv$personal_user, 
-                  boxpoints = "all", jitter = 0.3, pointpos = 0) %>%
-      layout(
-        yaxis = list(title = "Number of Times Lineup Used in Contest"),
-        showlegend = FALSE
-      )
-  })
-  
-  # User Comparison
-  output$user_comparison_table <- renderDT({
-    req(rv$data, length(input$selected_users) > 0)
-    
-    comparison_data <- rv$data %>%
-      filter(EntryName %in% input$selected_users) %>%
-      group_by(EntryName) %>%
-      summarise(
-        `Total Entries` = n()
-      )
-    
-    datatable(
-      comparison_data,
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 25
-      ),
-      extensions = 'Buttons'
-    )
-  })
-  
-  # User comparison duplicates plot
-  output$user_dupes_plot <- renderPlotly({
-    req(rv$data, length(input$selected_users) > 0)
-    
-    lineup_counts <- table(rv$data$Lineup)
-    
-    user_dupes_data <- do.call(rbind, lapply(input$selected_users, function(user) {
-      dupes <- rv$data %>%
-        filter(EntryName == user) %>%
-        pull(Lineup) %>%
-        sapply(function(x) lineup_counts[x]) %>%
-        as.numeric()
-      
-      data.frame(
-        User = factor(user),  # Convert to factor
-        Duplicates = dupes
-      )
-    }))
-    
-    p <- plot_ly(data = user_dupes_data, type = "box", 
-                 x = ~User, y = ~Duplicates,
-                 boxpoints = "all", jitter = 0.3, pointpos = 0)
-    
-    p <- p %>% layout(
-      xaxis = list(title = "", type = "category"),  # Force categorical x-axis
-      yaxis = list(title = "Number of Times Lineup Used in Contest")
-    )
-    
-    p  # Return the plot directly instead of using ggplotly
-  })
-  
-  # User comparison exposure plot
-  output$exposure_comparison_plot <- renderPlotly({
-    req(rv$data, length(input$selected_users) > 0)
-    
-    exposure_data <- do.call(rbind, lapply(input$selected_users, function(user) {
-      user_entries <- nrow(filter(rv$data, EntryName == user))
-      
-      exposures <- rv$data %>%
-        filter(EntryName == user) %>%
-        pull(Lineup) %>%
-        sapply(clean_driver_names) %>%
-        unlist() %>%
-        table() %>%
-        as.data.frame() %>%
-        setNames(c("Driver", "Count")) %>%
-        mutate(
-          EntryName = factor(user),  # Convert to factor
-          Driver = factor(Driver),   # Convert to factor
-          `Exposure %` = round(Count / user_entries * 100, 1)
-        )
-      
-      return(exposures)
-    }))
-    
-    plot_height <- max(600, 30 * length(unique(exposure_data$Driver)))
-    
-    p <- plot_ly(
-      data = exposure_data,
-      y = ~Driver,
-      x = ~`Exposure %`,
-      color = ~EntryName,
-      type = "bar",
-      orientation = 'h'
-    )
-    
-    p <- p %>% layout(
-      barmode = "group",
-      xaxis = list(title = "Exposure %"),
-      yaxis = list(title = "", type = "category"),  # Force categorical y-axis
-      margin = list(l = 150),
-      height = plot_height
-    )
-    
-    p  # Return the plot directly
-  })
-  
-  # Update driver list when data is loaded
-  observe({
-    req(rv$data)
-    
-    # Extract and clean driver names
-    all_lineups <- rv$data$Lineup
-    all_drivers <- character()
-    
-    for (lineup in all_lineups) {
-      drivers <- clean_driver_names(lineup)
-      all_drivers <- union(all_drivers, drivers)
-    }
-    
-    # Sort and store drivers
-    rv$all_drivers <- sort(all_drivers)
-    
-    # Update picker input
-    updatePickerInput(
-      session,
-      "dead_drivers",
-      choices = rv$all_drivers,
-      selected = NULL
-    )
-  })
-  
-  # Observe dead drivers updates
-  observeEvent(input$update_dead, {
-    req(rv$data, input$dead_drivers)
-    
-    # Store current dead drivers in reactive values
-    rv$current_dead_drivers <- input$dead_drivers
-  })
-  
-  # Field Live Analysis
-  output$field_live_analysis <- renderDT({
-    req(rv$data, rv$current_dead_drivers)
-    
-    # Calculate live drivers for each lineup
-    dt <- data.table(rv$data)
-    
-    dt[, LiveDrivers := sapply(Lineup, function(x) {
-      drivers <- clean_driver_names(x)
-      sum(!drivers %in% rv$current_dead_drivers)
-    })]
-    
-    live_analysis <- dt[, .(
-      Lineups = .N,
-      `% of Field` = round(.N / nrow(dt) * 100, 1)
-    ), by = LiveDrivers][order(-LiveDrivers)]
-    
-    # Add summary statistics
-    live_analysis <- rbindlist(list(
-      live_analysis,
-      data.table(
-        LiveDrivers = "AllLineups",
-        Lineups = sum(live_analysis$Lineups),
-        `% of Field` = 100
-      )
-    ))
-    
-    datatable(
-      live_analysis,
-      rownames = FALSE,  # This removes the row numbers
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 25,
-        order = list(list(1, 'desc'))
-      ),
-      extensions = 'Buttons'
-    )
-  })
-  
-  # User Live Analysis
-  observeEvent(input$analyze_live_user, {
-    req(rv$data, input$live_username, length(input$dead_drivers) > 0)
-    
-    if (input$live_username == "") {
-      showNotification("Please enter a username", type = "warning")
-      return(NULL)
-    }
-    
-    rv$live_user <- input$live_username
-  })
-  
-  
-  
-  
-  output$user_live_analysis <- renderDT({
-    req(rv$data, rv$live_user, rv$current_dead_drivers)
-    
-    # Get user's lineups
-    user_lineups <- rv$data[rv$data$EntryName == rv$live_user, ]
-    
-    if (nrow(user_lineups) == 0) {
-      showNotification("No entries found for this username", type = "warning")
-      return(NULL)
-    }
-    
-    # Process each lineup
-    lineup_data <- lapply(user_lineups$Lineup, function(lineup) {
-      drivers <- clean_driver_names(lineup)
-      live_drivers <- drivers[!drivers %in% rv$current_dead_drivers]
-      dead_drivers <- drivers[drivers %in% rv$current_dead_drivers]
-      
-      return(data.frame(
-        Lineup = lineup,
-        LiveDrivers = length(live_drivers),
-        LiveDriversList = paste(live_drivers, collapse = ", "),
-        DeadDriversList = paste(dead_drivers, collapse = ", "),
-        stringsAsFactors = FALSE
-      ))
-    })
-    
-    # Combine results
-    lineup_df <- do.call(rbind, lineup_data)
-    
-    # Sort by number of live drivers descending
-    lineup_df <- lineup_df[order(-lineup_df$LiveDrivers), ]
-    
-    # Create the table
-    datatable(
-      lineup_df,
-      rownames = FALSE,
-      options = list(
-        dom = 'Bfrtip',
-        buttons = c('csv', 'excel'),
-        pageLength = 10,
-        order = list(list(1, 'desc'))
-      ),
-      extensions = 'Buttons'
-    ) %>%
-      formatStyle(
-        'LiveDrivers',
-        background = styleColorBar(c(0, max(lineup_df$LiveDrivers)), 'lightgreen'),
-        backgroundSize = '98% 88%',
-        backgroundRepeat = 'no-repeat',
-        backgroundPosition = 'center'
+        color = styleInterval(0, c('#dc3545', '#28a745')),
+        fontWeight = 'bold'
       ) %>%
       formatStyle(
-        'DeadDriversList',
-        color = 'red',
-        fontWeight = 'bold'
+        'Your Exposure',
+        background = styleColorBar(c(0, 100), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+    
+    # Add live leverage styling if present
+    if ("LiveLeverage" %in% names(display_data)) {
+      dt_output <- dt_output %>%
+        formatStyle(
+          'LiveLeverage',
+          color = styleInterval(0, c('#dc3545', '#28a745')),
+          fontWeight = 'bold'
+        )
+    }
+    
+    # Format leverage columns to show % sign and + for positive
+    dt_output <- dt_output %>%
+      formatCurrency('Leverage', currency = "", digits = 1, 
+                     before = FALSE, mark = ",", dec.mark = ".")
+    
+    if ("LiveLeverage" %in% names(display_data)) {
+      dt_output <- dt_output %>%
+        formatCurrency('LiveLeverage', currency = "", digits = 1,
+                       before = FALSE, mark = ",", dec.mark = ".")
+    }
+    
+    dt_output
+  })
+  
+  # Positive Leverage Plot
+  output$positive_leverage_plot <- renderPlotly({
+    req(rv$data, input$username, input$username != "")
+    
+    user_data <- rv$data[Username == input$username]
+    field_data <- rv$data[Username != input$username]
+    
+    user_lineups <- unique(user_data$Lineup)
+    n_user_entries <- nrow(user_data)
+    
+    user_fighter_counts <- data.table()
+    for (lineup in user_lineups) {
+      fighters <- extract_fighters(lineup)
+      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+    }
+    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    
+    # Field exposure from %Drafted
+    if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
+      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+    } else {
+      field_lineups <- unique(field_data$Lineup)
+      n_field_entries <- nrow(field_data)
+      
+      field_fighter_counts <- data.table()
+      for (lineup in field_lineups) {
+        fighters <- extract_fighters(lineup)
+        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+      }
+      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
+    }
+    
+    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data[is.na(UserExp), UserExp := 0]
+    exposure_data[is.na(FieldExp), FieldExp := 0]
+    exposure_data[, Leverage := UserExp - FieldExp]
+    
+    # Filter for positive leverage and sort by leverage descending
+    positive_data <- exposure_data[Leverage > 0][order(-Leverage)]
+    
+    if (nrow(positive_data) == 0) {
+      return(plotly_empty())
+    }
+    
+    plot_ly(positive_data, 
+            x = ~reorder(Fighter, Leverage), 
+            y = ~Leverage,
+            type = 'bar',
+            marker = list(
+              color = '#28a745',
+              line = list(color = '#FFE500', width = 1)
+            ),
+            hovertemplate = paste(
+              '<b>%{x}</b><br>',
+              'Leverage: +%{y:.1f}%<br>',
+              '<extra></extra>'
+            )) %>%
+      layout(
+        plot_bgcolor = '#1a1a1a',
+        paper_bgcolor = '#000000',
+        font = list(color = '#FFFFFF'),
+        xaxis = list(
+          title = "",
+          tickangle = -45,
+          gridcolor = '#333333'
+        ),
+        yaxis = list(
+          title = "Leverage (%)",
+          gridcolor = '#333333',
+          zeroline = FALSE
+        ),
+        margin = list(b = 100)
       )
   })
   
-  # Display current user in Live Lineups
-  output$current_user <- renderText({
-    req(rv$live_user)
-    rv$live_user
-  })
-  
-  # User Live Summary 
-  output$live_summary <- renderUI({
-    req(rv$data, rv$live_user, rv$current_dead_drivers)
+  # Negative Leverage Plot
+  output$negative_leverage_plot <- renderPlotly({
+    req(rv$data, input$username, input$username != "")
     
-    # Get user's lineups
-    user_lineups <- rv$data[rv$data$EntryName == rv$live_user, ]
+    user_data <- rv$data[Username == input$username]
+    field_data <- rv$data[Username != input$username]
     
-    if (nrow(user_lineups) == 0) {
-      return(NULL)
+    user_lineups <- unique(user_data$Lineup)
+    n_user_entries <- nrow(user_data)
+    
+    user_fighter_counts <- data.table()
+    for (lineup in user_lineups) {
+      fighters <- extract_fighters(lineup)
+      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+    }
+    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    
+    # Field exposure from %Drafted
+    if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
+      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+    } else {
+      field_lineups <- unique(field_data$Lineup)
+      n_field_entries <- nrow(field_data)
+      
+      field_fighter_counts <- data.table()
+      for (lineup in field_lineups) {
+        fighters <- extract_fighters(lineup)
+        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+      }
+      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
     }
     
-    # Calculate summary statistics
-    live_counts <- sapply(user_lineups$Lineup, function(lineup) {
-      drivers <- clean_driver_names(lineup)
-      sum(!drivers %in% rv$current_dead_drivers)
-    })
+    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data[is.na(UserExp), UserExp := 0]
+    exposure_data[is.na(FieldExp), FieldExp := 0]
+    exposure_data[, Leverage := UserExp - FieldExp]
     
-    # Calculate summary stats
-    total_entries <- length(live_counts)
-    alive_entries <- sum(live_counts > 0)
+    # Filter for negative leverage and sort by leverage ascending (most negative first)
+    negative_data <- exposure_data[Leverage < 0][order(Leverage)]
+    
+    if (nrow(negative_data) == 0) {
+      return(plotly_empty())
+    }
+    
+    plot_ly(negative_data, 
+            x = ~reorder(Fighter, -Leverage), 
+            y = ~Leverage,
+            type = 'bar',
+            marker = list(
+              color = '#dc3545',
+              line = list(color = '#FFE500', width = 1)
+            ),
+            hovertemplate = paste(
+              '<b>%{x}</b><br>',
+              'Leverage: %{y:.1f}%<br>',
+              '<extra></extra>'
+            )) %>%
+      layout(
+        plot_bgcolor = '#1a1a1a',
+        paper_bgcolor = '#000000',
+        font = list(color = '#FFFFFF'),
+        xaxis = list(
+          title = "",
+          tickangle = -45,
+          gridcolor = '#333333'
+        ),
+        yaxis = list(
+          title = "Leverage (%)",
+          gridcolor = '#333333',
+          zeroline = FALSE
+        ),
+        margin = list(b = 100)
+      )
+  })
+  
+  # Dupe Analysis Content
+  output$dupe_analysis_content <- renderUI({
+    req(rv$data, input$username, input$username != "")
     
     tagList(
-      p(strong("Total Entries:"), total_entries),
-      p(strong("Entries Still Alive:"), alive_entries, 
-        sprintf("(%.1f%%)", alive_entries/total_entries*100)),
-      p(strong("Entries Dead:"), total_entries - alive_entries,
-        sprintf("(%.1f%%)", (total_entries - alive_entries)/total_entries*100))
+      h4("Your Lineup Duplication Distribution"),
+      plotlyOutput("user_dupe_chart", height = "400px"),
+      
+      br(),
+      
+      h4("Most Duplicated Lineups in Contest"),
+      DTOutput("dupe_table")
     )
   })
   
-  # Final Results Analysis
-  
-  # Memoize quantile calculations
-  memoised_quantile <- memoise(quantile)
-  
-  # Create reactive for final results data
-  results_data <- reactive({
-    req(rv$data, input$results_final)
-    rv$data
-  })
-  
-  
-  output$top_performers_table <- renderDT({
+  output$dupe_table <- renderDT({
     req(rv$data)
     
-    # Create a copy of the data table
-    dt <- data.table::copy(rv$data)
+    # Count lineup duplicates
+    lineup_counts <- rv$data[, .N, by = Lineup][order(-N)]
     
-    # Sort by Points in descending order and add rank
-    dt <- dt[order(-Points)]
-    dt[, Rank := .I]
+    # Get top 50 most duplicated
+    top_dupes <- head(lineup_counts[N > 1], 50)
     
-    # Calculate thresholds for percentiles
-    total_entries <- nrow(dt)
-    threshold_0001 <- ceiling(total_entries * 0.001)
-    threshold_01 <- ceiling(total_entries * 0.01)
-    threshold_05 <- ceiling(total_entries * 0.05)
-    threshold_20 <- ceiling(total_entries * 0.20)
+    # Format for display
+    display_data <- top_dupes[, .(
+      Lineup,
+      `Times Used` = N,
+      `% of Contest` = paste0(round(N / nrow(rv$data) * 100, 2), "%")
+    )]
     
-    # Calculate user stats using data.table syntax
-    user_stats <- dt[, .(
-      Entries = .N,
-      `Avg Score` = round(mean(Points), 1),
-      `Max Score` = max(Points),
-      `Top 0.01%` = sum(Rank <= threshold_0001) / .N * 100,  # Don't round here - will format later
-      `Top 1%` = round(sum(Rank <= threshold_01) / .N * 100, 1), 
-      `Top 5%` = round(sum(Rank <= threshold_05) / .N * 100, 1),
-      `Top 20%` = round(sum(Rank <= threshold_20) / .N * 100, 1)
-    ), by = EntryName]
-    
-    # Sort by average score
-    user_stats <- user_stats[order(-`Avg Score`)]
-    
-    # Create the table with filtering
     datatable(
-      user_stats,
+      display_data,
+      rownames = FALSE,
       options = list(
-        dom = 'Blfrtip',
-        buttons = c('csv', 'excel'),
         pageLength = 25,
-        lengthMenu = list(c(10, 25, 50, 100, -1), c('10', '25', '50', '100', 'All'))
-      ),
-      filter = 'top',
-      extensions = c('Buttons')
+        dom = 'frtip',
+        columnDefs = list(
+          list(width = '60%', targets = 0),
+          list(className = 'dt-center', targets = 1:2)
+        )
+      )
     ) %>%
-      formatRound(columns = "Top 0.01%", digits = 3) %>%  # Format the 0.01% column with 3 decimal places
       formatStyle(
-        columns = c("Top 0.01%", "Top 1%", "Top 5%", "Top 20%"),
-        background = styleColorBar(c(0, 100), "lightblue"),
+        'Times Used',
+        background = styleColorBar(c(0, max(top_dupes$N)), '#FFE500'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
         backgroundPosition = 'center'
       )
   })
   
-  
-  # Entry Group Score Distribution
-  output$group_score_distribution <- renderPlotly({
-    req(rv$data, input$results_final)
+  # User Dupe Chart
+  output$user_dupe_chart <- renderPlotly({
+    req(rv$data, input$username, input$username != "")
     
-    group_data <- rv$data %>%
-      group_by(EntryName) %>%
-      mutate(
-        entry_count = n(),
-        group = case_when(
-          entry_count == 1 ~ "Single Entry",
-          entry_count <= 20 ~ "Small Multi",
-          entry_count <= 100 ~ "Medium Multi",
-          entry_count <= 149 ~ "Large Multi",
-          TRUE ~ "Max Entry"
+    user_data <- rv$data[Username == input$username]
+    
+    # Count how many times each of user's lineups appears in contest
+    lineup_counts <- rv$data[, .N, by = Lineup]
+    user_lineups <- unique(user_data$Lineup)
+    user_dupe_counts <- lineup_counts[Lineup %in% user_lineups, N]
+    
+    # Create distribution
+    dupe_dist <- data.table(
+      Dupes = factor(user_dupe_counts, levels = sort(unique(user_dupe_counts))),
+      Count = 1
+    )[, .(Lineups = .N), by = Dupes]
+    
+    plot_ly(dupe_dist,
+            x = ~Dupes,
+            y = ~Lineups,
+            type = 'bar',
+            marker = list(
+              color = '#FFE500',
+              line = list(color = '#FFA500', width = 1)
+            ),
+            hovertemplate = paste(
+              '<b>%{x} duplicates</b><br>',
+              'Your lineups: %{y}<br>',
+              '<extra></extra>'
+            )) %>%
+      layout(
+        plot_bgcolor = '#1a1a1a',
+        paper_bgcolor = '#000000',
+        font = list(color = '#FFFFFF'),
+        xaxis = list(
+          title = "Number of Duplicates in Contest",
+          gridcolor = '#333333'
+        ),
+        yaxis = list(
+          title = "Number of Your Lineups",
+          gridcolor = '#333333'
         )
       )
-    
-    p <- plot_ly(data = group_data, type = "box",
-                 x = ~group,
-                 y = ~Points,
-                 boxpoints = "all",
-                 jitter = 0.3,
-                 pointpos = 0) %>%
-      layout(
-        title = "Score Distribution by Entry Group",
-        xaxis = list(title = "Entry Group"),
-        yaxis = list(title = "Points")
-      )
-    
-    p
   })
   
-  # Duplication Performance Analysis
-  output$duplication_performance <- renderPlotly({
-    req(rv$data, input$results_final)
+  # Live Sweat Content
+  output$live_sweat_content <- renderUI({
+    req(rv$data, rv$fighters)
     
-    lineup_counts <- table(rv$data$Lineup)
+    tagList(
+      div(class = "well",
+          h4("Fighter Status - Click to Mark as Eliminated", style = "margin-top: 0;"),
+          p("Fighters with current scores shown. Click to mark as eliminated.", 
+            style = "color: #CCCCCC; margin-bottom: 15px;"),
+          uiOutput("fighter_chips"),
+          br(),
+          div(style = "display: flex; gap: 10px; margin-top: 15px;",
+              actionButton("clear_eliminated", "Clear All Eliminated", class = "btn-danger"),
+              actionButton("mark_zeros", "Mark All 0.0 as Eliminated", class = "btn-primary")
+          )
+      ),
+      
+      br(),
+      
+      conditionalPanel(
+        condition = "input.username != ''",
+        h4("Live Fighters Distribution - You vs Field"),
+        DTOutput("live_distribution_table"),
+        
+        br(),
+        
+        h4("Your Live Lineup Status"),
+        DTOutput("live_lineups_table")
+      )
+    )
+  })
+  
+  # Fighter Chips
+  output$fighter_chips <- renderUI({
+    req(rv$fighters)
     
-    duplication_data <- rv$data %>%
-      mutate(
-        dupes = sapply(Lineup, function(x) lineup_counts[x]),
-        dupe_group = case_when(
-          dupes == 1 ~ "Unique",
-          dupes <= 5 ~ "2-5 Copies",
-          dupes <= 10 ~ "6-10 Copies",
-          dupes <= 20 ~ "11-20 Copies",
-          TRUE ~ "20+ Copies"
+    # Get scores if available
+    if (!is.null(rv$player_scores)) {
+      fighter_info <- lapply(rv$fighters, function(fighter) {
+        score <- rv$player_scores[Player == fighter, FPTS]
+        if (length(score) == 0) score <- NA
+        list(name = fighter, score = score)
+      })
+    } else {
+      fighter_info <- lapply(rv$fighters, function(fighter) {
+        list(name = fighter, score = NA)
+      })
+    }
+    
+    lapply(fighter_info, function(info) {
+      is_eliminated <- info$name %in% rv$eliminated_fighters
+      
+      # Create label with score if available
+      if (!is.na(info$score)) {
+        label_text <- sprintf("%s (%.1f)", info$name, info$score)
+      } else {
+        label_text <- info$name
+      }
+      
+      actionButton(
+        inputId = paste0("fighter_", gsub("[^A-Za-z0-9]", "_", info$name)),
+        label = label_text,
+        class = if(is_eliminated) "fighter-chip eliminated" else "fighter-chip",
+        onclick = sprintf("Shiny.setInputValue('toggle_fighter', '%s', {priority: 'event'})", info$name)
+      )
+    })
+  })
+  
+  # Toggle fighter elimination
+  observeEvent(input$toggle_fighter, {
+    fighter <- input$toggle_fighter
+    
+    if (fighter %in% rv$eliminated_fighters) {
+      rv$eliminated_fighters <- rv$eliminated_fighters[rv$eliminated_fighters != fighter]
+    } else {
+      rv$eliminated_fighters <- c(rv$eliminated_fighters, fighter)
+    }
+  })
+  
+  # Clear eliminated fighters
+  observeEvent(input$clear_eliminated, {
+    rv$eliminated_fighters <- character(0)
+  })
+  
+  # Mark all 0.0 fighters as eliminated
+  observeEvent(input$mark_zeros, {
+    req(rv$player_scores)
+    
+    zero_fighters <- rv$player_scores[FPTS == 0, Player]
+    rv$eliminated_fighters <- union(rv$eliminated_fighters, zero_fighters)
+    
+    showNotification(
+      sprintf("Marked %d fighters with 0.0 points as eliminated", length(zero_fighters)),
+      type = "message",
+      duration = 3
+    )
+  })
+  
+  # Live Distribution Table
+  output$live_distribution_table <- renderDT({
+    req(rv$data, input$username, input$username != "")
+    
+    user_data <- rv$data[Username == input$username]
+    field_data <- rv$data[Username != input$username]
+    
+    # Calculate live fighters for each lineup
+    calc_live_fighters <- function(lineups) {
+      sapply(lineups, function(lineup) {
+        fighters <- extract_fighters(lineup)
+        sum(!fighters %in% rv$eliminated_fighters)
+      })
+    }
+    
+    # User distribution
+    user_lineups <- unique(user_data$Lineup)
+    user_live <- calc_live_fighters(user_lineups)
+    user_dist <- data.table(live = user_live)[, .(You = .N), by = live]
+    
+    # Field distribution
+    field_lineups <- unique(field_data$Lineup)
+    field_live <- calc_live_fighters(field_lineups)
+    field_dist <- data.table(live = field_live)[, .(Field = .N), by = live]
+    
+    # Merge
+    dist_table <- merge(
+      data.table(live = 0:6),
+      user_dist,
+      by = "live",
+      all.x = TRUE
+    )
+    dist_table <- merge(dist_table, field_dist, by = "live", all.x = TRUE)
+    dist_table[is.na(You), You := 0]
+    dist_table[is.na(Field), Field := 0]
+    
+    # Calculate percentages
+    dist_table[, `You %` := paste0(round(You / sum(You) * 100, 1), "%")]
+    dist_table[, `Field %` := paste0(round(Field / sum(Field) * 100, 1), "%")]
+    
+    # Rename and reorder
+    display_table <- dist_table[, .(
+      `Live Fighters` = live,
+      `Your Lineups` = You,
+      `You %`,
+      `Field Lineups` = Field,
+      `Field %`
+    )][order(-`Live Fighters`)]
+    
+    datatable(
+      display_table,
+      rownames = FALSE,
+      options = list(
+        pageLength = 10,
+        dom = 't',
+        columnDefs = list(
+          list(className = 'dt-center', targets = 0:4)
         )
       )
+    ) %>%
+      formatStyle(
+        'Your Lineups',
+        background = styleColorBar(c(0, max(display_table$`Your Lineups`)), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      ) %>%
+      formatStyle(
+        'Field Lineups',
+        background = styleColorBar(c(0, max(display_table$`Field Lineups`)), '#CCCCCC'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Live Lineups Table
+  output$live_lineups_table <- renderDT({
+    req(rv$data, input$username, input$username != "")
     
-    p <- plot_ly(data = duplication_data, type = "box",
-                 x = ~dupe_group,
-                 y = ~Points,
-                 boxpoints = "all",
-                 jitter = 0.3,
-                 pointpos = 0) %>%
-      layout(
-        title = "Score Distribution by Duplication Level",
-        xaxis = list(title = "Duplication Level"),
-        yaxis = list(title = "Points")
+    user_data <- rv$data[Username == input$username]
+    
+    if (nrow(user_data) == 0) return(NULL)
+    
+    # Process each lineup
+    lineup_status <- rbindlist(lapply(unique(user_data$Lineup), function(lineup) {
+      fighters <- extract_fighters(lineup)
+      live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
+      dead_fighters <- fighters[fighters %in% rv$eliminated_fighters]
+      
+      # Calculate projected score if player_scores available
+      projected_score <- NA
+      if (!is.null(rv$player_scores)) {
+        # Get scores for live fighters
+        live_scores <- sapply(live_fighters, function(f) {
+          score <- rv$player_scores[Player == f, FPTS]
+          if (length(score) == 0) return(0)
+          return(score)
+        })
+        projected_score <- sum(live_scores)
+      }
+      
+      data.table(
+        Lineup = lineup,
+        `Live Fighters` = length(live_fighters),
+        `Score` = if(!is.na(projected_score)) round(projected_score, 1) else NA_real_,
+        `Live` = paste(live_fighters, collapse = ", "),
+        `Eliminated` = if(length(dead_fighters) > 0) paste(dead_fighters, collapse = ", ") else "-"
+      )
+    }))
+    
+    # Sort by projected score descending (then by live fighters)
+    if (!is.null(rv$player_scores)) {
+      lineup_status <- lineup_status[order(-`Score`, -`Live Fighters`)]
+    } else {
+      lineup_status <- lineup_status[order(-`Live Fighters`)]
+    }
+    
+    # Create table
+    dt_table <- datatable(
+      lineup_status,
+      rownames = FALSE,
+      options = list(
+        pageLength = 20,
+        dom = 'frtip',
+        columnDefs = list(
+          list(width = '30%', targets = 0),
+          list(className = 'dt-center', targets = 1:2)
+        )
+      )
+    ) %>%
+      formatStyle(
+        'Live Fighters',
+        background = styleColorBar(c(0, 6), '#28a745'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        fontWeight = 'bold'
+      ) %>%
+      formatStyle(
+        'Eliminated',
+        color = '#dc3545',
+        fontWeight = 'bold'
       )
     
-    p
+    # Add score styling if available
+    if (!is.null(rv$player_scores) && any(!is.na(lineup_status$`Score`))) {
+      dt_table <- dt_table %>%
+        formatStyle(
+          'Score',
+          background = styleColorBar(range(lineup_status$`Score`, na.rm = TRUE), '#FFE500'),
+          backgroundSize = '100% 90%',
+          backgroundRepeat = 'no-repeat',
+          backgroundPosition = 'center',
+          fontWeight = 'bold'
+        )
+    }
+    
+    dt_table
   })
 }
 
-# Run the app
+# Run the application
 shinyApp(ui = ui, server = server)
