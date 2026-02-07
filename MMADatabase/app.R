@@ -1,240 +1,180 @@
-# MMA Base Score Research Workbench - Redesigned
-# Horizontal tabs, wider plots, platform toggle, percentile-based stats
-
 library(shiny)
-library(tidyverse)
+library(dplyr)
+library(ggplot2)
 library(readxl)
 library(DT)
-library(plotly)
 library(scales)
-library(shinycssloaders)
+library(plotly)
 
-# Custom CSS for clean black and gold theme with horizontal tabs
-custom_css <- "
-  /* Main theme */
-  body {
-    background-color: #f4f4f4;
-  }
-  
-  /* Navbar styling */
-  .navbar {
-    background-color: #000000 !important;
-    border: none;
-  }
-  
-  .navbar-brand {
-    color: #FFD700 !important;
-    font-weight: bold;
-    font-size: 24px;
-  }
-  
-  /* Tab styling */
-  .nav-tabs {
-    border-bottom: 2px solid #FFD700;
-    background-color: #1a1a1a;
-  }
-  
-  .nav-tabs > li > a {
-    color: #FFD700;
-    background-color: #1a1a1a;
-    border: none;
-    font-size: 16px;
-    padding: 12px 24px;
-  }
-  
-  .nav-tabs > li.active > a,
-  .nav-tabs > li.active > a:hover,
-  .nav-tabs > li.active > a:focus {
-    color: #000000;
-    background-color: #FFD700;
-    border: none;
-    font-weight: bold;
-  }
-  
-  .nav-tabs > li > a:hover {
-    background-color: #333333;
-    border: none;
-  }
-  
-  /* Control panel */
-  .well {
-    background-color: #ffffff;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 15px;
-  }
-  
-  /* Box styling */
-  .box {
-    border-top: 3px solid #FFD700;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-  }
-  
-  .box-header {
-    background-color: #333333;
-    color: #FFD700;
-  }
-  
-  /* Button styling */
-  .btn-primary {
-    background-color: #FFD700;
-    border-color: #DAA520;
-    color: #000000;
-    font-weight: bold;
-  }
-  
-  .btn-primary:hover {
-    background-color: #DAA520;
-    border-color: #B8860B;
-    color: #000000;
-  }
-  
-  /* Tables */
-  .dataTables_wrapper .dataTables_length,
-  .dataTables_wrapper .dataTables_filter,
-  .dataTables_wrapper .dataTables_info,
-  .dataTables_wrapper .dataTables_processing,
-  .dataTables_wrapper .dataTables_paginate {
-    color: #333;
-  }
-"
+# Read database from working directory
+fantasy_db <- read_excel("UFC_Fantasy_Database.xlsx")
+
+# Prepare data
+fantasy_db <- fantasy_db %>%
+  mutate(
+    rounds_lasted = case_when(
+      METHOD == "Quick1" ~ 0.5,
+      METHOD == "1" ~ 1,
+      METHOD == "2" ~ 2,
+      METHOD == "3" ~ 3,
+      METHOD == "4" ~ 4,
+      METHOD == "5" ~ 5,
+      grepl("Decision- 3", METHOD) ~ 3,
+      grepl("Decision- 5", METHOD) ~ 5,
+      TRUE ~ 3
+    ),
+    DK_per_round = DKBase / rounds_lasted,
+    FD_per_round = FDBase / rounds_lasted,
+    is_win = RESULT == "W"
+  )
 
 # UI
 ui <- fluidPage(
   tags$head(
-    tags$style(HTML(custom_css))
+    tags$style(HTML("
+      body { 
+        background-color: #0a0a0a; 
+        color: #d4af37;
+        font-family: 'Segoe UI', Arial, sans-serif;
+      }
+      .well { 
+        background-color: #1a1a1a; 
+        border: 1px solid #d4af37;
+        box-shadow: 0 0 10px rgba(212, 175, 55, 0.3);
+      }
+      .selectize-input, .selectize-dropdown {
+        background-color: #1a1a1a;
+        color: #d4af37;
+        border: 1px solid #d4af37;
+      }
+      .selectize-dropdown .option {
+        background-color: #1a1a1a;
+        color: #d4af37;
+      }
+      .selectize-dropdown .option:hover,
+      .selectize-dropdown .active {
+        background-color: #d4af37;
+        color: #0a0a0a;
+      }
+      .selectize-dropdown .selected {
+        background-color: #2a2a2a;
+        color: #d4af37;
+      }
+      .selectize-input.focus {
+        border-color: #d4af37;
+        box-shadow: 0 0 5px rgba(212, 175, 55, 0.5);
+      }
+      h2, h3, h4 { 
+        color: #d4af37; 
+        text-shadow: 0 0 10px rgba(212, 175, 55, 0.5);
+      }
+      .shiny-output-error { color: #ff6b6b; }
+      .dataTables_wrapper { color: #d4af37; }
+      .dataTables_wrapper .dataTables_paginate .paginate_button {
+        color: #d4af37 !important;
+      }
+      table.dataTable tbody tr { background-color: #1a1a1a; }
+      table.dataTable tbody tr:hover { background-color: #2a2a2a; }
+      .info-box {
+        background-color: #1a1a1a;
+        border: 1px solid #d4af37;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 20px;
+      }
+      .stat-label {
+        font-weight: bold;
+        color: #d4af37;
+      }
+    "))
   ),
   
-  # Header
-  div(
-    style = "background-color: #000000; padding: 15px; margin-bottom: 20px;",
-    h2("MMA Base Score Research Workbench", 
-       style = "color: #FFD700; margin: 0; font-weight: bold;")
+  titlePanel(
+    div(style = "text-align: center;",
+        img(src = "logo.jpg", height = "80px", style = "margin-bottom: 10px;"),
+        h2("Golden Ticket Sims", style = "margin: 10px 0 5px 0;"),
+        h4("MMA Fighter Analysis & Scoring Ranges", 
+           style = "color: #888; font-weight: normal; margin-top: 0;")
+    )
   ),
   
-  # Control Panel
   fluidRow(
     column(12,
            wellPanel(
-             fluidRow(
-               column(3,
-                      fileInput("fantasy_db", "Upload Fantasy Database",
-                                accept = c(".xlsx", ".xls"),
-                                width = "100%")
-               ),
-               column(2,
-                      uiOutput("fighter_select")
-               ),
-               column(2,
-                      uiOutput("weight_class_select")
-               ),
-               column(2,
-                      radioButtons("platform", "Platform:",
-                                   choices = c("DraftKings" = "DK", "FanDuel" = "FD"),
-                                   selected = "DK",
-                                   inline = TRUE)
-               ),
-               column(2,
-                      checkboxInput("remove_outliers", "Remove Outliers", value = TRUE),
-                      numericInput("outlier_threshold", "IQR Multiplier", 
-                                   value = 1.5, min = 0.5, max = 3, step = 0.1)
-               ),
-               column(1,
-                      div(style = "padding-top: 25px;",
-                          uiOutput("data_summary_badge"))
-               )
-             )
+             selectInput("fighter", "Select Fighter:", 
+                         choices = NULL,  # Will be populated server-side
+                         width = "100%")
            )
     )
   ),
   
-  # Tabs
-  tabsetPanel(
-    id = "main_tabs",
-    
-    # Fighter Analysis Tab
-    tabPanel(
-      "Fighter Analysis",
-      br(),
-      fluidRow(
-        column(8,
-               plotlyOutput("fighter_violin", height = "550px") %>% withSpinner(color = "#FFD700")
-        ),
-        column(4,
-               div(
-                 style = "background: white; padding: 15px; border: 1px solid #ddd; border-radius: 4px; min-height: 550px;",
-                 h4("Adjustment Recommendations", style = "color: #333; border-bottom: 2px solid #FFD700; padding-bottom: 10px;"),
-                 uiOutput("adjustment_recommendations")
-               )
-        )
-      ),
-      br(),
-      fluidRow(
-        column(12,
-               plotOutput("fighter_comparison", height = "400px") %>% withSpinner(color = "#FFD700")
-        )
-      ),
-      br(),
-      fluidRow(
-        column(6,
-               div(
-                 style = "background: white; padding: 15px; border: 1px solid #ddd; border-radius: 4px;",
-                 h4("Fighter Statistics (Percentiles)", style = "color: #333; border-bottom: 2px solid #FFD700; padding-bottom: 10px;"),
-                 DTOutput("fighter_stats_table")
-               )
-        ),
-        column(6,
-               div(
-                 style = "background: white; padding: 15px; border: 1px solid #ddd; border-radius: 4px;",
-                 h4("Fighter Fight History", style = "color: #333; border-bottom: 2px solid #FFD700; padding-bottom: 10px;"),
-                 DTOutput("fighter_history_table")
-               )
-        )
-      )
-    ),
-    
-    # Weight Class Comparison Tab
-    tabPanel(
-      "Weight Class Comparison",
-      br(),
-      fluidRow(
-        column(12,
-               plotlyOutput("weight_class_violin", height = "600px") %>% withSpinner(color = "#FFD700")
-        )
-      ),
-      br(),
-      fluidRow(
-        column(12,
-               div(
-                 style = "background: white; padding: 15px; border: 1px solid #ddd; border-radius: 4px;",
-                 h4("Weight Class Statistics (Percentiles)", style = "color: #333; border-bottom: 2px solid #FFD700; padding-bottom: 10px;"),
-                 DTOutput("weight_class_stats")
-               )
-        )
-      )
-    ),
-    
-    # Round Comparison Tab
-    tabPanel(
-      "Round Comparison",
-      br(),
-      fluidRow(
-        column(6,
-               plotOutput("round_progression", height = "500px") %>% withSpinner(color = "#FFD700")
-        ),
-        column(6,
-               plotOutput("round_base_by_platform", height = "500px") %>% withSpinner(color = "#FFD700")
-        )
-      ),
-      br(),
-      fluidRow(
-        column(6,
-               plotOutput("win_loss_comparison", height = "400px") %>% withSpinner(color = "#FFD700")
-        ),
-        column(6,
-               plotOutput("decision_vs_finish", height = "400px") %>% withSpinner(color = "#FFD700")
-        )
-      )
+  # Fighter Analysis Section
+  fluidRow(
+    column(12,
+           h3("Fighter Analysis"),
+           
+           # Fighter Summary Stats and Platform Toggle
+           fluidRow(
+             column(3,
+                    div(class = "info-box",
+                        h4("Career Record", style = "margin-top: 0;"),
+                        uiOutput("career_record")
+                    )
+             ),
+             column(3,
+                    div(class = "info-box",
+                        h4("Current Weight Class", style = "margin-top: 0;"),
+                        uiOutput("weight_class_info")
+                    )
+             ),
+             column(6,
+                    div(class = "info-box",
+                        h4("Platform", style = "margin-top: 0;"),
+                        radioButtons("platform", NULL,
+                                     choices = c("DraftKings" = "DK", "FanDuel" = "FD"),
+                                     selected = "DK",
+                                     inline = TRUE)
+                    )
+             )
+           ),
+           
+           # Base Score Distribution - Individual Violin per Outcome
+           fluidRow(
+             column(12,
+                    h4("Base Score Distribution by Outcome"),
+                    plotlyOutput("violin_plot_combined", height = "600px")
+             )
+           ),
+           
+           # Round by Round Progression - Full Width Charts
+           fluidRow(
+             column(12,
+                    h4("Per Round Scoring - Wins"),
+                    plotlyOutput("round_progression_wins", height = "350px")
+             )
+           ),
+           
+           fluidRow(
+             column(12,
+                    h4("Per Round Scoring - Losses"),
+                    plotlyOutput("round_progression_losses", height = "350px")
+             )
+           ),
+           
+           # Full Fighter History - Wins and Losses
+           fluidRow(
+             column(12,
+                    h4("Fight History - Wins"),
+                    DTOutput("fighter_history_wins")
+             )
+           ),
+           
+           fluidRow(
+             column(12,
+                    h4("Fight History - Losses"),
+                    DTOutput("fighter_history_losses")
+             )
+           )
     )
   )
 )
@@ -242,701 +182,578 @@ ui <- fluidPage(
 # Server
 server <- function(input, output, session) {
   
-  # Load fantasy database
-  fantasy_data <- reactive({
-    req(input$fantasy_db)
-    
-    tryCatch({
-      df <- read_excel(input$fantasy_db$datapath, sheet = "UFC_Fantasy_Fighter_Data")
-      
-      # Add simplified method for grouping
-      df <- df %>%
-        mutate(
-          MethodSimple = case_when(
-            METHOD == "Quick1" ~ "Quick R1",
-            METHOD == "1" ~ "R1",
-            METHOD == "2" ~ "R2",
-            METHOD == "3" ~ "R3",
-            METHOD == "4" ~ "R4",
-            METHOD == "5" ~ "R5",
-            METHOD == "Decision- 3" ~ "Decision-3",
-            METHOD == "Decision- 5" ~ "Decision-5",
-            TRUE ~ "Other"
-          ),
-          Gender = ifelse(grepl("Women", WEIGHTCLASS), "Women", "Men"),
-          WeightClassSimple = gsub("Women's ", "", WEIGHTCLASS)
-        )
-      
-      return(df)
-    }, error = function(e) {
-      showNotification(paste("Error loading file:", e$message), type = "error")
-      return(NULL)
-    })
-  })
+  # Server-side selectize for fighter selection
+  updateSelectizeInput(session, "fighter", 
+                       choices = sort(unique(fantasy_db$FIGHTER)),
+                       server = TRUE)
   
-  # Get last weight class for selected fighter
-  fighter_last_weight_class <- reactive({
-    req(input$selected_fighter)
-    req(fantasy_data())
-    
-    last_fight <- fantasy_data() %>%
-      filter(FIGHTER == input$selected_fighter) %>%
-      arrange(desc(EVENT_DATE)) %>%
-      slice(1)
-    
-    if (nrow(last_fight) > 0) {
-      return(last_fight$WEIGHTCLASS)
-    }
-    return(NULL)
-  })
-  
-  # Fighter selection UI
-  output$fighter_select <- renderUI({
-    req(fantasy_data())
-    
-    fighters <- fantasy_data() %>%
-      filter(RESULT == "W") %>%
-      arrange(FIGHTER) %>%
-      pull(FIGHTER) %>%
-      unique()
-    
-    selectInput("selected_fighter", 
-                "Select Fighter:",
-                choices = c("", fighters),
-                selected = "",
-                width = "100%")
-  })
-  
-  # Weight class selection UI - auto-populates with fighter's last weight class
-  output$weight_class_select <- renderUI({
-    req(fantasy_data())
-    
-    weight_classes <- fantasy_data() %>%
-      arrange(WEIGHTCLASS) %>%
-      pull(WEIGHTCLASS) %>%
-      unique()
-    
-    # Auto-select fighter's last weight class
-    selected_wc <- if (!is.null(input$selected_fighter) && input$selected_fighter != "") {
-      fighter_last_weight_class()
-    } else {
-      "All"
-    }
-    
-    selectInput("selected_weight_class",
-                "Weight Class:",
-                choices = c("All", weight_classes),
-                selected = selected_wc,
-                width = "100%")
-  })
-  
-  # Data summary badge
-  output$data_summary_badge <- renderUI({
-    req(fantasy_data())
-    
-    total_fights <- nrow(fantasy_data())
-    total_fighters <- fantasy_data() %>% pull(FIGHTER) %>% unique() %>% length()
-    
-    div(
-      style = "text-align: center; background: #FFD700; padding: 10px; border-radius: 4px;",
-      div(style = "font-size: 20px; font-weight: bold; color: #000;", total_fights),
-      div(style = "font-size: 11px; color: #000;", "Fights"),
-      div(style = "font-size: 16px; font-weight: bold; color: #000; margin-top: 5px;", total_fighters),
-      div(style = "font-size: 11px; color: #000;", "Fighters")
-    )
-  })
-  
-  # Get base column name based on platform
-  base_column <- reactive({
-    paste0(input$platform, "Base")
-  })
-  
-  # Get score column name based on platform
-  score_column <- reactive({
-    paste0(input$platform, "Score")
-  })
-  
-  # Platform display name
-  platform_name <- reactive({
-    if (input$platform == "DK") "DraftKings" else "FanDuel"
-  })
-  
-  # Filtered data based on selections
-  filtered_data <- reactive({
-    req(fantasy_data())
-    
-    df <- fantasy_data()
-    
-    # Filter by weight class
-    if (!is.null(input$selected_weight_class) && input$selected_weight_class != "All") {
-      df <- df %>% filter(WEIGHTCLASS == input$selected_weight_class)
-    }
-    
-    # Remove outliers if requested
-    if (input$remove_outliers) {
-      base_col <- base_column()
-      df <- df %>%
-        group_by(FIGHTER, RESULT) %>%
-        mutate(
-          Q1 = quantile(.data[[base_col]], 0.25, na.rm = TRUE),
-          Q3 = quantile(.data[[base_col]], 0.75, na.rm = TRUE),
-          IQR = Q3 - Q1,
-          Lower = Q1 - input$outlier_threshold * IQR,
-          Upper = Q3 + input$outlier_threshold * IQR
-        ) %>%
-        filter(.data[[base_col]] >= Lower & .data[[base_col]] <= Upper) %>%
-        select(-Q1, -Q3, -IQR, -Lower, -Upper) %>%
-        ungroup()
-    }
-    
-    return(df)
-  })
-  
-  # Fighter-specific data
+  # Reactive fighter data
   fighter_data <- reactive({
-    req(input$selected_fighter)
-    req(filtered_data())
-    
-    filtered_data() %>%
-      filter(FIGHTER == input$selected_fighter)
+    req(input$fighter)
+    fantasy_db %>%
+      filter(FIGHTER == input$fighter) %>%
+      arrange(desc(EVENT_DATE))
   })
   
-  # Weight class data for selected fighter (excluding the fighter)
-  weight_class_data <- reactive({
+  # Get most recent weight class
+  current_weight_class <- reactive({
     req(fighter_data())
-    
-    wc <- unique(fighter_data()$WEIGHTCLASS)[1]
-    
-    filtered_data() %>%
-      filter(WEIGHTCLASS == wc, FIGHTER != input$selected_fighter)
+    fighter_data()$WEIGHTCLASS[1]
   })
   
-  # Calculate percentiles helper function
-  calc_percentiles <- function(data, column) {
-    if (nrow(data) == 0) {
-      return(rep(NA, 7))
+  # Get weight class comparison data
+  weight_class_data <- reactive({
+    req(current_weight_class())
+    fantasy_db %>%
+      filter(WEIGHTCLASS == current_weight_class())
+  })
+  
+  # Career Record
+  output$career_record <- renderUI({
+    data <- fighter_data()
+    wins <- sum(data$RESULT == "W")
+    losses <- sum(data$RESULT == "L")
+    
+    HTML(paste0(
+      "<div style='font-size: 24px; text-align: center; margin: 10px 0;'>",
+      wins, " - ", losses,
+      "</div>",
+      "<div style='text-align: center; color: #888;'>",
+      nrow(data), " Total Fights",
+      "</div>"
+    ))
+  })
+  
+  # Weight Class Info
+  output$weight_class_info <- renderUI({
+    wc <- current_weight_class()
+    data <- fighter_data()
+    fights_in_wc <- sum(data$WEIGHTCLASS == wc)
+    
+    HTML(paste0(
+      "<div style='font-size: 18px; text-align: center; margin: 10px 0;'>",
+      wc,
+      "</div>",
+      "<div style='text-align: center; color: #888;'>",
+      fights_in_wc, " fight", if(fights_in_wc != 1) "s" else "", " in class",
+      "</div>"
+    ))
+  })
+  
+  # Violin Plot by Outcome - Separate violin for each outcome type
+  output$violin_plot_combined <- renderPlotly({
+    fighter <- fighter_data()
+    wc_data <- weight_class_data()
+    platform <- input$platform
+    
+    base_col <- if(platform == "DK") "DKBase" else "FDBase"
+    
+    # Prepare fighter data with outcomes - WINS ONLY
+    fighter_outcomes <- fighter %>%
+      filter(is_win) %>%
+      mutate(
+        outcome_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2", 
+          rounds_lasted == 3 & grepl("Decision", METHOD) ~ "Dec R3",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 & grepl("Decision", METHOD) ~ "Dec R5",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ "Other"
+        ),
+        score = !!sym(base_col),
+        hover_text = paste0(
+          "<b>", FIGHTER, "</b><br>",
+          "Event: ", EVENT, "<br>",
+          "Date: ", format(EVENT_DATE, "%Y-%m-%d"), "<br>",
+          "Outcome: ", outcome_label, "<br>",
+          "<b>Base: ", round(score, 2), "</b><br>",
+          "Sig Str: ", SigStrikes, " | TD: ", Takedowns, "<br>",
+          "KD: ", Knockdowns, " | Sub: ", SubAttempts, "<br>",
+          "Ctrl: ", round(ControlTimeSec), "s"
+        )
+      ) %>%
+      filter(outcome_label != "Other")
+    
+    # Prepare weight class data with outcomes - WINS ONLY
+    wc_outcomes <- wc_data %>%
+      filter(is_win) %>%
+      mutate(
+        outcome_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 & grepl("Decision", METHOD) ~ "Dec R3",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 & grepl("Decision", METHOD) ~ "Dec R5",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ "Other"
+        ),
+        score = !!sym(base_col)
+      ) %>%
+      filter(outcome_label != "Other")
+    
+    # Order outcomes logically
+    outcome_order <- c("Quick R1", "R1", "R2", "R3", "Dec R3", "R4", "R5", "Dec R5")
+    fighter_outcomes$outcome_label <- factor(fighter_outcomes$outcome_label, levels = outcome_order)
+    wc_outcomes$outcome_label <- factor(wc_outcomes$outcome_label, levels = outcome_order)
+    
+    # Create subplots - one for each outcome
+    fig <- plot_ly()
+    
+    for(outcome in outcome_order) {
+      wc_subset <- wc_outcomes %>% filter(outcome_label == outcome)
+      fighter_subset <- fighter_outcomes %>% filter(outcome_label == outcome)
+      
+      if(nrow(wc_subset) > 0) {
+        # Add weight class violin
+        fig <- fig %>%
+          add_trace(
+            data = wc_subset,
+            x = ~outcome_label,
+            y = ~score,
+            type = 'violin',
+            name = if(outcome == outcome_order[1]) 'Weight Class' else NULL,
+            box = list(visible = TRUE),
+            meanline = list(visible = TRUE),
+            fillcolor = 'rgba(102, 102, 102, 0.4)',
+            line = list(color = '#888888'),
+            marker = list(color = '#888888'),
+            hoverinfo = 'skip',
+            showlegend = outcome == outcome_order[1],
+            legendgroup = 'wc'
+          )
+      }
+      
+      if(nrow(fighter_subset) > 0) {
+        # Add fighter points
+        fig <- fig %>%
+          add_trace(
+            data = fighter_subset,
+            x = ~outcome_label,
+            y = ~score,
+            type = 'scatter',
+            mode = 'markers',
+            name = if(outcome == outcome_order[1]) input$fighter else NULL,
+            marker = list(
+              size = 10,
+              color = '#FFD700',
+              line = list(color = '#000000', width = 2)
+            ),
+            text = ~hover_text,
+            hoverinfo = 'text',
+            showlegend = outcome == outcome_order[1],
+            legendgroup = 'fighter'
+          )
+      }
     }
-    quantile(data[[column]], probs = c(0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95), na.rm = TRUE)
+    
+    fig %>%
+      layout(
+        xaxis = list(
+          title = "",
+          categoryorder = "array",
+          categoryarray = outcome_order,
+          color = '#d4af37',
+          gridcolor = '#2a2a2a'
+        ),
+        yaxis = list(
+          title = paste(platform, "Base Score (Wins Only)"),
+          color = '#d4af37',
+          gridcolor = '#2a2a2a'
+        ),
+        paper_bgcolor = '#0a0a0a',
+        plot_bgcolor = '#0a0a0a',
+        font = list(color = '#d4af37', size = 13),
+        legend = list(
+          orientation = 'h',
+          x = 0.5,
+          xanchor = 'center',
+          y = 1.08,
+          bgcolor = 'rgba(0,0,0,0)',
+          font = list(color = '#d4af37')
+        ),
+        hovermode = 'closest',
+        violingap = 0.3,
+        violinmode = 'overlay'
+      ) %>%
+      config(displayModeBar = TRUE, displaylogo = FALSE)
+  })
+  
+  # Round by Round Progression - Wins (Interactive)
+  output$round_progression_wins <- renderPlotly({
+    fighter <- fighter_data()
+    wc_data <- weight_class_data()
+    platform <- input$platform
+    
+    per_round_col <- if(platform == "DK") "DK_per_round" else "FD_per_round"
+    
+    # Filter for wins only
+    fighter_wins <- fighter %>% filter(is_win)
+    wc_wins <- wc_data %>% filter(is_win)
+    
+    # Prepare fighter individual data points
+    fighter_points <- fighter_wins %>%
+      mutate(
+        rounds_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ as.character(rounds_lasted)
+        ),
+        per_round = !!sym(per_round_col),
+        hover_text = paste0(
+          "<b>", FIGHTER, "</b><br>",
+          "Event: ", EVENT, "<br>",
+          "Date: ", format(EVENT_DATE, "%Y-%m-%d"), "<br>",
+          "Rounds: ", rounds_label, "<br>",
+          "<b>Per Round: ", round(per_round, 2), "</b><br>",
+          "Sig Str: ", SigStrikes, " | Tot: ", TotalStrikes, "<br>",
+          "TD: ", Takedowns, " | KD: ", Knockdowns, "<br>",
+          "Sub: ", SubAttempts, " | Ctrl: ", round(ControlTimeSec), "s"
+        )
+      )
+    
+    wc_points <- wc_wins %>%
+      mutate(
+        rounds_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ as.character(rounds_lasted)
+        ),
+        per_round = !!sym(per_round_col)
+      )
+    
+    fighter_avg <- fighter_wins %>%
+      group_by(rounds_lasted) %>%
+      summarise(per_round = mean(!!sym(per_round_col), na.rm = TRUE), .groups = "drop") %>%
+      mutate(rounds_label = case_when(
+        rounds_lasted == 0.5 ~ "Quick R1", rounds_lasted == 1 ~ "R1",
+        rounds_lasted == 2 ~ "R2", rounds_lasted == 3 ~ "R3",
+        rounds_lasted == 4 ~ "R4", rounds_lasted == 5 ~ "R5",
+        TRUE ~ as.character(rounds_lasted)
+      )) %>% arrange(rounds_lasted)
+    
+    wc_avg <- wc_wins %>%
+      group_by(rounds_lasted) %>%
+      summarise(per_round = mean(!!sym(per_round_col), na.rm = TRUE), .groups = "drop") %>%
+      mutate(rounds_label = case_when(
+        rounds_lasted == 0.5 ~ "Quick R1", rounds_lasted == 1 ~ "R1",
+        rounds_lasted == 2 ~ "R2", rounds_lasted == 3 ~ "R3",
+        rounds_lasted == 4 ~ "R4", rounds_lasted == 5 ~ "R5",
+        TRUE ~ as.character(rounds_lasted)
+      )) %>% arrange(rounds_lasted)
+    
+    round_order <- c("Quick R1", "R1", "R2", "R3", "R4", "R5")
+    
+    plot_ly() %>%
+      add_trace(data = wc_points, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'markers',
+                marker = list(color = '#888888', size = 5, opacity = 0.2), name = 'WC', hoverinfo = 'skip',
+                legendgroup = 'wc') %>%
+      add_trace(data = wc_avg, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'lines+markers',
+                line = list(color = '#888888', width = 2), marker = list(color = '#888888', size = 8),
+                name = 'WC Avg', showlegend = TRUE, legendgroup = 'wc',
+                hovertemplate = "Avg: %{x:.2f}<extra></extra>") %>%
+      add_trace(data = fighter_points, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'markers',
+                marker = list(color = '#d4af37', size = 7, opacity = 0.6), name = 'Fighter',
+                text = ~hover_text, hoverinfo = 'text', legendgroup = 'fighter') %>%
+      add_trace(data = fighter_avg, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'lines+markers',
+                line = list(color = '#d4af37', width = 2), marker = list(color = '#d4af37', size = 8),
+                name = 'Fighter Avg', showlegend = TRUE, legendgroup = 'fighter',
+                hovertemplate = "Avg: %{x:.2f}<extra></extra>") %>%
+      layout(yaxis = list(title = "", categoryorder = "array", categoryarray = rev(round_order),
+                          color = '#d4af37', gridcolor = '#2a2a2a'),
+             xaxis = list(title = paste(platform, "Per Round"), color = '#d4af37', gridcolor = '#2a2a2a'),
+             paper_bgcolor = '#0a0a0a', plot_bgcolor = '#0a0a0a', font = list(color = '#d4af37', size = 11),
+             legend = list(orientation = 'h', x = 0.5, xanchor = 'center', y = 1.12,
+                           bgcolor = 'rgba(0,0,0,0)', font = list(color = '#d4af37', size = 9)),
+             hovermode = 'closest', margin = list(l = 50, r = 10, t = 50, b = 50)) %>%
+      config(displayModeBar = FALSE)
+  })
+  
+  # Round by Round Progression - Losses (Interactive)
+  output$round_progression_losses <- renderPlotly({
+    fighter <- fighter_data()
+    wc_data <- weight_class_data()
+    platform <- input$platform
+    
+    per_round_col <- if(platform == "DK") "DK_per_round" else "FD_per_round"
+    
+    # Filter for losses only
+    fighter_losses <- fighter %>% filter(!is_win)
+    wc_losses <- wc_data %>% filter(!is_win)
+    
+    # Prepare fighter individual data points
+    fighter_points <- fighter_losses %>%
+      mutate(
+        rounds_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ as.character(rounds_lasted)
+        ),
+        per_round = !!sym(per_round_col),
+        hover_text = paste0(
+          "<b>", FIGHTER, "</b><br>",
+          "Event: ", EVENT, "<br>",
+          "Date: ", format(EVENT_DATE, "%Y-%m-%d"), "<br>",
+          "Rounds: ", rounds_label, "<br>",
+          "<b>Per Round: ", round(per_round, 2), "</b><br>",
+          "Sig Str: ", SigStrikes, " | Tot: ", TotalStrikes, "<br>",
+          "TD: ", Takedowns, " | KD: ", Knockdowns, "<br>",
+          "Sub: ", SubAttempts, " | Ctrl: ", round(ControlTimeSec), "s"
+        )
+      )
+    
+    wc_points <- wc_losses %>%
+      mutate(
+        rounds_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ as.character(rounds_lasted)
+        ),
+        per_round = !!sym(per_round_col)
+      )
+    
+    fighter_avg <- fighter_losses %>%
+      group_by(rounds_lasted) %>%
+      summarise(per_round = mean(!!sym(per_round_col), na.rm = TRUE), .groups = "drop") %>%
+      mutate(rounds_label = case_when(
+        rounds_lasted == 0.5 ~ "Quick R1", rounds_lasted == 1 ~ "R1",
+        rounds_lasted == 2 ~ "R2", rounds_lasted == 3 ~ "R3",
+        rounds_lasted == 4 ~ "R4", rounds_lasted == 5 ~ "R5",
+        TRUE ~ as.character(rounds_lasted)
+      )) %>% arrange(rounds_lasted)
+    
+    wc_avg <- wc_losses %>%
+      group_by(rounds_lasted) %>%
+      summarise(per_round = mean(!!sym(per_round_col), na.rm = TRUE), .groups = "drop") %>%
+      mutate(rounds_label = case_when(
+        rounds_lasted == 0.5 ~ "Quick R1", rounds_lasted == 1 ~ "R1",
+        rounds_lasted == 2 ~ "R2", rounds_lasted == 3 ~ "R3",
+        rounds_lasted == 4 ~ "R4", rounds_lasted == 5 ~ "R5",
+        TRUE ~ as.character(rounds_lasted)
+      )) %>% arrange(rounds_lasted)
+    
+    round_order <- c("Quick R1", "R1", "R2", "R3", "R4", "R5")
+    
+    plot_ly() %>%
+      add_trace(data = wc_points, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'markers',
+                marker = list(color = '#888888', size = 5, opacity = 0.2), name = 'WC', hoverinfo = 'skip',
+                legendgroup = 'wc') %>%
+      add_trace(data = wc_avg, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'lines+markers',
+                line = list(color = '#888888', width = 2), marker = list(color = '#888888', size = 8),
+                name = 'WC Avg', showlegend = TRUE, legendgroup = 'wc',
+                hovertemplate = "Avg: %{x:.2f}<extra></extra>") %>%
+      add_trace(data = fighter_points, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'markers',
+                marker = list(color = '#d4af37', size = 7, opacity = 0.6), name = 'Fighter',
+                text = ~hover_text, hoverinfo = 'text', legendgroup = 'fighter') %>%
+      add_trace(data = fighter_avg, y = ~rounds_label, x = ~per_round, type = 'scatter', mode = 'lines+markers',
+                line = list(color = '#d4af37', width = 2), marker = list(color = '#d4af37', size = 8),
+                name = 'Fighter Avg', showlegend = TRUE, legendgroup = 'fighter',
+                hovertemplate = "Avg: %{x:.2f}<extra></extra>") %>%
+      layout(yaxis = list(title = "", categoryorder = "array", categoryarray = rev(round_order),
+                          color = '#d4af37', gridcolor = '#2a2a2a'),
+             xaxis = list(title = paste(platform, "Per Round"), color = '#d4af37', gridcolor = '#2a2a2a'),
+             paper_bgcolor = '#0a0a0a', plot_bgcolor = '#0a0a0a', font = list(color = '#d4af37', size = 11),
+             legend = list(orientation = 'h', x = 0.5, xanchor = 'center', y = 1.12,
+                           bgcolor = 'rgba(0,0,0,0)', font = list(color = '#d4af37', size = 9)),
+             hovermode = 'closest', margin = list(l = 50, r = 10, t = 50, b = 50)) %>%
+      config(displayModeBar = FALSE)
+  })
+  
+  
+  # Helper function to calculate percentile
+  calculate_percentile <- function(value, weight_class_values) {
+    mean(weight_class_values <= value, na.rm = TRUE) * 100
   }
   
-  # Fighter Violin Plot
-  output$fighter_violin <- renderPlotly({
-    req(fighter_data())
-    base_col <- base_column()
+  # Fighter History Table - Wins
+  output$fighter_history_wins <- renderDT({
+    fighter <- fighter_data()
+    wc_data <- weight_class_data()
+    platform <- input$platform
     
-    # Combine fighter and weight class data
-    fighter <- fighter_data() %>%
-      mutate(Group = "Selected Fighter") %>%
-      filter(RESULT == "W")
+    base_col <- if(platform == "DK") "DKBase" else "FDBase"
+    win_col <- if(platform == "DK") "DKWin" else "FDWin"
+    score_col <- if(platform == "DK") "DKScore" else "FDScore"
     
-    wc <- weight_class_data() %>%
-      mutate(Group = "Weight Class Avg") %>%
-      filter(RESULT == "W")
+    # Filter wins
+    wins <- fighter %>% filter(is_win)
     
-    combined <- bind_rows(fighter, wc)
+    if(nrow(wins) == 0) return(datatable(data.frame(Message = "No wins found")))
     
-    # Create violin plot by outcome
-    p <- ggplot(combined, aes(x = MethodSimple, y = .data[[base_col]], fill = Group)) +
-      geom_violin(position = position_dodge(0.8), alpha = 0.6, scale = "width") +
-      geom_jitter(aes(color = Group), 
-                  position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8),
-                  alpha = 0.4, size = 2) +
-      stat_summary(aes(group = Group), fun = mean, geom = "point", 
-                   shape = 23, size = 4, fill = "white",
-                   position = position_dodge(0.8)) +
-      scale_fill_manual(values = c("Selected Fighter" = "#FFD700", "Weight Class Avg" = "#808080")) +
-      scale_color_manual(values = c("Selected Fighter" = "#DAA520", "Weight Class Avg" = "#606060")) +
-      labs(
-        title = paste0(input$selected_fighter, " - ", platform_name(), " Base Score by Finish Type (Winners)"),
-        subtitle = "Diamond = Mean | Selected fighter vs weight class average",
-        x = "Finish Type",
-        y = paste(platform_name(), "Base Score"),
-        fill = "",
-        color = ""
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
-        plot.subtitle = element_text(hjust = 0.5, size = 11),
-        legend.position = "top",
-        panel.grid.major.x = element_blank(),
-        axis.text.x = element_text(angle = 0, hjust = 0.5)
+    # Calculate percentiles for each fight
+    wins <- wins %>%
+      mutate(
+        outcome_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 & grepl("Decision", METHOD) ~ "Dec R3",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 & grepl("Decision", METHOD) ~ "Dec R5",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ "Other"
+        )
       )
     
-    ggplotly(p, tooltip = c("y", "fill")) %>%
-      layout(hovermode = "closest")
-  })
-  
-  # Fighter Comparison Bar Chart
-  output$fighter_comparison <- renderPlot({
-    req(fighter_data())
-    req(weight_class_data())
-    base_col <- base_column()
-    
-    # Calculate averages by outcome for winners
-    fighter_avg <- fighter_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(
-        AvgBase = mean(.data[[base_col]], na.rm = TRUE),
-        Count = n(),
-        .groups = "drop"
-      ) %>%
-      mutate(Group = "Fighter")
-    
-    wc_avg <- weight_class_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(
-        AvgBase = mean(.data[[base_col]], na.rm = TRUE),
-        Count = n(),
-        .groups = "drop"
-      ) %>%
-      mutate(Group = "Weight Class")
-    
-    combined <- bind_rows(fighter_avg, wc_avg) %>%
-      filter(Count >= 3)  # Only show outcomes with 3+ samples
-    
-    ggplot(combined, aes(x = MethodSimple, y = AvgBase, fill = Group)) +
-      geom_col(position = "dodge", alpha = 0.8, width = 0.7) +
-      geom_text(aes(label = paste0(round(AvgBase, 1), "\n(n=", Count, ")")),
-                position = position_dodge(0.7), vjust = -0.3, size = 3.5) +
-      scale_fill_manual(values = c("Fighter" = "#FFD700", "Weight Class" = "#808080")) +
-      labs(
-        title = paste0(input$selected_fighter, " vs ", unique(fighter_data()$WEIGHTCLASS)[1], " Average - ", platform_name()),
-        subtitle = "Base Score by Outcome (Winners Only, n ≥ 3)",
-        x = "Finish Type",
-        y = paste("Average", platform_name(), "Base Score"),
-        fill = ""
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
-        plot.subtitle = element_text(hjust = 0.5, size = 11),
-        legend.position = "top",
-        panel.grid.major.x = element_blank()
-      ) +
-      ylim(0, NA)
-  })
-  
-  # Fighter Statistics Table (Percentiles)
-  output$fighter_stats_table <- renderDT({
-    req(fighter_data())
-    base_col <- base_column()
-    
-    stats <- fighter_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(
-        Fights = n(),
-        P5 = round(quantile(.data[[base_col]], 0.05, na.rm = TRUE), 1),
-        P10 = round(quantile(.data[[base_col]], 0.10, na.rm = TRUE), 1),
-        P25 = round(quantile(.data[[base_col]], 0.25, na.rm = TRUE), 1),
-        P50 = round(quantile(.data[[base_col]], 0.50, na.rm = TRUE), 1),
-        P75 = round(quantile(.data[[base_col]], 0.75, na.rm = TRUE), 1),
-        P90 = round(quantile(.data[[base_col]], 0.90, na.rm = TRUE), 1),
-        P95 = round(quantile(.data[[base_col]], 0.95, na.rm = TRUE), 1),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(Fights))
-    
-    datatable(
-      stats,
-      options = list(
-        pageLength = 10,
-        dom = 't',
-        ordering = FALSE,
-        scrollX = FALSE
-      ),
-      rownames = FALSE
-    ) %>%
-      formatStyle(columns = 1:9, fontSize = '12px')
-  })
-  
-  # Fighter History Table - Emphasizing scoring components
-  output$fighter_history_table <- renderDT({
-    req(fighter_data())
-    base_col <- base_column()
-    score_col <- score_column()
-    
-    history <- fighter_data() %>%
-      select(Date = EVENT_DATE, 
-             Result = RESULT,
-             Method = MethodSimple,
-             SigStr = SigStrikes,
-             TD = Takedowns,
-             KD = Knockdowns,
-             Sub = SubAttempts,
-             Base = !!sym(base_col), 
-             Total = !!sym(score_col)) %>%
-      arrange(desc(Date)) %>%
-      mutate(
-        Base = round(Base, 1),
-        Total = round(Total, 1)
-      )
-    
-    datatable(
-      history,
-      options = list(
-        pageLength = 10,
-        scrollX = TRUE,
-        searching = FALSE,
-        ordering = FALSE,
-        columnDefs = list(
-          list(width = '80px', targets = 0),
-          list(width = '50px', targets = 1),
-          list(width = '80px', targets = 2)
-        )
-      ),
-      rownames = FALSE
-    ) %>%
-      formatStyle(
-        'Result',
-        backgroundColor = styleEqual(c('W', 'L', 'D'), c('#d4edda', '#f8d7da', '#fff3cd'))
-      ) %>%
-      formatStyle(
-        c('SigStr', 'TD', 'KD'),
-        fontWeight = 'bold',
-        color = styleInterval(c(0, 50, 100), c('#999', '#333', '#FF6B35', '#4CAF50'))
-      ) %>%
-      formatStyle(columns = 1:9, fontSize = '11px')
-  })
-  
-  # Adjustment Recommendations
-  output$adjustment_recommendations <- renderUI({
-    req(fighter_data())
-    req(weight_class_data())
-    base_col <- base_column()
-    
-    # Calculate differences
-    fighter_avg <- fighter_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(FighterAvg = mean(.data[[base_col]], na.rm = TRUE), FighterN = n(), .groups = "drop")
-    
-    wc_avg <- weight_class_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(WCAvg = mean(.data[[base_col]], na.rm = TRUE), WCN = n(), .groups = "drop")
-    
-    comparison <- fighter_avg %>%
-      left_join(wc_avg, by = "MethodSimple") %>%
-      filter(FighterN >= 2, WCN >= 5) %>%
-      mutate(
-        Diff = FighterAvg - WCAvg,
-        DiffPct = (Diff / WCAvg) * 100,
-        Recommendation = case_when(
-          DiffPct > 10 ~ paste0("Increase base by +", round(Diff * 0.6, 0), " to +", round(Diff * 0.8, 0)),
-          DiffPct < -10 ~ paste0("Decrease base by ", round(Diff * 0.6, 0), " to ", round(Diff * 0.8, 0)),
-          TRUE ~ "Use weight class default"
-        ),
-        Color = case_when(
-          DiffPct > 10 ~ "#4CAF50",
-          DiffPct < -10 ~ "#f44336",
-          TRUE ~ "#2196F3"
-        )
-      ) %>%
-      arrange(desc(abs(DiffPct)))
-    
-    if (nrow(comparison) == 0) {
-      return(tags$p("Not enough data for recommendations. Fighter needs at least 2 fights per outcome, weight class needs at least 5.", 
-                    style = "padding: 20px; color: #666;"))
+    # Calculate percentiles using a loop to avoid rowwise issues
+    wins$base_percentile <- NA_real_
+    for(i in 1:nrow(wins)) {
+      outcome_data <- wc_data %>% 
+        filter(is_win, 
+               abs(rounds_lasted - wins$rounds_lasted[i]) < 0.1)
+      if(nrow(outcome_data) > 0) {
+        wins$base_percentile[i] <- calculate_percentile(wins[[base_col]][i], outcome_data[[base_col]])
+      }
     }
     
-    # Create recommendation HTML
-    rec_list <- lapply(1:min(5, nrow(comparison)), function(i) {
-      row <- comparison[i, ]
-      
-      tags$div(
-        style = paste0("margin-bottom: 15px; padding: 12px; background: #f9f9f9; border-left: 4px solid ", row$Color, "; border-radius: 3px;"),
-        tags$div(
-          tags$strong(row$MethodSimple, style = "font-size: 15px; color: #333;"),
-          style = "margin-bottom: 5px;"
-        ),
-        tags$div(
-          sprintf("Fighter: %.1f | WC: %.1f | Diff: %+.1f (%+.0f%%)", 
-                  row$FighterAvg, row$WCAvg, row$Diff, row$DiffPct),
-          style = "font-size: 12px; color: #666; margin-bottom: 5px;"
-        ),
-        tags$div(
-          sprintf("Sample: n=%d (fighter) | n=%d (class)", row$FighterN, row$WCN),
-          style = "font-size: 11px; color: #999; margin-bottom: 8px;"
-        ),
-        tags$div(
-          tags$strong("→ ", row$Recommendation),
-          style = paste0("font-size: 13px; color: ", row$Color, "; font-weight: bold;")
-        )
-      )
-    })
-    
-    tags$div(rec_list)
-  })
-  
-  # Weight Class Violin Plot
-  output$weight_class_violin <- renderPlotly({
-    req(filtered_data())
-    base_col <- base_column()
-    
-    # Filter for winners only
-    data_winners <- filtered_data() %>%
-      filter(RESULT == "W", MethodSimple %in% c("R1", "R2", "R3", "Decision-3", "Decision-5"))
-    
-    # Calculate stats for ordering
-    outcome_stats <- data_winners %>%
-      group_by(MethodSimple) %>%
-      summarise(MedianBase = median(.data[[base_col]], na.rm = TRUE), .groups = "drop") %>%
-      arrange(MedianBase)
-    
-    data_winners <- data_winners %>%
-      mutate(MethodSimple = factor(MethodSimple, levels = outcome_stats$MethodSimple))
-    
-    # Create violin plot
-    p <- ggplot(data_winners, aes(x = MethodSimple, y = .data[[base_col]], fill = MethodSimple)) +
-      geom_violin(alpha = 0.7, scale = "width") +
-      geom_jitter(aes(color = MethodSimple), width = 0.2, alpha = 0.3, size = 1.5) +
-      stat_summary(fun = median, geom = "point", shape = 23, size = 4, fill = "white") +
-      scale_fill_brewer(palette = "Set2") +
-      scale_color_brewer(palette = "Set2") +
-      labs(
-        title = paste0("Base Score Distribution by Finish Type - ", platform_name()),
-        subtitle = "Winners only | Diamond = Median",
-        x = "Finish Type",
-        y = paste(platform_name(), "Base Score")
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
-        plot.subtitle = element_text(hjust = 0.5, size = 11),
-        legend.position = "none",
-        panel.grid.major.x = element_blank(),
-        axis.text.x = element_text(angle = 0, hjust = 0.5)
+    # Select and format columns
+    data <- wins %>%
+      select(EVENT_DATE, EVENT, WEIGHTCLASS, outcome_label, METHOD,
+             SigStrikes, TotalStrikes, Takedowns, Knockdowns, SubAttempts,
+             ControlTimeSec, all_of(base_col), all_of(win_col), all_of(score_col),
+             base_percentile) %>%
+      mutate(
+        EVENT_DATE = format(as.Date(EVENT_DATE), "%Y-%m-%d"),
+        ControlTimeSec = round(ControlTimeSec, 0),
+        !!base_col := round(!!sym(base_col), 2),
+        !!score_col := round(!!sym(score_col), 2),
+        base_percentile = round(base_percentile, 0)
       )
     
-    ggplotly(p, tooltip = c("y")) %>%
-      layout(hovermode = "closest")
-  })
-  
-  # Weight Class Statistics Table (Percentiles) - with All WC comparison
-  output$weight_class_stats <- renderDT({
-    req(filtered_data())
-    base_col <- base_column()
-    
-    # Individual weight class stats
-    stats <- filtered_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(WEIGHTCLASS, MethodSimple) %>%
-      summarise(
-        Fights = n(),
-        P5 = round(quantile(.data[[base_col]], 0.05, na.rm = TRUE), 1),
-        P10 = round(quantile(.data[[base_col]], 0.10, na.rm = TRUE), 1),
-        P25 = round(quantile(.data[[base_col]], 0.25, na.rm = TRUE), 1),
-        P50 = round(quantile(.data[[base_col]], 0.50, na.rm = TRUE), 1),
-        P75 = round(quantile(.data[[base_col]], 0.75, na.rm = TRUE), 1),
-        P90 = round(quantile(.data[[base_col]], 0.90, na.rm = TRUE), 1),
-        P95 = round(quantile(.data[[base_col]], 0.95, na.rm = TRUE), 1),
-        .groups = "drop"
-      )
-    
-    # All weight classes combined stats
-    all_wc_stats <- filtered_data() %>%
-      filter(RESULT == "W") %>%
-      group_by(MethodSimple) %>%
-      summarise(
-        Fights = n(),
-        P5 = round(quantile(.data[[base_col]], 0.05, na.rm = TRUE), 1),
-        P10 = round(quantile(.data[[base_col]], 0.10, na.rm = TRUE), 1),
-        P25 = round(quantile(.data[[base_col]], 0.25, na.rm = TRUE), 1),
-        P50 = round(quantile(.data[[base_col]], 0.50, na.rm = TRUE), 1),
-        P75 = round(quantile(.data[[base_col]], 0.75, na.rm = TRUE), 1),
-        P90 = round(quantile(.data[[base_col]], 0.90, na.rm = TRUE), 1),
-        P95 = round(quantile(.data[[base_col]], 0.95, na.rm = TRUE), 1),
-        .groups = "drop"
-      ) %>%
-      mutate(WEIGHTCLASS = "*** ALL WEIGHT CLASSES ***")
-    
-    # Combine and sort
-    combined_stats <- bind_rows(all_wc_stats, stats) %>%
-      arrange(WEIGHTCLASS, MethodSimple)
+    colnames(data) <- c("Date", "Event", "Weight", "Outcome", "Method",
+                        "Sig Str", "Tot Str", "TD", "KD", "Sub Att",
+                        "Ctrl Sec", "Base", "Win Bonus", "Total", "Percentile")
     
     datatable(
-      combined_stats,
+      data,
       options = list(
-        pageLength = 25,
+        pageLength = 10,
+        dom = 'frtip',
         scrollX = TRUE,
-        searching = TRUE,
-        columnDefs = list(list(width = '180px', targets = 0))
+        ordering = TRUE,
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all'),
+          list(width = '90px', targets = 14)  # Percentile column
+        )
       ),
       rownames = FALSE,
-      filter = 'top'
+      class = 'cell-border stripe'
     ) %>%
       formatStyle(
-        'WEIGHTCLASS',
-        target = 'row',
-        fontWeight = styleEqual("*** ALL WEIGHT CLASSES ***", "bold"),
-        backgroundColor = styleEqual("*** ALL WEIGHT CLASSES ***", "#FFD700"),
-        color = styleEqual("*** ALL WEIGHT CLASSES ***", "#000")
-      ) %>%
-      formatStyle(columns = 1:9, fontSize = '11px')
+        'Percentile',
+        background = styleColorBar(c(0, 100), '#d4af37'),
+        backgroundSize = '98% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        color = '#FFFFFF'
+      )
   })
   
-  # Round Progression Plot
-  output$round_progression <- renderPlot({
-    req(filtered_data())
-    base_col <- base_column()
+  # Fighter History Table - Losses
+  output$fighter_history_losses <- renderDT({
+    fighter <- fighter_data()
+    wc_data <- weight_class_data()
+    platform <- input$platform
     
-    # Filter to main rounds
-    round_data <- filtered_data() %>%
-      filter(RESULT == "W", MethodSimple %in% c("R1", "R2", "R3", "R4", "R5", "Decision-3", "Decision-5")) %>%
+    base_col <- if(platform == "DK") "DKBase" else "FDBase"
+    win_col <- if(platform == "DK") "DKWin" else "FDWin"
+    score_col <- if(platform == "DK") "DKScore" else "FDScore"
+    
+    # Filter losses
+    losses <- fighter %>% filter(!is_win)
+    
+    if(nrow(losses) == 0) return(datatable(data.frame(Message = "No losses found")))
+    
+    # Calculate percentiles for each fight
+    losses <- losses %>%
       mutate(
-        RoundNum = case_when(
-          MethodSimple == "R1" ~ 1,
-          MethodSimple == "R2" ~ 2,
-          MethodSimple == "R3" ~ 3,
-          MethodSimple == "R4" ~ 4,
-          MethodSimple == "R5" ~ 5,
-          MethodSimple == "Decision-3" ~ 3,
-          MethodSimple == "Decision-5" ~ 5
+        outcome_label = case_when(
+          rounds_lasted == 0.5 ~ "Quick R1",
+          rounds_lasted == 1 ~ "R1",
+          rounds_lasted == 2 ~ "R2",
+          rounds_lasted == 3 & grepl("Decision", METHOD) ~ "Dec R3",
+          rounds_lasted == 3 ~ "R3",
+          rounds_lasted == 4 ~ "R4",
+          rounds_lasted == 5 & grepl("Decision", METHOD) ~ "Dec R5",
+          rounds_lasted == 5 ~ "R5",
+          TRUE ~ "Other"
         )
       )
     
-    # Calculate stats by round
-    round_stats <- round_data %>%
-      group_by(RoundNum) %>%
-      summarise(
-        Mean = mean(.data[[base_col]], na.rm = TRUE),
-        Median = median(.data[[base_col]], na.rm = TRUE),
-        Q25 = quantile(.data[[base_col]], 0.25, na.rm = TRUE),
-        Q75 = quantile(.data[[base_col]], 0.75, na.rm = TRUE),
-        Count = n(),
-        .groups = "drop"
-      )
+    # Calculate percentiles using a loop to avoid rowwise issues
+    losses$base_percentile <- NA_real_
+    for(i in 1:nrow(losses)) {
+      outcome_data <- wc_data %>% 
+        filter(!is_win, 
+               abs(rounds_lasted - losses$rounds_lasted[i]) < 0.1)
+      if(nrow(outcome_data) > 0) {
+        losses$base_percentile[i] <- calculate_percentile(losses[[base_col]][i], outcome_data[[base_col]])
+      }
+    }
     
-    ggplot(round_stats, aes(x = RoundNum)) +
-      geom_ribbon(aes(ymin = Q25, ymax = Q75), fill = "#FFD700", alpha = 0.3) +
-      geom_line(aes(y = Median), color = "#FFD700", size = 1.5) +
-      geom_line(aes(y = Mean), color = "#808080", size = 1.5, linetype = "dashed") +
-      geom_point(aes(y = Median), color = "#FFD700", size = 4) +
-      geom_point(aes(y = Mean), color = "#808080", size = 4, shape = 17) +
-      scale_x_continuous(breaks = 1:5) +
-      labs(
-        title = paste0("Base Score Progression by Round - ", platform_name()),
-        subtitle = "Solid line = Median | Dashed line = Mean | Shaded area = IQR",
-        x = "Round Finished",
-        y = paste(platform_name(), "Base Score")
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
-        plot.subtitle = element_text(hjust = 0.5, size = 11)
-      )
-  })
-  
-  # Round Base by Platform Comparison
-  output$round_base_by_platform <- renderPlot({
-    req(filtered_data())
-    
-    # Calculate for both platforms
-    round_data <- filtered_data() %>%
-      filter(RESULT == "W", MethodSimple %in% c("R1", "R2", "R3", "Decision-3", "Decision-5")) %>%
+    # Select and format columns
+    data <- losses %>%
+      select(EVENT_DATE, EVENT, WEIGHTCLASS, outcome_label, METHOD,
+             SigStrikes, TotalStrikes, Takedowns, Knockdowns, SubAttempts,
+             ControlTimeSec, all_of(base_col), all_of(win_col), all_of(score_col),
+             base_percentile) %>%
       mutate(
-        RoundNum = case_when(
-          MethodSimple == "R1" ~ 1,
-          MethodSimple == "R2" ~ 2,
-          MethodSimple == "R3" ~ 3,
-          MethodSimple == "Decision-3" ~ 3
-        )
-      ) %>%
-      filter(!is.na(RoundNum))
-    
-    round_stats <- round_data %>%
-      group_by(RoundNum) %>%
-      summarise(
-        DK_Median = median(DKBase, na.rm = TRUE),
-        FD_Median = median(FDBase, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      pivot_longer(cols = c(DK_Median, FD_Median), 
-                   names_to = "Platform", 
-                   values_to = "MedianBase") %>%
-      mutate(Platform = ifelse(Platform == "DK_Median", "DraftKings", "FanDuel"))
-    
-    ggplot(round_stats, aes(x = RoundNum, y = MedianBase, color = Platform, group = Platform)) +
-      geom_line(size = 1.5) +
-      geom_point(size = 4) +
-      scale_color_manual(values = c("DraftKings" = "#FFD700", "FanDuel" = "#4CAF50")) +
-      scale_x_continuous(breaks = 1:5) +
-      labs(
-        title = "Platform Comparison - Base Score Progression",
-        subtitle = "Median base scores by round",
-        x = "Round Finished",
-        y = "Median Base Score",
-        color = "Platform"
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
-        plot.subtitle = element_text(hjust = 0.5, size = 11),
-        legend.position = "top"
+        EVENT_DATE = format(as.Date(EVENT_DATE), "%Y-%m-%d"),
+        ControlTimeSec = round(ControlTimeSec, 0),
+        !!base_col := round(!!sym(base_col), 2),
+        !!score_col := round(!!sym(score_col), 2),
+        base_percentile = round(base_percentile, 0)
       )
-  })
-  
-  # Win vs Loss Comparison
-  output$win_loss_comparison <- renderPlot({
-    req(filtered_data())
-    base_col <- base_column()
     
-    comparison <- filtered_data() %>%
-      filter(MethodSimple %in% c("R1", "R2", "R3", "Decision-3", "Decision-5")) %>%
-      group_by(MethodSimple, RESULT) %>%
-      summarise(AvgBase = mean(.data[[base_col]], na.rm = TRUE), .groups = "drop")
+    colnames(data) <- c("Date", "Event", "Weight", "Outcome", "Method",
+                        "Sig Str", "Tot Str", "TD", "KD", "Sub Att",
+                        "Ctrl Sec", "Base", "Win Bonus", "Total", "Percentile")
     
-    ggplot(comparison, aes(x = MethodSimple, y = AvgBase, fill = RESULT)) +
-      geom_col(position = "dodge", alpha = 0.8) +
-      scale_fill_manual(values = c("W" = "#4CAF50", "L" = "#f44336", "D" = "#FFA500")) +
-      labs(
-        title = paste0("Winners vs Losers Base Scores - ", platform_name()),
-        x = "Finish Type",
-        y = paste("Avg", platform_name(), "Base Score"),
-        fill = "Result"
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold"),
-        legend.position = "top"
-      )
-  })
-  
-  # Decision vs Finish Comparison
-  output$decision_vs_finish <- renderPlot({
-    req(filtered_data())
-    base_col <- base_column()
-    
-    comparison <- filtered_data() %>%
-      filter(RESULT == "W") %>%
-      mutate(
-        FightType = case_when(
-          MethodSimple %in% c("Decision-3", "Decision-5") ~ "Decision",
-          TRUE ~ "Finish"
+    datatable(
+      data,
+      options = list(
+        pageLength = 10,
+        dom = 'frtip',
+        scrollX = TRUE,
+        ordering = TRUE,
+        columnDefs = list(
+          list(className = 'dt-center', targets = '_all'),
+          list(width = '90px', targets = 14)  # Percentile column
         )
-      ) %>%
-      filter(FightType %in% c("Decision", "Finish"))
-    
-    ggplot(comparison, aes(x = FightType, y = .data[[base_col]], fill = FightType)) +
-      geom_violin(alpha = 0.7) +
-      geom_boxplot(width = 0.2, fill = "white", alpha = 0.8) +
-      scale_fill_manual(values = c("Decision" = "#2196F3", "Finish" = "#FFD700")) +
-      labs(
-        title = paste0("Decision vs Finish Base Scores - ", platform_name()),
-        x = "",
-        y = paste(platform_name(), "Base Score")
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(hjust = 0.5, face = "bold"),
-        legend.position = "none"
+      ),
+      rownames = FALSE,
+      class = 'cell-border stripe'
+    ) %>%
+      formatStyle(
+        'Percentile',
+        background = styleColorBar(c(0, 100), '#d4af37'),
+        backgroundSize = '98% 80%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        color = '#FFFFFF'
       )
   })
 }
 
-# Run the app
 shinyApp(ui = ui, server = server)
