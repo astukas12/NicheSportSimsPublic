@@ -7918,7 +7918,7 @@ server <- function(input, output, session) {
         if(is.null(existing_mapping) || nrow(existing_mapping) == 0) {
           all_fighters <- unique(c(
             rv$sd_optimal_lineups$Captain,
-            unlist(rv$sd_optimal_lineups[, paste0("Player", 1:5)])
+            unlist(rv$sd_optimal_lineups[, paste0("Fighter", 1:5)])
           ))
           
           fighter_mapping <- data.frame(
@@ -7982,7 +7982,7 @@ server <- function(input, output, session) {
     if(!is.null(rv$sd_optimal_lineups) && !is.null(rv$simulation_results)) {
       all_fighters <- unique(c(
         rv$sd_optimal_lineups$Captain,
-        unlist(rv$sd_optimal_lineups[, paste0("Player", 1:5)])
+        unlist(rv$sd_optimal_lineups[, paste0("Fighter", 1:5)])
       ))
       
       fighter_mapping <- data.frame(
