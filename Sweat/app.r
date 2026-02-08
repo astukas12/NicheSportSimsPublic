@@ -648,23 +648,23 @@ server <- function(input, output, session) {
     
     # Add live exposure columns if fighters are eliminated
     if (length(rv$eliminated_fighters) > 0) {
-      # Calculate live exposures (only counting lineups with this fighter still alive)
+      # Calculate live exposures (only counting lineups with ALL 6 fighters still alive)
       
       # User live exposure
       user_live_fighter_counts <- data.table()
       for (lineup in user_lineups) {
         fighters <- extract_fighters(lineup)
-        # Only count if this lineup has at least 1 live fighter
-        if (any(!fighters %in% rv$eliminated_fighters)) {
-          live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
+        # Only count if ALL 6 fighters are still alive
+        if (length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)) {
           user_live_fighter_counts <- rbind(user_live_fighter_counts, 
-                                            data.table(Fighter = live_fighters))
+                                            data.table(Fighter = fighters))
         }
       }
       
       if (nrow(user_live_fighter_counts) > 0) {
         user_live_lineups <- sum(sapply(user_lineups, function(lineup) {
-          any(!extract_fighters(lineup) %in% rv$eliminated_fighters)
+          fighters <- extract_fighters(lineup)
+          length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)
         }))
         user_live_exposure <- user_live_fighter_counts[, .(
           UserLiveExp = .N / user_live_lineups * 100
@@ -678,16 +678,17 @@ server <- function(input, output, session) {
       field_live_fighter_counts <- data.table()
       for (lineup in field_lineups) {
         fighters <- extract_fighters(lineup)
-        if (any(!fighters %in% rv$eliminated_fighters)) {
-          live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
+        # Only count if ALL 6 fighters are still alive
+        if (length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)) {
           field_live_fighter_counts <- rbind(field_live_fighter_counts,
-                                             data.table(Fighter = live_fighters))
+                                             data.table(Fighter = fighters))
         }
       }
       
       if (nrow(field_live_fighter_counts) > 0) {
         field_live_lineups <- sum(sapply(field_lineups, function(lineup) {
-          any(!extract_fighters(lineup) %in% rv$eliminated_fighters)
+          fighters <- extract_fighters(lineup)
+          length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)
         }))
         field_live_exposure <- field_live_fighter_counts[, .(
           FieldLiveExp = .N / field_live_lineups * 100
