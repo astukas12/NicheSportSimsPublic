@@ -64,6 +64,17 @@ ui <- fluidPage(
         margin: 5px 0 0 0;
       }
       
+      .sport-badge {
+        background: linear-gradient(135deg, #FFE500 0%, #FFA500 100%);
+        color: #000000;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 14px;
+        margin-left: 15px;
+        display: inline-block;
+      }
+      
       /* Panel styling */
       .well {
         background-color: #1a1a1a;
@@ -330,7 +341,9 @@ ui <- fluidPage(
       div(class = "logo-title",
           tags$img(src = "logo.jpg", height = "60px", style = "border: 2px solid #FFE500; box-shadow: 0 4px 8px rgba(255, 229, 0, 0.3);"),
           div(
-            h1(class = "app-title", "MMA Contest Sweat"),
+            h1(class = "app-title", 
+               "Contest Sweat Tool",
+               uiOutput("sport_badge", inline = TRUE)),
             p(class = "app-subtitle", "Golden Ticket DFS Analytics")
           )
       )
@@ -391,6 +404,7 @@ server <- function(input, output, session) {
   # Reactive values
   rv <- reactiveValues(
     data = NULL,
+    sport = NULL,
     fighters = NULL,
     player_scores = NULL,
     eliminated_fighters = character(0),
@@ -398,11 +412,25 @@ server <- function(input, output, session) {
     all_usernames = NULL
   )
   
+  # Sport badge
+  output$sport_badge <- renderUI({
+    req(rv$sport)
+    span(class = "sport-badge", rv$sport)
+  })
+  
   # Fast fighter extraction with caching
   extract_fighters <- function(lineup) {
     if (!lineup %in% names(rv$lineup_fighters_cache)) {
-      fighters <- unlist(strsplit(lineup, " F ", fixed = TRUE))
-      fighters <- trimws(sub("^F ", "", fighters))
+      # Detect sport prefix (F for MMA, D for NASCAR)
+      if (grepl(" D ", lineup, fixed = TRUE)) {
+        # NASCAR
+        fighters <- unlist(strsplit(lineup, " D ", fixed = TRUE))
+        fighters <- trimws(sub("^D ", "", fighters))
+      } else {
+        # MMA (default)
+        fighters <- unlist(strsplit(lineup, " F ", fixed = TRUE))
+        fighters <- trimws(sub("^F ", "", fighters))
+      }
       fighters <- fighters[nzchar(fighters)]
       rv$lineup_fighters_cache[[lineup]] <- fighters
     }
@@ -426,6 +454,16 @@ server <- function(input, output, session) {
                     na.strings = c("", "NA", "NULL"))
         
         incProgress(0.2, detail = "Processing lineups...")
+        
+        # Detect sport based on lineup format
+        sample_lineup <- dt[2, Lineup]
+        if (grepl(" D ", sample_lineup, fixed = TRUE)) {
+          rv$sport <- "NASCAR"
+        } else if (grepl(" F ", sample_lineup, fixed = TRUE)) {
+          rv$sport <- "MMA"
+        } else {
+          rv$sport <- "UNKNOWN"
+        }
         
         # Force column names if not found (original approach)
         if (!"EntryName" %in% names(dt)) {
@@ -505,7 +543,7 @@ server <- function(input, output, session) {
         usernames <- unique(rv$data$Username)
         
         # Filter out anything that looks like it came from the lineup column
-        usernames <- usernames[!grepl("^F ", usernames)]
+        usernames <- usernames[!grepl("^F |^D ", usernames)]
         
         # Filter out any that match known fighters
         usernames <- usernames[!usernames %in% rv$fighters]
@@ -537,6 +575,9 @@ server <- function(input, output, session) {
   # My Sweat Content
   output$my_sweat_content <- renderUI({
     req(rv$data, input$username, input$username != "")
+    
+    # Dynamic labels
+    player_label <- if(rv$sport == "NASCAR") "Driver" else "Fighter"
     
     user_data <- rv$data[Username == input$username]
     field_data <- rv$data[Username != input$username]
@@ -588,7 +629,7 @@ server <- function(input, output, session) {
     exposure_data <- exposure_data[order(-UserExp)]
     
     tagList(
-      h4("Your Fighter Exposure vs Field"),
+      h4(paste("Your", player_label, "Exposure vs Field")),
       DTOutput("exposure_table"),
       
       br(),
@@ -1026,10 +1067,14 @@ server <- function(input, output, session) {
   output$live_sweat_content <- renderUI({
     req(rv$data, rv$fighters)
     
+    # Dynamic labels based on sport
+    player_label <- if(rv$sport == "NASCAR") "Driver" else "Fighter"
+    players_label <- if(rv$sport == "NASCAR") "Drivers" else "Fighters"
+    
     tagList(
       div(class = "well",
-          h4("Fighter Status - Click to Mark as Eliminated", style = "margin-top: 0;"),
-          p("Fighters with current scores shown. Click to mark as eliminated.", 
+          h4(paste(player_label, "Status - Click to Mark as Eliminated"), style = "margin-top: 0;"),
+          p(paste(players_label, "with current scores shown. Click to mark as eliminated."), 
             style = "color: #CCCCCC; margin-bottom: 15px;"),
           uiOutput("fighter_chips"),
           br(),
@@ -1043,7 +1088,7 @@ server <- function(input, output, session) {
       
       conditionalPanel(
         condition = "input.username != ''",
-        h4("Live Fighters Distribution - You vs Field"),
+        h4(paste("Live", players_label, "Distribution - You vs Field")),
         DTOutput("live_distribution_table"),
         
         br(),
@@ -1161,13 +1206,18 @@ server <- function(input, output, session) {
     dist_table[, `Field %` := paste0(round(Field / sum(Field) * 100, 1), "%")]
     
     # Rename and reorder
+    player_label_plural <- if(rv$sport == "NASCAR") "Drivers" else "Fighters"
+    
     display_table <- dist_table[, .(
-      `Live Fighters` = live,
+      `Live Count` = live,
       `Your Lineups` = You,
       `You %`,
       `Field Lineups` = Field,
       `Field %`
-    )][order(-`Live Fighters`)]
+    )][order(-`Live Count`)]
+    
+    # Rename first column dynamically
+    setnames(display_table, "Live Count", paste("Live", player_label_plural))
     
     datatable(
       display_table,
