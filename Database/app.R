@@ -27,7 +27,6 @@ load_nascar_database <- function() {
       race_ids <- read_excel("RaceIDs.xlsx")
       if ("race_type_id" %in% names(race_ids)) {
         regular_race_ids <- race_ids %>% 
-          filter(race_type_id == 1) %>% 
           pull(race_id)
         data <- data %>% filter(race_id %in% regular_race_ids)
       }
@@ -43,11 +42,6 @@ load_race_list <- function() {
   if (file.exists("RaceIDs.xlsx")) {
     race_data <- read_excel("RaceIDs.xlsx")
     filtered_data <- race_data %>% filter(Historical == "N")
-    if ("race_type_id" %in% names(filtered_data)) {
-      return(filtered_data %>% filter(race_type_id == 1))
-    } else {
-      return(filtered_data)
-    }
   } else {
     return(NULL)
   }
@@ -67,6 +61,7 @@ load_entry_list <- function(race_season, series_id, race_id) {
     entry_list <- json_data$weekend_race %>%
       unnest(results, names_sep = "_") %>%
       select(
+        results_starting_position,
         results_driver_fullname,
         results_car_number,
         results_team_name,
@@ -75,6 +70,7 @@ load_entry_list <- function(race_season, series_id, race_id) {
         results_sponsor
       ) %>%
       rename(
+        Start = results_starting_position,
         Name = results_driver_fullname,
         Car = results_car_number,
         Team = results_team_name,
@@ -82,12 +78,15 @@ load_entry_list <- function(race_season, series_id, race_id) {
         CC = results_crew_chief_fullname,
         Sponsor = results_sponsor
       ) %>%
-      mutate(Car = as.integer(Car)) %>%
-      arrange(Car)
+      mutate(
+        Car = as.integer(Car),
+        Start = as.integer(Start)
+      ) %>%
+      arrange(Start)
     
     return(entry_list)
   }, error = function(e) {
-    return(data.frame(Name = character(), Car = integer(), Team = character(), 
+    return(data.frame(Start = integer(), Name = character(), Car = integer(), Team = character(), 
                       CC = character(), Make = character(), Sponsor = character()))
   })
 }
@@ -104,7 +103,7 @@ calc_dom_points <- function(total_laps, green_laps) {
 ui <- fluidPage(
   useShinyjs(),
   
-
+  
   # Custom CSS - Black and Gold Theme
   tags$head(
     tags$style(HTML("
@@ -496,11 +495,11 @@ ui <- fluidPage(
                        fluidRow(
                          column(3,
                                 numericInput("analysis_start_year", "Start Year:", 
-                                             value = 2019, min = 2000, max = 2025, step = 1)
+                                             value = 2026, min = 2022, max = 2026, step = 1)
                          ),
                          column(3,
                                 numericInput("analysis_end_year", "End Year:", 
-                                             value = 2025, min = 2000, max = 2025, step = 1)
+                                             value = 2026, min = 2022, max = 2026, step = 1)
                          ),
                          column(6,
                                 div(style = "margin-top: 25px;",
@@ -568,10 +567,16 @@ ui <- fluidPage(
                  div(class = "box",
                      div(class = "box-header", style = "display: flex; justify-content: space-between; align-items: center;",
                          uiOutput("entry_list_title", inline = TRUE),
-                         downloadButton("download_entry_list_csv", 
-                                        "Download CSV", 
-                                        class = "btn-success",
-                                        style = "margin: 0;")
+                         div(style = "display: flex; gap: 10px;",
+                             downloadButton("download_entry_list_csv", 
+                                            "Download CSV", 
+                                            class = "btn-success",
+                                            style = "margin: 0;"),
+                             downloadButton("download_entry_list_excel", 
+                                            "Download Excel", 
+                                            class = "btn-success",
+                                            style = "margin: 0;")
+                         )
                      ),
                      div(class = "box-body",
                          fluidRow(
@@ -603,7 +608,7 @@ ui <- fluidPage(
       )
     ),
     
-
+    
     # Dominator Tab
     tabPanel(
       "Dominator",
@@ -1076,9 +1081,7 @@ server <- function(input, output, session) {
           Historical == "Y"
         )
       
-      if ("race_type_id" %in% names(filtered_race_list)) {
-        filtered_race_list <- filtered_race_list %>% filter(race_type_id == 1)
-      }
+  
       
       incProgress(0.4, detail = "Loading race data...")
       
@@ -1141,7 +1144,7 @@ server <- function(input, output, session) {
       # Initialize all races selected for non-dominator sections
       values$pd_race_ids <- races_available$race_id
       values$performance_race_ids <- races_available$race_id
-
+      
       values$filters_confirmed <- TRUE
       
       incProgress(1.0, detail = "Complete!")
@@ -1294,6 +1297,63 @@ server <- function(input, output, session) {
     content = function(file) {
       req(values$analysis_entry_list)
       write.csv(values$analysis_entry_list, file, row.names = FALSE)
+    }
+  )
+  
+  # Download Entry List Excel
+  output$download_entry_list_excel <- downloadHandler(
+    filename = function() {
+      req(values$analysis_races_available, input$analysis_race_id)
+      
+      race_info <- values$analysis_races_available %>%
+        filter(race_id == as.numeric(input$analysis_race_id)) %>%
+        slice(1)
+      
+      if (nrow(race_info) == 0) {
+        all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
+        race_info <- all_races %>%
+          filter(race_id == as.numeric(input$analysis_race_id)) %>%
+          slice(1)
+      }
+      
+      race_name <- if(nrow(race_info) > 0) {
+        gsub("[^A-Za-z0-9]", "_", race_info$race_name)
+      } else {
+        "Starting_Grid"
+      }
+      
+      paste0(race_name, "_Starting_Grid_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      req(values$analysis_entry_list)
+      
+      # Create workbook
+      wb <- createWorkbook()
+      addWorksheet(wb, "Starting Grid")
+      
+      # Write data with row numbers as starting positions
+      grid_data <- values$analysis_entry_list %>%
+        select(Start, Name, Car, Team, Make, CC, Sponsor)
+      
+      writeData(wb, "Starting Grid", grid_data, startRow = 1, startCol = 1, rowNames = FALSE)
+      
+      # Style the header
+      headerStyle <- createStyle(
+        fontSize = 12,
+        fontColour = "#000000",
+        fgFill = "#FFD700",
+        halign = "center",
+        valign = "center",
+        textDecoration = "bold",
+        border = "TopBottomLeftRight",
+        borderColour = "#000000"
+      )
+      addStyle(wb, "Starting Grid", headerStyle, rows = 1, cols = 1:7, gridExpand = TRUE)
+      
+      # Set column widths
+      setColWidths(wb, "Starting Grid", cols = 1:7, widths = c(8, 20, 8, 25, 12, 20, 30))
+      
+      saveWorkbook(wb, file, overwrite = TRUE)
     }
   )
   
@@ -1464,6 +1524,7 @@ server <- function(input, output, session) {
           DKDomPoints = round(DKDomPoints, 1),
           FDDomPoints = round(FDDomPoints, 1)
         ) %>%
+        filter(DKDomPoints > 0) %>% 
         arrange(desc(FDDomPoints))
       
       # Create workbook
@@ -1486,9 +1547,8 @@ server <- function(input, output, session) {
     }
   )
   
-#--------------------- Dominator Visualizations ---------------------#
-  
   #--------------------- Dominator Visualizations ---------------------#
+  
   
   output$dominator_plot <- renderPlotly({
     req(dominator_data(), input$dom_visual_type, input$dom_platform)
@@ -2856,7 +2916,7 @@ server <- function(input, output, session) {
     }
   )
   
-
+  
   # Fantasy Scoring Visualizations
   output$fantasy_plot <- renderPlotly({
     req(fantasy_data(), input$fs_visual_type, input$fs_visual_platform)
