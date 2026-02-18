@@ -352,7 +352,7 @@ ui <- fluidPage(
   # Upload Panel
   div(class = "upload-panel",
       fluidRow(
-        column(8,
+        column(6,
                fileInput("file", 
                          label = div(style = "color: #FFE500; font-weight: 600; font-size: 16px;",
                                      "Upload Contest CSV"),
@@ -360,18 +360,26 @@ ui <- fluidPage(
                          buttonLabel = "Browse...",
                          placeholder = "No file selected")
         ),
-        column(4,
-               div(style = "margin-top: 25px;",
-                   selectizeInput("username", 
-                                  label = div(style = "color: #FFE500; font-weight: 600;", "Your Username"),
-                                  choices = NULL,
-                                  options = list(
-                                    placeholder = 'Start typing username...',
-                                    loadThrottle = 300,
-                                    maxOptions = 50
-                                  ),
-                                  width = "100%")
-               )
+        column(6,
+               fileInput("sim_file", 
+                         label = div(style = "color: #FFE500; font-weight: 600; font-size: 16px;",
+                                     "Upload Sim Optimals (Optional)"),
+                         accept = c("text/csv", ".csv"),
+                         buttonLabel = "Browse...",
+                         placeholder = "No file selected")
+        )
+      ),
+      fluidRow(
+        column(12,
+               selectizeInput("username", 
+                              label = div(style = "color: #FFE500; font-weight: 600;", "Your Username"),
+                              choices = NULL,
+                              options = list(
+                                placeholder = 'Start typing username...',
+                                loadThrottle = 300,
+                                maxOptions = 50
+                              ),
+                              width = "100%")
         )
       )
   ),
@@ -383,14 +391,27 @@ ui <- fluidPage(
              uiOutput("my_sweat_content")
     ),
     
-    # Dupe Analysis Tab  
-    tabPanel("Dupe Analysis",
+    # Duplication Tab  
+    tabPanel("Duplication",
              uiOutput("dupe_analysis_content")
     ),
     
     # Live Sweat Tab
     tabPanel("Live Sweat",
              uiOutput("live_sweat_content")
+    ),
+    
+    # Sim Results Tab - now split into 3 sub-sections
+    tabPanel("Scored Lineups",
+             uiOutput("scored_lineups_content")
+    ),
+    
+    tabPanel("Sim Performance", 
+             uiOutput("sim_performance_content")
+    ),
+    
+    tabPanel("Filter Rewind",
+             uiOutput("filter_rewind_content")
     )
   )
 )
@@ -401,6 +422,138 @@ server <- function(input, output, session) {
   # Add resource path for www folder (for logo.jpg)
   addResourcePath("www", "www")
   
+  # Helper function for safe scatter plots with validation
+  safe_scatter_plot <- function(data, x_col, y_col = "ActualScore", 
+                                x_label, title_prefix, use_three_colors = FALSE) {
+    # Validate data
+    if (is.null(data) || nrow(data) < 2) {
+      return(plot_ly() %>%
+               layout(
+                 title = list(text = "Not enough data to display chart", font = list(color = '#FFE500')),
+                 paper_bgcolor = '#000000',
+                 plot_bgcolor = '#1a1a1a'
+               ))
+    }
+    
+    # Make a copy to avoid modifying the original
+    plot_data <- copy(data)
+    
+    # Build model
+    model <- tryCatch({
+      formula_str <- paste(y_col, "~", x_col)
+      lm(as.formula(formula_str), data = plot_data)
+    }, error = function(e) NULL)
+    
+    if (is.null(model)) {
+      return(plot_ly() %>%
+               layout(
+                 title = list(text = "Unable to calculate trendline", font = list(color = '#FFE500')),
+                 paper_bgcolor = '#000000',
+                 plot_bgcolor = '#1a1a1a'
+               ))
+    }
+    
+    plot_data$fitted <- predict(model)
+    r_sq <- summary(model)$r.squared
+    
+    # 3-color system if requested and flags exist
+    if (use_three_colors && "InSim" %in% names(plot_data) && "InContest" %in% names(plot_data)) {
+      # Create status column for coloring
+      plot_data[, Status := data.table::fcase(
+        InSim & InContest, "In Sim & Played",
+        InSim & !InContest, "In Sim Only",
+        !InSim & InContest, "Played Only (Not in Sim)",
+        default = "Unknown"
+      )]
+      
+      plot_ly(plot_data,
+              x = as.formula(paste0("~", x_col)),
+              y = as.formula(paste0("~", y_col)),
+              color = ~Status,
+              colors = c("In Sim & Played" = "#FFE500",      # Gold
+                         "In Sim Only" = "#666666",           # Gray
+                         "Played Only (Not in Sim)" = "#FF0000"),  # Red
+              type = 'scatter',
+              mode = 'markers',
+              marker = list(size = 10, opacity = 0.7, line = list(color = '#000000', width = 1)),
+              text = ~paste(x_label, ":", round(get(x_col), 1), "<br>",
+                            "Actual Score:", round(get(y_col), 1), "<br>",
+                            "Status:", Status),
+              hoverinfo = 'text') %>%
+        add_trace(
+          x = as.formula(paste0("~", x_col)),
+          y = ~fitted,
+          type = 'scatter',
+          mode = 'lines',
+          line = list(color = '#FFE500', width = 3, dash = 'dash'),
+          name = 'Trendline',
+          hoverinfo = 'skip',
+          showlegend = TRUE,
+          inherit = FALSE
+        ) %>%
+        layout(
+          title = list(text = sprintf("%s vs Actual Score (R² = %.3f)", title_prefix, r_sq),
+                       font = list(color = '#FFE500', size = 18)),
+          xaxis = list(title = x_label, color = '#FFFFFF', gridcolor = '#333333'),
+          yaxis = list(title = "Actual Score", color = '#FFFFFF', gridcolor = '#333333'),
+          paper_bgcolor = '#000000',
+          plot_bgcolor = '#1a1a1a',
+          font = list(color = '#FFFFFF', size = 14),
+          showlegend = TRUE,
+          legend = list(
+            title = list(text = "Lineup Status"),
+            bgcolor = '#1a1a1a',
+            bordercolor = '#FFE500',
+            borderwidth = 1
+          )
+        )
+    } else {
+      # 2-color system (legacy - InContest only)
+      color_col <- if ("InContest" %in% names(plot_data)) "InContest" else "InContest"
+      
+      plot_ly(plot_data,
+              x = as.formula(paste0("~", x_col)),
+              y = as.formula(paste0("~", y_col)),
+              color = as.formula(paste0("~", color_col)),
+              colors = c("#666666", "#FFE500"),
+              type = 'scatter',
+              mode = 'markers',
+              marker = list(size = 10, opacity = 0.7, line = list(color = '#000000', width = 1)),
+              text = ~paste(x_label, ":", round(get(x_col), 1), "<br>",
+                            "Actual Score:", round(get(y_col), 1), "<br>",
+                            "Played:", ifelse(get(color_col), "Yes", "No")),
+              hoverinfo = 'text',
+              name = ~ifelse(get(color_col), "Played in Contest", "Not Played")) %>%
+        add_trace(
+          x = as.formula(paste0("~", x_col)),
+          y = ~fitted,
+          type = 'scatter',
+          mode = 'lines',
+          line = list(color = '#FFE500', width = 3, dash = 'dash'),
+          name = 'Trendline',
+          hoverinfo = 'skip',
+          showlegend = TRUE,
+          inherit = FALSE
+        ) %>%
+        layout(
+          title = list(text = sprintf("%s vs Actual Score (R² = %.3f)", title_prefix, r_sq),
+                       font = list(color = '#FFE500', size = 18)),
+          xaxis = list(title = x_label, color = '#FFFFFF', gridcolor = '#333333'),
+          yaxis = list(title = "Actual Score", color = '#FFFFFF', gridcolor = '#333333'),
+          paper_bgcolor = '#000000',
+          plot_bgcolor = '#1a1a1a',
+          font = list(color = '#FFFFFF', size = 14),
+          showlegend = TRUE,
+          legend = list(
+            title = list(text = "Status"),
+            bgcolor = '#1a1a1a',
+            bordercolor = '#FFE500',
+            borderwidth = 1
+          )
+        )
+    }
+  }
+  
   # Reactive values
   rv <- reactiveValues(
     data = NULL,
@@ -409,7 +562,9 @@ server <- function(input, output, session) {
     player_scores = NULL,
     eliminated_fighters = character(0),
     lineup_fighters_cache = list(),
-    all_usernames = NULL
+    all_usernames = NULL,
+    sim_data = NULL,
+    sim_loaded = FALSE
   )
   
   # Sport badge
@@ -437,23 +592,35 @@ server <- function(input, output, session) {
     rv$lineup_fighters_cache[[lineup]]
   }
   
-  # Load and process data
+  # Classify users by entry count into volume groups
+  classify_entry_group <- function(entry_count) {
+    dplyr::case_when(
+      entry_count == 1 ~ "Single Entry",
+      entry_count <= 5 ~ "Low Volume",
+      entry_count <= 20 ~ "Medium Volume",
+      entry_count <= 50 ~ "High Volume",
+      TRUE ~ "Maxer"
+    )
+  }
+  
+  # Load and process data (OPTIMIZED)
   observeEvent(input$file, {
     req(input$file)
     
     withProgress(message = 'Loading contest data...', value = 0, {
       
-      incProgress(0.2, detail = "Reading CSV...")
+      incProgress(0.3, detail = "Reading CSV...")
       
       tryCatch({
-        # Fast read with data.table
+        # Fast read with data.table and multiple threads
         dt <- fread(input$file$datapath, 
                     showProgress = FALSE,
                     fill = TRUE,
                     sep = ",",
-                    na.strings = c("", "NA", "NULL"))
+                    na.strings = c("", "NA", "NULL"),
+                    nThread = 4)
         
-        incProgress(0.2, detail = "Processing lineups...")
+        incProgress(0.3, detail = "Processing data...")
         
         # Detect sport based on lineup format
         sample_lineup <- dt[2, Lineup]
@@ -465,7 +632,7 @@ server <- function(input, output, session) {
           rv$sport <- "UNKNOWN"
         }
         
-        # Force column names if not found (original approach)
+        # Force column names if not found
         if (!"EntryName" %in% names(dt)) {
           names(dt)[3] <- "EntryName"
         }
@@ -476,7 +643,7 @@ server <- function(input, output, session) {
         # Find Points column
         points_col <- grep("Points", names(dt), value = TRUE)[1]
         
-        # Extract data
+        # Extract data efficiently
         rv$data <- dt[, .(
           Username = trimws(sub(" \\(.*", "", EntryName)),
           Lineup = trimws(Lineup),
@@ -485,10 +652,7 @@ server <- function(input, output, session) {
         
         setkey(rv$data, Username, Lineup)
         
-        incProgress(0.2, detail = "Extracting player scores...")
-        
         # Extract player scores if Player and FPTS columns exist
-        # Also get %Drafted for field exposure
         if ("Player" %in% names(dt) && "FPTS" %in% names(dt)) {
           drafted_col <- grep("%Drafted", names(dt), value = TRUE)[1]
           
@@ -507,18 +671,22 @@ server <- function(input, output, session) {
           
           if ("FieldExp" %in% names(player_data)) {
             rv$player_scores <- player_data[, .(
-              FPTS = max(FPTS, na.rm = TRUE),
-              FieldExp = max(FieldExp, na.rm = TRUE)
+              FPTS = as.numeric(max(FPTS, na.rm = TRUE)),
+              FieldExp = as.numeric(max(FieldExp, na.rm = TRUE))
             ), by = Player]
           } else {
             rv$player_scores <- player_data[, .(
-              FPTS = max(FPTS, na.rm = TRUE)
+              FPTS = as.numeric(max(FPTS, na.rm = TRUE))
             ), by = Player]
           }
           
           setkey(rv$player_scores, Player)
+          
+          # Get unique players from player_scores (much faster than parsing lineups)
+          rv$fighters <- sort(unique(rv$player_scores$Player))
+          
         } else {
-          # Try column positions as fallback
+          # Fallback: try column positions
           if (ncol(dt) >= 11) {
             player_data <- dt[, .(
               Player = trimws(.SD[[8]]),
@@ -527,40 +695,243 @@ server <- function(input, output, session) {
             
             rv$player_scores <- player_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
             setkey(rv$player_scores, Player)
+            rv$fighters <- sort(unique(rv$player_scores$Player))
+          } else {
+            rv$player_scores <- NULL
+            rv$fighters <- character(0)
           }
         }
         
-        incProgress(0.2, detail = "Extracting fighters...")
+        incProgress(0.4, detail = "Complete!")
         
-        # Extract all unique fighters
-        all_lineups <- unique(rv$data$Lineup)
-        all_fighters <- unique(unlist(lapply(all_lineups, extract_fighters)))
-        rv$fighters <- sort(all_fighters)
-        
-        incProgress(0.2, detail = "Complete!")
-        
-        # Update username dropdown - extract and clean usernames
+        # Update username dropdown - simplified and faster
         usernames <- unique(rv$data$Username)
         
-        # Filter out anything that looks like it came from the lineup column
-        usernames <- usernames[!grepl("^F |^D ", usernames)]
+        # Simple filtering - much faster than multiple passes
+        usernames <- usernames[
+          !grepl("^F |^D ", usernames) &  # Not lineup data
+            !is.na(usernames) &              # Not NA
+            nzchar(usernames)                # Not empty
+        ]
         
-        # Filter out any that match known fighters
-        usernames <- usernames[!usernames %in% rv$fighters]
+        # Only filter by fighters if we have them
+        if (length(rv$fighters) > 0) {
+          usernames <- usernames[!usernames %in% rv$fighters]
+        }
         
-        # Remove any empty or NA values
-        usernames <- usernames[!is.na(usernames) & nzchar(usernames)]
-        
-        # Sort alphabetically
+        # Sort once
         usernames <- sort(usernames)
         
-        # Store in reactive value for server-side search
+        # Store in reactive value
         rv$all_usernames <- usernames
         
-        # Update with server-side selectize (only shows matches as you type)
+        # Calculate entry groups for all users
+        entry_counts <- rv$contest_data[, .(EntryCount = .N), by = Username]
+        entry_counts[, EntryGroup := classify_entry_group(EntryCount)]
+        rv$entry_groups <- entry_counts
+        
+        # Update with server-side selectize
         updateSelectizeInput(session, "username", 
                              choices = usernames,
                              server = TRUE)
+        
+      }, error = function(e) {
+        showNotification(paste("Error loading file:", e$message), type = "error", duration = 10)
+      })
+    })
+  })
+  
+  # Load and process sim file (NEW - OPTIMIZED)
+  observeEvent(input$sim_file, {
+    req(input$sim_file, rv$player_scores)
+    
+    withProgress(message = 'Loading sim data...', value = 0, {
+      
+      incProgress(0.15, detail = "Reading sim file...")
+      
+      tryCatch({
+        # Read sim optimals file with optimized settings
+        sim_raw <- fread(input$sim_file$datapath, 
+                         showProgress = FALSE,
+                         nThread = 4)  # Use multiple threads
+        
+        incProgress(0.15, detail = "Processing lineups...")
+        
+        # Detect player columns dynamically
+        player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]", names(sim_raw), value = TRUE)
+        
+        if (length(player_cols) == 0) {
+          # Try alternate naming pattern
+          player_cols <- names(sim_raw)[1:6]
+        }
+        
+        # Clean player names efficiently (vectorized)
+        sim_clean <- copy(sim_raw)
+        for (col in player_cols) {
+          set(sim_clean, j = col, value = trimws(gsub("\\s*\\(\\d+\\)\\s*", "", sim_clean[[col]])))
+        }
+        
+        incProgress(0.15, detail = "Processing lineup keys...")
+        
+        # Check if LineupKey already exists (pre-computed in sim app)
+        if ("LineupKey" %in% names(sim_clean)) {
+          cat("Using pre-computed LineupKey - FAST!\n")
+          # Keys already exist, just need to ensure they're clean
+          sim_clean[, LineupKey := trimws(LineupKey)]
+        } else {
+          cat("Computing LineupKey (slow - consider adding to sim app)...\n")
+          # Need to create keys - this is slow
+          player_matrix <- as.matrix(sim_clean[, player_cols, with = FALSE])
+          sim_clean[, LineupKey := apply(player_matrix, 1, function(x) paste(sort(x), collapse = "|"))]
+        }
+        
+        incProgress(0.15, detail = "Scoring lineups...")
+        
+        # Score sim lineups against actual scores (vectorized)
+        score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
+        
+        # Vectorized scoring - much faster than loop
+        for (col in player_cols) {
+          score_col <- paste0(col, "Score")
+          set(sim_clean, j = score_col, value = score_lookup[sim_clean[[col]]])
+        }
+        
+        score_cols <- paste0(player_cols, "Score")
+        sim_clean[, ActualScore := rowSums(.SD, na.rm = TRUE), .SDcols = score_cols]
+        
+        # Store available ranking metrics for dropdown
+        # SimRank will be calculated reactively based on user selection
+        # No need to calculate it here since it changes based on dropdown
+        
+        incProgress(0.2, detail = "Matching contest lineups (optimized)...")
+        
+        # OPTIMIZED MATCHING - Group by score first since matching lineups = matching scores
+        # Vectorized contest key creation for speed
+        contest_with_scores <- rv$data[, {
+          # Parse all lineups at once
+          all_players <- lapply(Lineup, extract_fighters)
+          
+          # Score and create keys vectorized
+          scores <- sapply(all_players, function(players) sum(score_lookup[players], na.rm = TRUE))
+          keys <- sapply(all_players, function(players) paste(sort(players), collapse = "|"))
+          
+          .(LineupKey = keys, ActualScore = scores)
+        }, by = .(Lineup, Username, Points)]
+        
+        # Group contest lineups by score for faster matching
+        contest_lookup <- contest_with_scores[, .(
+          TimesPlayed = .N,
+          PlayedBy = paste(unique(Username), collapse = ", ")
+        ), by = .(LineupKey, ActualScore)]
+        
+        # Now join - but data.table will only compare lineups with matching ActualScore
+        # This is MUCH faster than comparing all 25k sim lineups to all 5k contest lineups
+        setkey(sim_clean, LineupKey, ActualScore)
+        setkey(contest_lookup, LineupKey, ActualScore)
+        
+        # Perform the join on BOTH keys (LineupKey AND ActualScore)
+        sim_clean[contest_lookup, `:=`(
+          InContest = TRUE,
+          TimesPlayed = i.TimesPlayed,
+          PlayedBy = i.PlayedBy
+        ), on = c("LineupKey", "ActualScore")]
+        
+        # Fill in FALSE for non-matches
+        sim_clean[is.na(InContest), `:=`(
+          InContest = FALSE,
+          TimesPlayed = 0,
+          PlayedBy = ""
+        )]
+        
+        # Add InSim flag (all sim lineups have this as TRUE)
+        sim_clean[, InSim := TRUE]
+        # Rename InContest to InContest for clarity
+        setnames(sim_clean, "InContest", "InContest")
+        
+        incProgress(0.1, detail = "Building unified pool...")
+        
+        # Create unified pool: Sim lineups + Contest lineups not in sim
+        # Get all contest lineups with their keys
+        contest_all <- copy(contest_with_scores)
+        contest_all[, `:=`(
+          InContest = TRUE,
+          InSim = FALSE,
+          TimesPlayed = 1
+        )]
+        
+        # Add player columns to contest lineups by parsing LineupKey
+        for (i in 1:length(player_cols)) {
+          col_name <- player_cols[i]
+          contest_all[, (col_name) := {
+            sapply(LineupKey, function(key) {
+              players <- sort(strsplit(key, "|", fixed = TRUE)[[1]])
+              if (i <= length(players)) players[i] else NA_character_
+            })
+          }]
+        }
+        
+        # Mark contest lineups that are in sim as InSim = TRUE
+        contest_all[LineupKey %in% sim_clean$LineupKey, InSim := TRUE]
+        
+        # Get contest lineups NOT in sim
+        contest_only <- contest_all[InSim == FALSE]
+        
+        # Add missing columns to contest_only to match sim_clean structure
+        sim_cols <- names(sim_clean)
+        for (col in sim_cols) {
+          if (!col %in% names(contest_only)) {
+            contest_only[, (col) := NA]
+          }
+        }
+        
+        # Combine sim and contest-only lineups
+        unified_pool <- rbindlist(list(
+          sim_clean,
+          contest_only[, names(sim_clean), with = FALSE]
+        ), use.names = TRUE, fill = TRUE)
+        
+        # Store both versions
+        rv$sim_data <- sim_clean  # Original sim lineups only
+        rv$unified_pool <- unified_pool  # All lineups (sim + contest)
+        rv$sim_loaded <- TRUE
+        
+        incProgress(0.1, detail = "Calculating unique players...")
+        
+        # Calculate unique counts for unified pool
+        if (!"UniquePlayerCount" %in% names(unified_pool)) {
+          player_matrix_unified <- as.matrix(unified_pool[, player_cols, with = FALSE])
+          unified_pool[, UniquePlayerCount := apply(player_matrix_unified, 1, function(x) length(unique(x)))]
+          # Update the stored version
+          rv$unified_pool <- unified_pool
+        }
+        
+        # Extract unique players for filter dropdowns
+        all_sim_players <- unique(unlist(sim_clean[, player_cols, with = FALSE]))
+        all_sim_players <- sort(all_sim_players)
+        
+        # Update player filter dropdowns
+        updateSelectizeInput(session, "include_players", 
+                             choices = all_sim_players,
+                             server = TRUE)
+        updateSelectizeInput(session, "exclude_players", 
+                             choices = all_sim_players,
+                             server = TRUE)
+        
+        # Update Filter Rewind player dropdowns
+        updateSelectizeInput(session, "include_players_rewind",
+                             choices = all_sim_players,
+                             server = TRUE)
+        updateSelectizeInput(session, "exclude_players_rewind",
+                             choices = all_sim_players,
+                             server = TRUE)
+        
+        incProgress(0.1, detail = "Complete!")
+        
+        showNotification(
+          paste0("Sim data loaded! ", format(nrow(sim_clean), big.mark = ","), " lineups processed."), 
+          type = "message", 
+          duration = 5
+        )
         
       }, error = function(e) {
         showNotification(
@@ -994,7 +1365,7 @@ server <- function(input, output, session) {
     display_data <- top_dupes[, .(
       Lineup,
       `Times Used` = N,
-      `% of Contest` = paste0(round(N / nrow(rv$data) * 100, 2), "%")
+      `% of Contest` = paste0(round(N / nrow(rv$data) * 100, 1), "%")
     )]
     
     datatable(
@@ -1329,6 +1700,1741 @@ server <- function(input, output, session) {
     }
     
     dt_table
+  })
+  
+  # ============================================================================
+  # SIMULATION ANALYSIS TAB (NEW)
+  # ============================================================================
+  
+  # ============================================================================
+  # SCORED LINEUPS TAB
+  # ============================================================================
+  
+  output$scored_lineups_content <- renderUI({
+    if (!rv$sim_loaded) {
+      return(
+        div(class = "well",
+            h4("No Simulation Data Loaded", style = "color: #FFE500; text-align: center;"),
+            p("Upload sim optimals file to view scored lineups.",
+              style = "color: #CCCCCC; text-align: center;")
+        )
+      )
+    }
+    
+    tagList(
+      br(),
+      
+      # Ranking controls
+      div(class = "well",
+          h4("Lineup Ranking", style = "color: #FFE500; margin-top: 0;"),
+          fluidRow(
+            column(3,
+                   selectInput("rank_primary", "Primary Rank By",
+                               choices = c("Win Rate" = "WinRate",
+                                           "Top 1%" = "Top1Pct",
+                                           "Top 5%" = "Top5Pct",
+                                           "Top 10%" = "Top10Pct",
+                                           "Top 20%" = "Top20Pct",
+                                           "Actual Score" = "ActualScore"),
+                               selected = "ActualScore")
+            ),
+            column(3,
+                   selectInput("rank_secondary", "Tiebreaker 1",
+                               choices = c("None" = "none",
+                                           "Win Rate" = "WinRate",
+                                           "Top 1%" = "Top1Pct",
+                                           "Actual Score" = "ActualScore"),
+                               selected = "WinRate")
+            ),
+            column(3,
+                   selectInput("rank_tertiary", "Tiebreaker 2",
+                               choices = c("None" = "none",
+                                           "Win Rate" = "WinRate",
+                                           "Top 1%" = "Top1Pct",
+                                           "Actual Score" = "ActualScore"),
+                               selected = "none")
+            )
+          )
+      ),
+      
+      br(),
+      
+      # Scored lineups table
+      h4("All Simulated Lineups with Contest Scores", style = "color: #FFE500;"),
+      p("Complete lineup pool ranked by selected metric. Downloadable to CSV/Excel.",
+        style = "color: #CCCCCC;"),
+      DTOutput("sim_lineups_table")
+    )
+  })
+  
+  # ============================================================================
+  # SIM PERFORMANCE TAB
+  # ============================================================================
+  
+  output$sim_performance_content <- renderUI({
+    if (!rv$sim_loaded) {
+      return(
+        div(class = "well",
+            h4("No Simulation Data Loaded", style = "color: #FFE500; text-align: center;"),
+            p("Upload sim optimals to view performance analysis.",
+              style = "color: #CCCCCC; text-align: center;")
+        )
+      )
+    }
+    
+    tagList(
+      br(),
+      h4("How Well Did Each Metric Predict Contest Success?", style = "color: #FFE500;"),
+      p("Full-screen charts and bucket analysis for each sim metric.",
+        style = "color: #CCCCCC;"),
+      br(),
+      
+      tabsetPanel(
+        tabPanel("Win Rate",
+                 br(),
+                 plotlyOutput("winrate_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Win Rate Bucket", style = "color: #FFE500;"),
+                 DTOutput("winrate_buckets")
+        ),
+        
+        tabPanel("Top 1%",
+                 br(),
+                 plotlyOutput("top1_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Top 1% Bucket", style = "color: #FFE500;"),
+                 DTOutput("top1_buckets")
+        ),
+        
+        tabPanel("Top 5%",
+                 br(),
+                 plotlyOutput("top5_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Top 5% Bucket", style = "color: #FFE500;"),
+                 DTOutput("top5_buckets")
+        ),
+        
+        tabPanel("Total Own",
+                 br(),
+                 plotlyOutput("ownership_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Total Ownership Bucket", style = "color: #FFE500;"),
+                 DTOutput("ownership_buckets")
+        ),
+        
+        tabPanel("Average Own",
+                 br(),
+                 plotlyOutput("geo_ownership_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Average Ownership Bucket", style = "color: #FFE500;"),
+                 DTOutput("geo_ownership_buckets")
+        ),
+        
+        tabPanel("Avg Start",
+                 br(),
+                 plotlyOutput("avg_start_scatter", height = "600px"),
+                 br(),
+                 h5("Performance by Avg Start Bucket", style = "color: #FFE500;"),
+                 DTOutput("avg_start_buckets")
+        )
+      )
+    )
+  })
+  
+  # ============================================================================
+  # FILTER REWIND TAB  
+  # ============================================================================
+  
+  output$filter_rewind_content <- renderUI({
+    if (!rv$sim_loaded) {
+      return(
+        div(class = "well",
+            h4("No Simulation Data Loaded", style = "color: #FFE500; text-align: center;"),
+            p("Upload sim optimals to use Filter Rewind.",
+              style = "color: #CCCCCC; text-align: center;")
+        )
+      )
+    }
+    
+    tagList(
+      br(),
+      
+      # Filter Panel with SLIDERS
+      div(class = "well",
+          h4("Lineup Filters", style = "color: #FFE500; margin-top: 0;"),
+          p("Filter sim lineups and see how they would have performed in the contest.",
+            style = "color: #CCCCCC;"),
+          
+          br(),
+          
+          # Player Filters
+          fluidRow(
+            column(12, h5("Player Filters", style = "color: #FFE500;"))
+          ),
+          fluidRow(
+            column(6,
+                   selectizeInput("include_players_rewind", "Must Include",
+                                  choices = NULL, multiple = TRUE,
+                                  options = list(placeholder = 'Select players...'))
+            ),
+            column(6,
+                   selectizeInput("exclude_players_rewind", "Exclude",
+                                  choices = NULL, multiple = TRUE,
+                                  options = list(placeholder = 'Select players...'))
+            )
+          ),
+          
+          br(),
+          
+          # Metric Filters with SLIDERS
+          fluidRow(
+            column(12, h5("Metric Filters", style = "color: #FFE500;"))
+          ),
+          fluidRow(
+            column(6,
+                   sliderInput("winrate_slider", "Win Rate %",
+                               min = 0, max = 100, value = c(0, 100), step = 0.1)
+            ),
+            column(6,
+                   sliderInput("top1_slider", "Top 1%",
+                               min = 0, max = 100, value = c(0, 100), step = 0.1)
+            )
+          ),
+          fluidRow(
+            column(6,
+                   sliderInput("top5_slider", "Top 5%",
+                               min = 0, max = 100, value = c(0, 100), step = 0.1)
+            ),
+            column(6,
+                   sliderInput("top10_slider", "Top 10%",
+                               min = 0, max = 100, value = c(0, 100), step = 0.1)
+            )
+          ),
+          fluidRow(
+            column(6,
+                   sliderInput("top20_slider", "Top 20%",
+                               min = 0, max = 100, value = c(0, 100), step = 0.1)
+            ),
+            column(6,
+                   sliderInput("totalown_slider", "Total Own %",
+                               min = 0, max = 1000, value = c(0, 1000), step = 10)
+            )
+          ),
+          fluidRow(
+            column(6,
+                   sliderInput("avgown_slider", "Average Own %",
+                               min = 0, max = 100, value = c(0, 100), step = 1)
+            ),
+            column(6,
+                   sliderInput("salary_slider", "Salary",
+                               min = 0, max = 50000, value = c(0, 50000), step = 100)
+            )
+          ),
+          fluidRow(
+            column(6,
+                   sliderInput("avgstart_slider", "Avg Start Position",
+                               min = 0, max = 50, value = c(0, 50), step = 0.5)
+            ),
+            column(6,
+                   selectInput("played_rewind", "Played in Contest?",
+                               choices = c("All" = "all", "Yes" = "yes", "No" = "no"),
+                               selected = "all")
+            )
+          ),
+          
+          br(),
+          
+          fluidRow(
+            column(3,
+                   actionButton("reset_rewind", "Reset All Filters",
+                                class = "btn-primary", style = "width: 100%;")
+            )
+          )
+      ),
+      
+      br(),
+      
+      # Performance Stats
+      h4("Filtered Pool Performance", style = "color: #FFE500;"),
+      
+      fluidRow(
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Lineups"),
+                   div(class = "stat-value", textOutput("rewind_count"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Played"),
+                   div(class = "stat-value", textOutput("rewind_played"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Would Win"),
+                   div(class = "stat-value", textOutput("rewind_win"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 1%"),
+                   div(class = "stat-value", textOutput("rewind_top1"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 5%"),
+                   div(class = "stat-value", textOutput("rewind_top5"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 10%"),
+                   div(class = "stat-value", textOutput("rewind_top10"))
+               )
+        )
+      ),
+      
+      fluidRow(
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 20%"),
+                   div(class = "stat-value", textOutput("rewind_top20"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Avg Score"),
+                   div(class = "stat-value", textOutput("rewind_avg"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Best Score"),
+                   div(class = "stat-value", textOutput("rewind_best"))
+               )
+        )
+      ),
+      
+      br(),
+      
+      h4("Duplication Distribution", style = "color: #FFE500;"),
+      plotlyOutput("rewind_dupe_dist", height = "300px")
+    )
+  })
+  
+  output$sim_analysis_content <- renderUI({
+    if (!rv$sim_loaded) {
+      return(
+        div(class = "well",
+            h4("No Simulation Data Loaded", style = "color: #FFE500; text-align: center; margin-top: 50px;"),
+            p("Upload a sim optimals file to unlock simulation analysis features.",
+              style = "color: #CCCCCC; text-align: center; font-size: 16px;"),
+            p("This will show you how your simulated lineups performed in the actual contest.",
+              style = "color: #CCCCCC; text-align: center;")
+        )
+      )
+    }
+    
+    tagList(
+      br(),
+      
+      # Filter Panel
+      div(class = "well",
+          h4("Filter Sim Lineups", style = "color: #FFE500; margin-top: 0;"),
+          
+          # Player filters
+          fluidRow(
+            column(12,
+                   h5("Player Filters", style = "color: #FFE500;")
+            )
+          ),
+          fluidRow(
+            column(3,
+                   selectizeInput("include_players", "Must Include Players",
+                                  choices = NULL,
+                                  multiple = TRUE,
+                                  options = list(placeholder = 'Select players...'))
+            ),
+            column(3,
+                   selectizeInput("exclude_players", "Exclude Players",
+                                  choices = NULL,
+                                  multiple = TRUE,
+                                  options = list(placeholder = 'Select players...'))
+            ),
+            column(3,
+                   numericInput("min_unique", "Min Unique Players",
+                                value = 0, min = 0, max = 6, step = 1)
+            ),
+            column(3,
+                   numericInput("max_unique", "Max Unique Players",
+                                value = 6, min = 0, max = 6, step = 1)
+            )
+          ),
+          
+          br(),
+          
+          # Metric filters
+          fluidRow(
+            column(12,
+                   h5("Metric Filters", style = "color: #FFE500;")
+            )
+          ),
+          fluidRow(
+            column(3,
+                   numericInput("min_winrate", "Min Win Rate %", 
+                                value = 0, min = 0, max = 100, step = 0.5)
+            ),
+            column(3,
+                   numericInput("min_top1", "Min Top 1%", 
+                                value = 0, min = 0, max = 100, step = 0.5)
+            ),
+            column(3,
+                   numericInput("min_top5", "Min Top 5%", 
+                                value = 0, min = 0, max = 100, step = 0.5)
+            ),
+            column(3,
+                   numericInput("min_top10", "Min Top 10%", 
+                                value = 0, min = 0, max = 100, step = 0.5)
+            )
+          ),
+          
+          fluidRow(
+            column(3,
+                   numericInput("min_top20", "Min Top 20%", 
+                                value = 0, min = 0, max = 100, step = 0.5)
+            ),
+            column(3,
+                   numericInput("max_ownership", "Max Total Ownership %", 
+                                value = 1000, min = 0, max = 1000, step = 10)
+            ),
+            column(3,
+                   numericInput("max_geo_ownership", "Max Geo Ownership %", 
+                                value = 100, min = 0, max = 100, step = 5)
+            ),
+            column(3,
+                   numericInput("max_salary", "Max Salary", 
+                                value = 50000, min = 0, max = 50000, step = 100)
+            )
+          ),
+          
+          fluidRow(
+            column(3,
+                   numericInput("min_avg_start", "Min Avg Start", 
+                                value = 0, min = 0, max = 50, step = 1)
+            ),
+            column(3,
+                   numericInput("max_avg_start", "Max Avg Start", 
+                                value = 50, min = 0, max = 50, step = 1)
+            ),
+            column(3,
+                   selectInput("sim_rank_metric", "Rank Lineups By",
+                               choices = c("Win Rate" = "WinRate",
+                                           "Top 1%" = "Top1Pct",
+                                           "Top 5%" = "Top5Pct",
+                                           "Top 10%" = "Top10Pct",
+                                           "Top 20%" = "Top20Pct",
+                                           "Actual Score" = "ActualScore"),
+                               selected = "WinRate")
+            ),
+            column(3,
+                   selectInput("played_filter", "Played in Contest?",
+                               choices = c("All" = "all",
+                                           "Yes" = "yes", 
+                                           "No" = "no"),
+                               selected = "all")
+            )
+          ),
+          
+          fluidRow(
+            column(3,
+                   actionButton("reset_filters", "Reset All Filters", 
+                                class = "btn-primary", style = "margin-top: 25px; width: 100%;")
+            )
+          )
+      ),
+      
+      # Summary Stats
+      fluidRow(
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Total Lineups"),
+                   div(class = "stat-value", textOutput("total_sim_lineups"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Played in Contest"),
+                   div(class = "stat-value", textOutput("played_sim_lineups"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Would Win"),
+                   div(class = "stat-value", textOutput("would_win_count"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 1%"),
+                   div(class = "stat-value", textOutput("top1_count"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 5%"),
+                   div(class = "stat-value", textOutput("top5_count"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 10%"),
+                   div(class = "stat-value", textOutput("top10_count"))
+               )
+        )
+      ),
+      
+      fluidRow(
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Top 20%"),
+                   div(class = "stat-value", textOutput("top20_count"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Avg Actual Score"),
+                   div(class = "stat-value", textOutput("avg_sim_score"))
+               )
+        ),
+        column(2,
+               div(class = "stat-box",
+                   div(class = "stat-label", "Best Actual Score"),
+                   div(class = "stat-value", textOutput("best_sim_score"))
+               )
+        )
+      ),
+      
+      br(),
+      
+      # Dupe Distribution
+      h4("Player Duplication Distribution", style = "color: #FFE500;"),
+      plotlyOutput("dupe_distribution", height = "300px"),
+      
+      br(),
+      
+      # Sim Lineups Table (Filtered Pool)
+      h4("Filtered Simulation Lineups", style = "color: #FFE500;"),
+      p("This table shows all lineups matching your filters. Click column headers to sort.",
+        style = "color: #CCCCCC;"),
+      DTOutput("sim_lineups_table"),
+      
+      br(),
+      
+      # Performance Analysis Section
+      h4("Performance Analysis", style = "color: #FFE500;"),
+      
+      tabsetPanel(
+        tabPanel("Score Distribution",
+                 br(),
+                 fluidRow(
+                   column(6,
+                          h5("Actual Score Distribution", style = "color: #FFE500;"),
+                          plotlyOutput("actual_score_dist", height = "350px")
+                   ),
+                   column(6,
+                          h5("Score by Percentile", style = "color: #FFE500;"),
+                          plotlyOutput("score_by_percentile", height = "350px")
+                   )
+                 ),
+                 br(),
+                 fluidRow(
+                   column(12,
+                          h5("Player Duplication Distribution", style = "color: #FFE500;"),
+                          plotlyOutput("dupe_distribution", height = "300px")
+                   )
+                 )
+        ),
+        
+        tabPanel("Metric Correlations",
+                 br(),
+                 fluidRow(
+                   column(6,
+                          h5("Win Rate vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("winrate_scatter", height = "350px")
+                   ),
+                   column(6,
+                          h5("Top 1% vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("top1_scatter", height = "350px")
+                   )
+                 ),
+                 br(),
+                 fluidRow(
+                   column(6,
+                          h5("Top 5% vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("top5_scatter", height = "350px")
+                   ),
+                   column(6,
+                          h5("Ownership vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("ownership_scatter", height = "350px")
+                   )
+                 )
+        ),
+        
+        tabPanel("Additional Metrics",
+                 br(),
+                 fluidRow(
+                   column(6,
+                          h5("Geometric Ownership vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("geo_ownership_scatter", height = "350px")
+                   ),
+                   column(6,
+                          h5("Total Start vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("total_start_scatter", height = "350px")
+                   )
+                 ),
+                 br(),
+                 fluidRow(
+                   column(6,
+                          h5("Avg Start vs Actual Score", style = "color: #FFE500;"),
+                          plotlyOutput("avg_start_scatter", height = "350px")
+                   ),
+                   column(6,
+                          h5("Correlation Summary", style = "color: #FFE500;"),
+                          DTOutput("correlation_summary_table")
+                   )
+                 )
+        ),
+        
+        tabPanel("Bucket Analysis",
+                 br(),
+                 h5("Performance by Metric Buckets", style = "color: #FFE500;"),
+                 p("See how different ranges of each metric actually performed in the contest.",
+                   style = "color: #CCCCCC;"),
+                 br(),
+                 tabsetPanel(
+                   tabPanel("Win Rate",
+                            br(),
+                            DTOutput("winrate_buckets")
+                   ),
+                   tabPanel("Top 1%",
+                            br(),
+                            DTOutput("top1_buckets")
+                   ),
+                   tabPanel("Top 5%",
+                            br(),
+                            DTOutput("top5_buckets")
+                   ),
+                   tabPanel("Ownership",
+                            br(),
+                            DTOutput("ownership_buckets")
+                   ),
+                   tabPanel("Geo Ownership",
+                            br(),
+                            DTOutput("geo_ownership_buckets")
+                   ),
+                   tabPanel("Total Start",
+                            br(),
+                            DTOutput("total_start_buckets")
+                   ),
+                   tabPanel("Avg Start",
+                            br(),
+                            DTOutput("avg_start_buckets")
+                   )
+                 )
+        )
+      )
+    )
+  })
+  
+  # Filtered sim data (with debouncing for performance)
+  filtered_sim_data <- reactive({
+    req(rv$sim_data)
+    
+    # Debounce - wait 500ms after user stops adjusting filters
+    input$min_winrate
+    input$min_top1
+    input$min_top5
+    input$min_top10
+    input$min_top20
+    input$max_ownership
+    input$max_geo_ownership
+    input$max_salary
+    input$min_avg_start
+    input$max_avg_start
+    input$played_filter
+    input$include_players
+    input$exclude_players
+    input$min_unique
+    input$max_unique
+    
+    data <- copy(rv$sim_data)
+    
+    # Get player columns
+    player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]$", names(data), value = TRUE)
+    
+    # Apply player inclusion filters (optimized)
+    if (!is.null(input$include_players) && length(input$include_players) > 0) {
+      for (player in input$include_players) {
+        # More efficient than rowSums
+        data <- data[Reduce(`|`, lapply(.SD, function(x) x == player)), .SDcols = player_cols]
+      }
+    }
+    
+    # Apply player exclusion filters (optimized)
+    if (!is.null(input$exclude_players) && length(input$exclude_players) > 0) {
+      for (player in input$exclude_players) {
+        data <- data[!Reduce(`|`, lapply(.SD, function(x) x == player)), .SDcols = player_cols]
+      }
+    }
+    
+    # Apply unique player filters
+    if (!is.null(input$min_unique) && input$min_unique > 0) {
+      data <- data[UniquePlayerCount >= input$min_unique]
+    }
+    
+    if (!is.null(input$max_unique) && input$max_unique < 6) {
+      data <- data[UniquePlayerCount <= input$max_unique]
+    }
+    
+    # Apply metric filters (all vectorized - very fast)
+    if (!is.null(input$min_winrate) && "WinRate" %in% names(data) && input$min_winrate > 0) {
+      data <- data[WinRate >= input$min_winrate]
+    }
+    
+    if (!is.null(input$min_top1) && "Top1Pct" %in% names(data) && input$min_top1 > 0) {
+      data <- data[Top1Pct >= input$min_top1]
+    }
+    
+    if (!is.null(input$min_top5) && "Top5Pct" %in% names(data) && input$min_top5 > 0) {
+      data <- data[Top5Pct >= input$min_top5]
+    }
+    
+    if (!is.null(input$min_top10) && "Top10Pct" %in% names(data) && input$min_top10 > 0) {
+      data <- data[Top10Pct >= input$min_top10]
+    }
+    
+    if (!is.null(input$min_top20) && "Top20Pct" %in% names(data) && input$min_top20 > 0) {
+      data <- data[Top20Pct >= input$min_top20]
+    }
+    
+    if (!is.null(input$max_ownership) && "CumulativeOwnership" %in% names(data) && input$max_ownership < 1000) {
+      data <- data[CumulativeOwnership <= input$max_ownership]
+    }
+    
+    if (!is.null(input$max_geo_ownership) && "GeometricMeanOwnership" %in% names(data) && input$max_geo_ownership < 100) {
+      data <- data[GeometricMeanOwnership <= input$max_geo_ownership]
+    }
+    
+    if (!is.null(input$max_salary) && "TotalSalary" %in% names(data) && input$max_salary < 50000) {
+      data <- data[TotalSalary <= input$max_salary]
+    }
+    
+    if (!is.null(input$min_avg_start) && "AvgStart" %in% names(data) && input$min_avg_start > 0) {
+      data <- data[AvgStart >= input$min_avg_start]
+    }
+    
+    if (!is.null(input$max_avg_start) && "AvgStart" %in% names(data) && input$max_avg_start < 50) {
+      data <- data[AvgStart <= input$max_avg_start]
+    }
+    
+    if (!is.null(input$played_filter) && input$played_filter != "all") {
+      if (input$played_filter == "yes") {
+        data <- data[InContest == TRUE]
+      } else {
+        data <- data[InContest == FALSE]
+      }
+    }
+    
+    # Calculate SimRank based on selected metric
+    if (!is.null(input$sim_rank_metric) && input$sim_rank_metric %in% names(data)) {
+      if (input$sim_rank_metric == "ActualScore") {
+        data[, SimRank := frank(-ActualScore, ties.method = "min")]
+      } else {
+        data[, SimRank := frank(-get(input$sim_rank_metric), ties.method = "min")]
+      }
+    } else {
+      # Default to WinRate if selected metric doesn't exist
+      if ("WinRate" %in% names(data)) {
+        data[, SimRank := frank(-WinRate, ties.method = "min")]
+      } else if ("Top1Pct" %in% names(data)) {
+        data[, SimRank := frank(-Top1Pct, ties.method = "min")]
+      }
+    }
+    
+    return(data)
+  }) %>% debounce(500)  # Wait 500ms after last filter change
+  
+  # Reset filters
+  observeEvent(input$reset_filters, {
+    updateSelectizeInput(session, "include_players", selected = character(0))
+    updateSelectizeInput(session, "exclude_players", selected = character(0))
+    updateNumericInput(session, "min_unique", value = 0)
+    updateNumericInput(session, "max_unique", value = 6)
+    updateNumericInput(session, "min_winrate", value = 0)
+    updateNumericInput(session, "min_top1", value = 0)
+    updateNumericInput(session, "min_top5", value = 0)
+    updateNumericInput(session, "min_top10", value = 0)
+    updateNumericInput(session, "min_top20", value = 0)
+    updateNumericInput(session, "max_ownership", value = 1000)
+    updateNumericInput(session, "max_geo_ownership", value = 100)
+    updateNumericInput(session, "max_salary", value = 50000)
+    updateNumericInput(session, "min_avg_start", value = 0)
+    updateNumericInput(session, "max_avg_start", value = 50)
+    updateSelectInput(session, "played_filter", selected = "all")
+  })
+  
+  # Summary stats - Fixed to show actual contest results
+  output$total_sim_lineups <- renderText({
+    req(filtered_sim_data())
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    format(nrow(data), big.mark = ",")
+  })
+  
+  output$played_sim_lineups <- renderText({
+    req(filtered_sim_data())
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    played <- sum(data$InContest, na.rm = TRUE)
+    pct <- round(played / nrow(data) * 100, 1)
+    paste0(format(played, big.mark = ","), " (", pct, "%)")
+  })
+  
+  output$would_win_count <- renderText({
+    req(filtered_sim_data(), rv$contest_data)
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    winning_score <- max(rv$contest_data$Points, na.rm = TRUE)
+    wins <- sum(data$ActualScore >= winning_score, na.rm = TRUE)
+    format(wins, big.mark = ",")
+  })
+  
+  output$top1_count <- renderText({
+    req(filtered_sim_data(), rv$contest_data)
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    top1_threshold <- quantile(rv$contest_data$Points, probs = 0.99, na.rm = TRUE)
+    top1 <- sum(data$ActualScore >= top1_threshold, na.rm = TRUE)
+    format(top1, big.mark = ",")
+  })
+  
+  output$top5_count <- renderText({
+    req(filtered_sim_data(), rv$contest_data)
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    top5_threshold <- quantile(rv$contest_data$Points, probs = 0.95, na.rm = TRUE)
+    top5 <- sum(data$ActualScore >= top5_threshold, na.rm = TRUE)
+    format(top5, big.mark = ",")
+  })
+  
+  output$top10_count <- renderText({
+    req(filtered_sim_data(), rv$contest_data)
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    top10_threshold <- quantile(rv$contest_data$Points, probs = 0.90, na.rm = TRUE)
+    top10 <- sum(data$ActualScore >= top10_threshold, na.rm = TRUE)
+    format(top10, big.mark = ",")
+  })
+  
+  output$top20_count <- renderText({
+    req(filtered_sim_data(), rv$contest_data)
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0")
+    top20_threshold <- quantile(rv$contest_data$Points, probs = 0.80, na.rm = TRUE)
+    top20 <- sum(data$ActualScore >= top20_threshold, na.rm = TRUE)
+    format(top20, big.mark = ",")
+  })
+  
+  output$avg_sim_score <- renderText({
+    req(filtered_sim_data())
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0.0")
+    round(mean(data$ActualScore, na.rm = TRUE), 1)
+  })
+  
+  output$best_sim_score <- renderText({
+    req(filtered_sim_data())
+    data <- filtered_sim_data()
+    if (nrow(data) == 0) return("0.0")
+    round(max(data$ActualScore, na.rm = TRUE), 1)
+  })
+  
+  # Dupe distribution chart
+  output$dupe_distribution <- renderPlotly({
+    req(filtered_sim_data())
+    
+    data <- filtered_sim_data()
+    
+    # Count frequency of each unique player count
+    dupe_counts <- data[, .N, by = UniquePlayerCount][order(UniquePlayerCount)]
+    dupe_counts[, Percentage := round(N / sum(N) * 100, 1)]
+    
+    plot_ly(dupe_counts,
+            x = ~UniquePlayerCount,
+            y = ~N,
+            type = 'bar',
+            marker = list(color = '#FFE500',
+                          line = list(color = '#000000', width = 1)),
+            text = ~paste0(N, " (", Percentage, "%)"),
+            textposition = 'outside',
+            hoverinfo = 'text',
+            hovertext = ~paste("Unique Players:", UniquePlayerCount, "<br>",
+                               "Lineups:", N, "<br>",
+                               "Percentage:", Percentage, "%")) %>%
+      layout(
+        xaxis = list(title = "Number of Unique Players", 
+                     color = '#FFFFFF',
+                     tickvals = 1:6),
+        yaxis = list(title = "Number of Lineups", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = FALSE,
+        margin = list(t = 20)
+      )
+  })
+  
+  # Actual score distribution
+  output$actual_score_dist <- renderPlotly({
+    req(filtered_sim_data())
+    
+    data <- filtered_sim_data()
+    
+    plot_ly(data,
+            x = ~ActualScore,
+            type = 'histogram',
+            nbinsx = 30,
+            marker = list(color = '#FFE500',
+                          line = list(color = '#000000', width = 1))) %>%
+      layout(
+        xaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        yaxis = list(title = "Number of Lineups", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = FALSE,
+        margin = list(t = 20)
+      )
+  })
+  
+  # Score by percentile
+  output$score_by_percentile <- renderPlotly({
+    req(filtered_sim_data(), rv$contest_data)
+    
+    data <- filtered_sim_data()
+    
+    # Calculate what percentile each sim lineup would have finished at
+    contest_scores <- sort(rv$contest_data$Points, decreasing = TRUE)
+    
+    data[, ContestPercentile := sapply(ActualScore, function(score) {
+      rank <- sum(contest_scores >= score)
+      (rank / length(contest_scores)) * 100
+    })]
+    
+    # Create bins
+    data[, PercentileBin := cut(ContestPercentile,
+                                breaks = c(0, 1, 5, 10, 20, 50, 100),
+                                labels = c("Top 1%", "Top 5%", "Top 10%", "Top 20%", "Top 50%", "50%+"),
+                                include.lowest = TRUE)]
+    
+    percentile_counts <- data[, .N, by = PercentileBin]
+    percentile_counts[, Percentage := round(N / sum(N) * 100, 1)]
+    
+    plot_ly(percentile_counts,
+            x = ~PercentileBin,
+            y = ~N,
+            type = 'bar',
+            marker = list(color = '#FFE500',
+                          line = list(color = '#000000', width = 1)),
+            text = ~paste0(N, " (", Percentage, "%)"),
+            textposition = 'outside',
+            hoverinfo = 'text',
+            hovertext = ~paste("Finish:", PercentileBin, "<br>",
+                               "Lineups:", N, "<br>",
+                               "Percentage:", Percentage, "%")) %>%
+      layout(
+        xaxis = list(title = "Contest Finish", color = '#FFFFFF'),
+        yaxis = list(title = "Number of Lineups", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = FALSE,
+        margin = list(t = 20)
+      )
+  })
+  
+  # Correlation summary table
+  output$correlation_summary_table <- renderDT({
+    req(filtered_sim_data())
+    
+    data <- filtered_sim_data()
+    
+    # Check if we have data
+    if (nrow(data) < 2) {
+      return(datatable(
+        data.table(Message = "Not enough data for correlation analysis"),
+        rownames = FALSE,
+        options = list(dom = 't')
+      ))
+    }
+    
+    # Calculate correlations with ActualScore
+    cor_cols <- c("WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
+                  "CumulativeOwnership", "GeometricMeanOwnership", 
+                  "TotalSalary", "TotalStart", "AvgStart")
+    cor_cols <- intersect(cor_cols, names(data))
+    
+    if (length(cor_cols) == 0) {
+      return(datatable(
+        data.table(Message = "No correlation columns available"),
+        rownames = FALSE,
+        options = list(dom = 't')
+      ))
+    }
+    
+    correlations <- sapply(cor_cols, function(col) {
+      tryCatch({
+        cor(data[[col]], data$ActualScore, use = "pairwise.complete.obs")
+      }, error = function(e) NA_real_)
+    })
+    
+    # Calculate R-squared
+    r_squared <- sapply(cor_cols, function(col) {
+      tryCatch({
+        model <- lm(ActualScore ~ get(col), data = data)
+        summary(model)$r.squared
+      }, error = function(e) NA_real_)
+    })
+    
+    cor_table <- data.table(
+      Metric = names(correlations),
+      Correlation = round(correlations, 4),
+      `R-Squared` = round(r_squared, 4)
+    )[!is.na(Correlation)][order(-abs(Correlation))]
+    
+    if (nrow(cor_table) == 0) {
+      return(datatable(
+        data.table(Message = "Unable to calculate correlations"),
+        rownames = FALSE,
+        options = list(dom = 't')
+      ))
+    }
+    
+    # Add interpretation
+    cor_table[, Strength := ifelse(abs(Correlation) > 0.7, "Strong",
+                                   ifelse(abs(Correlation) > 0.4, "Moderate", "Weak"))]
+    
+    datatable(
+      cor_table,
+      rownames = FALSE,
+      options = list(pageLength = 15, dom = 't')
+    ) %>%
+      formatStyle(
+        'Correlation',
+        background = styleColorBar(c(-1, 1), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      ) %>%
+      formatStyle(
+        'Strength',
+        backgroundColor = styleEqual(
+          c("Strong", "Moderate", "Weak"),
+          c('#a3e4d7', '#FFE500', '#f5b7b1')
+        )
+      )
+  })
+  
+  # Sim lineups table
+  output$sim_lineups_table <- renderDT({
+    req(filtered_sim_data())
+    
+    data <- filtered_sim_data()
+    
+    # Select columns to display
+    player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]$", names(data), value = TRUE)
+    
+    metric_cols <- c("SimRank", "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
+                     "CumulativeOwnership", "GeometricMeanOwnership",
+                     "TotalSalary", "TotalStart", "AvgStart",
+                     "ActualScore", "InContest", 
+                     "TimesPlayed", "PlayedBy")
+    metric_cols <- intersect(metric_cols, names(data))
+    
+    display_cols <- c(player_cols, metric_cols)
+    display_data <- data[order(SimRank), ..display_cols]  # Sort by SimRank (lower = better)
+    
+    # Don't rename - causes formatStyle issues
+    # Just change column labels in datatable instead
+    col_names <- names(display_data)
+    col_names[col_names == "CumulativeOwnership"] <- "Total Own"
+    col_names[col_names == "GeometricMeanOwnership"] <- "Average Own"
+    col_names[col_names == "InContest"] <- "In Contest"
+    
+    datatable(
+      display_data,
+      colnames = col_names,
+      rownames = FALSE,
+      options = list(
+        pageLength = 50,
+        scrollX = TRUE,
+        dom = 'Bfrtip',
+        buttons = c('copy', 'csv', 'excel')
+      ),
+      extensions = 'Buttons'
+    ) %>%
+      formatRound(c("WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct"), 1) %>%
+      formatRound(c("ActualScore", "AvgStart"), 1) %>%
+      formatStyle(
+        'SimRank',
+        background = styleColorBar(c(max(display_data$SimRank, na.rm = TRUE), 1), '#a5d6a7'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        fontWeight = 'bold'
+      ) %>%
+      formatStyle(
+        'ActualScore',
+        background = styleColorBar(range(display_data$ActualScore, na.rm = TRUE), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center',
+        fontWeight = 'bold'
+      ) %>%
+      formatStyle(
+        'InContest',
+        backgroundColor = styleEqual(c(TRUE, FALSE), c('#a3e4d7', '#f5b7b1'))
+      )
+  })
+  
+  # Win Rate scatter
+  output$winrate_scatter <- renderPlotly({
+    req(rv$unified_pool, "WinRate" %in% names(rv$unified_pool))
+    safe_scatter_plot(rv$unified_pool, "WinRate", "ActualScore", 
+                      "Win Rate %", "Win Rate", use_three_colors = TRUE)
+  })
+  
+  # Win Rate buckets
+  output$winrate_buckets <- renderDT({
+    req(rv$unified_pool, "WinRate" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    # Create buckets
+    data[, WinRateBucket := cut(WinRate, 
+                                breaks = c(0, 2, 5, 10, 20, 100),
+                                labels = c("0-2%", "2-5%", "5-10%", "10-20%", "20%+"),
+                                include.lowest = TRUE)]
+    
+    # Calculate stats by bucket
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Min Actual Score` = round(min(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = WinRateBucket][order(WinRateBucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Top 1% scatter
+  output$top1_scatter <- renderPlotly({
+    req(rv$unified_pool, "Top1Pct" %in% names(rv$unified_pool))
+    safe_scatter_plot(rv$unified_pool, "Top1Pct", "ActualScore",
+                      "Top 1% Probability", "Top 1%", use_three_colors = TRUE)
+  })
+  
+  output$top1_buckets <- renderDT({
+    req(rv$unified_pool, "Top1Pct" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, Top1Bucket := cut(Top1Pct, 
+                             breaks = c(0, 1, 3, 5, 10, 100),
+                             labels = c("0-1%", "1-3%", "3-5%", "5-10%", "10%+"),
+                             include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = Top1Bucket][order(Top1Bucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Top 5% scatter
+  output$top5_scatter <- renderPlotly({
+    req(filtered_sim_data(), "Top5Pct" %in% names(filtered_sim_data()))
+    
+    data <- filtered_sim_data()
+    
+    # Calculate trendline
+    model <- lm(ActualScore ~ Top5Pct, data = data)
+    data$fitted <- predict(model)
+    
+    plot_ly(data, 
+            x = ~Top5Pct, 
+            y = ~ActualScore,
+            color = ~InContest,
+            colors = c("#666666", "#FFE500"),
+            type = 'scatter',
+            mode = 'markers',
+            marker = list(size = 10, opacity = 0.7, line = list(color = "#000000", width = 1)),
+            text = ~paste("Top 5%:", round(Top5Pct, 2), "%<br>",
+                          "Actual Score:", round(ActualScore, 2)),
+            hoverinfo = 'text',
+            name = ~ifelse(InContest, "Played", "Not Played")) %>%
+      add_trace(
+        x = ~Top5Pct,
+        y = ~fitted,
+        type = 'scatter',
+        mode = 'lines',
+        line = list(color = '#FFE500', width = 2, dash = 'dash'),
+        name = 'Trendline',
+        hoverinfo = 'skip',
+        showlegend = TRUE,
+        inherit = FALSE
+      ) %>%
+      layout(
+        title = list(text = sprintf("Top 5%% vs Actual Score (R² = %.3f)", 
+                                    summary(model)$r.squared),
+                     font = list(color = '#FFE500')),
+        xaxis = list(title = "Top 5% Probability", color = '#FFFFFF'),
+        yaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = TRUE
+      )
+  })
+  
+  output$top5_buckets <- renderDT({
+    req(filtered_sim_data(), "Top5Pct" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, Top5Bucket := cut(Top5Pct, 
+                             breaks = c(0, 5, 10, 20, 40, 100),
+                             labels = c("0-5%", "5-10%", "10-20%", "20-40%", "40%+"),
+                             include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = Top5Bucket][order(Top5Bucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Ownership scatter
+  output$ownership_scatter <- renderPlotly({
+    req(filtered_sim_data(), "CumulativeOwnership" %in% names(filtered_sim_data()))
+    
+    data <- filtered_sim_data()
+    
+    # Calculate trendline
+    model <- lm(ActualScore ~ CumulativeOwnership, data = data)
+    data$fitted <- predict(model)
+    
+    plot_ly(data, 
+            x = ~CumulativeOwnership, 
+            y = ~ActualScore,
+            color = ~InContest,
+            colors = c("#666666", "#FFE500"),
+            type = 'scatter',
+            mode = 'markers',
+            marker = list(size = 10, opacity = 0.7, line = list(color = "#000000", width = 1)),
+            text = ~paste("Ownership:", round(CumulativeOwnership, 1), "%<br>",
+                          "Actual Score:", round(ActualScore, 2)),
+            hoverinfo = 'text',
+            name = ~ifelse(InContest, "Played", "Not Played")) %>%
+      add_trace(
+        x = ~CumulativeOwnership,
+        y = ~fitted,
+        type = 'scatter',
+        mode = 'lines',
+        line = list(color = '#FFE500', width = 2, dash = 'dash'),
+        name = 'Trendline',
+        hoverinfo = 'skip',
+        showlegend = TRUE,
+        inherit = FALSE
+      ) %>%
+      layout(
+        title = list(text = sprintf("Cumulative Ownership vs Actual Score (R² = %.3f)", 
+                                    summary(model)$r.squared),
+                     font = list(color = '#FFE500')),
+        xaxis = list(title = "Cumulative Ownership %", color = '#FFFFFF'),
+        yaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = TRUE
+      )
+  })
+  
+  output$ownership_buckets <- renderDT({
+    req(filtered_sim_data(), "CumulativeOwnership" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, OwnBucket := cut(CumulativeOwnership, 
+                            breaks = c(0, 100, 150, 200, 300, 1000),
+                            labels = c("0-100%", "100-150%", "150-200%", "200-300%", "300%+"),
+                            include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = OwnBucket][order(OwnBucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Geometric Ownership scatter
+  output$geo_ownership_scatter <- renderPlotly({
+    req(filtered_sim_data(), "GeometricMeanOwnership" %in% names(filtered_sim_data()))
+    
+    data <- filtered_sim_data()
+    
+    # Calculate trendline
+    model <- lm(ActualScore ~ GeometricMeanOwnership, data = data)
+    data$fitted <- predict(model)
+    
+    plot_ly(data, 
+            x = ~GeometricMeanOwnership, 
+            y = ~ActualScore,
+            color = ~InContest,
+            colors = c("#666666", "#FFE500"),
+            type = 'scatter',
+            mode = 'markers',
+            marker = list(size = 10, opacity = 0.7, line = list(color = "#000000", width = 1)),
+            text = ~paste("Geo Mean Ownership:", round(GeometricMeanOwnership, 1), "%<br>",
+                          "Actual Score:", round(ActualScore, 2)),
+            hoverinfo = 'text',
+            name = ~ifelse(InContest, "Played", "Not Played")) %>%
+      add_trace(
+        x = ~GeometricMeanOwnership,
+        y = ~fitted,
+        type = 'scatter',
+        mode = 'lines',
+        line = list(color = '#FFE500', width = 2, dash = 'dash'),
+        name = 'Trendline',
+        hoverinfo = 'skip',
+        showlegend = TRUE,
+        inherit = FALSE
+      ) %>%
+      layout(
+        title = list(text = sprintf("Geometric Mean Ownership vs Actual Score (R² = %.3f)", 
+                                    summary(model)$r.squared),
+                     font = list(color = '#FFE500')),
+        xaxis = list(title = "Geometric Mean Ownership %", color = '#FFFFFF'),
+        yaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = TRUE
+      )
+  })
+  
+  output$geo_ownership_buckets <- renderDT({
+    req(filtered_sim_data(), "GeometricMeanOwnership" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, GeoOwnBucket := cut(GeometricMeanOwnership, 
+                               breaks = c(0, 20, 30, 40, 50, 100),
+                               labels = c("0-20%", "20-30%", "30-40%", "40-50%", "50%+"),
+                               include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = GeoOwnBucket][order(GeoOwnBucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Total Start scatter
+  output$total_start_scatter <- renderPlotly({
+    req(filtered_sim_data(), "TotalStart" %in% names(filtered_sim_data()))
+    
+    data <- filtered_sim_data()
+    
+    # Calculate trendline
+    model <- lm(ActualScore ~ TotalStart, data = data)
+    data$fitted <- predict(model)
+    
+    plot_ly(data, 
+            x = ~TotalStart, 
+            y = ~ActualScore,
+            color = ~InContest,
+            colors = c("#666666", "#FFE500"),
+            type = 'scatter',
+            mode = 'markers',
+            marker = list(size = 10, opacity = 0.7, line = list(color = "#000000", width = 1)),
+            text = ~paste("Total Start:", TotalStart, "<br>",
+                          "Actual Score:", round(ActualScore, 2)),
+            hoverinfo = 'text',
+            name = ~ifelse(InContest, "Played", "Not Played")) %>%
+      add_trace(
+        x = ~TotalStart,
+        y = ~fitted,
+        type = 'scatter',
+        mode = 'lines',
+        line = list(color = '#FFE500', width = 2, dash = 'dash'),
+        name = 'Trendline',
+        hoverinfo = 'skip',
+        showlegend = TRUE,
+        inherit = FALSE
+      ) %>%
+      layout(
+        title = list(text = sprintf("Total Starting Position vs Actual Score (R² = %.3f)", 
+                                    summary(model)$r.squared),
+                     font = list(color = '#FFE500')),
+        xaxis = list(title = "Total Starting Position (Lower = Better)", color = '#FFFFFF'),
+        yaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = TRUE
+      )
+  })
+  
+  output$total_start_buckets <- renderDT({
+    req(filtered_sim_data(), "TotalStart" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, StartBucket := cut(TotalStart, 
+                              breaks = c(0, 150, 180, 210, 240, 500),
+                              labels = c("0-150", "150-180", "180-210", "210-240", "240+"),
+                              include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = StartBucket][order(StartBucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # Avg Start scatter
+  output$avg_start_scatter <- renderPlotly({
+    req(filtered_sim_data(), "AvgStart" %in% names(filtered_sim_data()))
+    
+    data <- filtered_sim_data()
+    
+    # Calculate trendline
+    model <- lm(ActualScore ~ AvgStart, data = data)
+    data$fitted <- predict(model)
+    
+    plot_ly(data, 
+            x = ~AvgStart, 
+            y = ~ActualScore,
+            color = ~InContest,
+            colors = c("#666666", "#FFE500"),
+            type = 'scatter',
+            mode = 'markers',
+            marker = list(size = 10, opacity = 0.7, line = list(color = "#000000", width = 1)),
+            text = ~paste("Avg Start:", round(AvgStart, 1), "<br>",
+                          "Actual Score:", round(ActualScore, 2)),
+            hoverinfo = 'text',
+            name = ~ifelse(InContest, "Played", "Not Played")) %>%
+      add_trace(
+        x = ~AvgStart,
+        y = ~fitted,
+        type = 'scatter',
+        mode = 'lines',
+        line = list(color = '#FFE500', width = 2, dash = 'dash'),
+        name = 'Trendline',
+        hoverinfo = 'skip',
+        showlegend = TRUE,
+        inherit = FALSE
+      ) %>%
+      layout(
+        title = list(text = sprintf("Average Starting Position vs Actual Score (R² = %.3f)", 
+                                    summary(model)$r.squared),
+                     font = list(color = '#FFE500')),
+        xaxis = list(title = "Average Starting Position (Lower = Better)", color = '#FFFFFF'),
+        yaxis = list(title = "Actual Score", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        showlegend = TRUE
+      )
+  })
+  
+  output$avg_start_buckets <- renderDT({
+    req(filtered_sim_data(), "AvgStart" %in% names(filtered_sim_data()))
+    
+    data <- copy(filtered_sim_data())
+    
+    data[, AvgStartBucket := cut(AvgStart, 
+                                 breaks = c(0, 25, 30, 35, 40, 50),
+                                 labels = c("0-25", "25-30", "30-35", "35-40", "40+"),
+                                 include.lowest = TRUE)]
+    
+    bucket_stats <- data[, .(
+      Count = .N,
+      `Avg Actual Score` = round(mean(ActualScore, na.rm = TRUE), 2),
+      `Max Actual Score` = round(max(ActualScore, na.rm = TRUE), 2),
+      `Played Count` = sum(InContest, na.rm = TRUE),
+      `Play Rate %` = round(sum(InContest, na.rm = TRUE) / .N * 100, 1)
+    ), by = AvgStartBucket][order(AvgStartBucket)]
+    
+    datatable(
+      bucket_stats,
+      rownames = FALSE,
+      options = list(pageLength = 10, dom = 't')
+    ) %>%
+      formatStyle(
+        'Avg Actual Score',
+        background = styleColorBar(range(bucket_stats$`Avg Actual Score`), '#FFE500'),
+        backgroundSize = '100% 90%',
+        backgroundRepeat = 'no-repeat',
+        backgroundPosition = 'center'
+      )
+  })
+  
+  # ============================================================================
+  # FILTER REWIND OUTPUTS
+  # ============================================================================
+  
+  # Reactive data for Filter Rewind (separate filtering)
+  rewind_filtered_data <- reactive({
+    req(rv$sim_data)
+    
+    data <- copy(rv$sim_data)
+    player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]$", names(data), value = TRUE)
+    
+    # Player filters
+    if (!is.null(input$include_players_rewind) && length(input$include_players_rewind) > 0) {
+      for (player in input$include_players_rewind) {
+        data <- data[Reduce(`|`, lapply(.SD, function(x) x == player)), .SDcols = player_cols]
+      }
+    }
+    
+    if (!is.null(input$exclude_players_rewind) && length(input$exclude_players_rewind) > 0) {
+      for (player in input$exclude_players_rewind) {
+        data <- data[!Reduce(`|`, lapply(.SD, function(x) x == player)), .SDcols = player_cols]
+      }
+    }
+    
+    # Slider filters
+    if (!is.null(input$winrate_slider) && "WinRate" %in% names(data)) {
+      data <- data[WinRate >= input$winrate_slider[1] & WinRate <= input$winrate_slider[2]]
+    }
+    if (!is.null(input$top1_slider) && "Top1Pct" %in% names(data)) {
+      data <- data[Top1Pct >= input$top1_slider[1] & Top1Pct <= input$top1_slider[2]]
+    }
+    if (!is.null(input$top5_slider) && "Top5Pct" %in% names(data)) {
+      data <- data[Top5Pct >= input$top5_slider[1] & Top5Pct <= input$top5_slider[2]]
+    }
+    if (!is.null(input$top10_slider) && "Top10Pct" %in% names(data)) {
+      data <- data[Top10Pct >= input$top10_slider[1] & Top10Pct <= input$top10_slider[2]]
+    }
+    if (!is.null(input$top20_slider) && "Top20Pct" %in% names(data)) {
+      data <- data[Top20Pct >= input$top20_slider[1] & Top20Pct <= input$top20_slider[2]]
+    }
+    if (!is.null(input$totalown_slider) && "CumulativeOwnership" %in% names(data)) {
+      data <- data[CumulativeOwnership >= input$totalown_slider[1] & CumulativeOwnership <= input$totalown_slider[2]]
+    }
+    if (!is.null(input$avgown_slider) && "GeometricMeanOwnership" %in% names(data)) {
+      data <- data[GeometricMeanOwnership >= input$avgown_slider[1] & GeometricMeanOwnership <= input$avgown_slider[2]]
+    }
+    if (!is.null(input$salary_slider) && "TotalSalary" %in% names(data)) {
+      data <- data[TotalSalary >= input$salary_slider[1] & TotalSalary <= input$salary_slider[2]]
+    }
+    if (!is.null(input$avgstart_slider) && "AvgStart" %in% names(data)) {
+      data <- data[AvgStart >= input$avgstart_slider[1] & AvgStart <= input$avgstart_slider[2]]
+    }
+    if (!is.null(input$played_rewind) && input$played_rewind != "all") {
+      if (input$played_rewind == "yes") {
+        data <- data[InContest == TRUE]
+      } else {
+        data <- data[InContest == FALSE]
+      }
+    }
+    
+    return(data)
+  }) %>% debounce(500)
+  
+  # Reset rewind filters
+  observeEvent(input$reset_rewind, {
+    req(rv$sim_data)
+    
+    if ("WinRate" %in% names(rv$sim_data)) {
+      updateSliderInput(session, "winrate_slider", 
+                        value = c(min(rv$sim_data$WinRate, na.rm = TRUE),
+                                  max(rv$sim_data$WinRate, na.rm = TRUE)))
+    }
+    if ("Top1Pct" %in% names(rv$sim_data)) {
+      updateSliderInput(session, "top1_slider",
+                        value = c(min(rv$sim_data$Top1Pct, na.rm = TRUE),
+                                  max(rv$sim_data$Top1Pct, na.rm = TRUE)))
+    }
+    updateSelectInput(session, "played_rewind", selected = "all")
+    updateSelectizeInput(session, "include_players_rewind", selected = character(0))
+    updateSelectizeInput(session, "exclude_players_rewind", selected = character(0))
+  })
+  
+  # Rewind stat outputs
+  output$rewind_count <- renderText({
+    req(rewind_filtered_data())
+    format(nrow(rewind_filtered_data()), big.mark = ",")
+  })
+  
+  output$rewind_played <- renderText({
+    req(rewind_filtered_data())
+    played <- sum(rewind_filtered_data()$InContest, na.rm = TRUE)
+    pct <- round(played / nrow(rewind_filtered_data()) * 100, 1)
+    paste0(played, " (", pct, "%)")
+  })
+  
+  output$rewind_win <- renderText({
+    req(rewind_filtered_data(), rv$contest_data)
+    winning_score <- max(rv$contest_data$Points, na.rm = TRUE)
+    sum(rewind_filtered_data()$ActualScore >= winning_score, na.rm = TRUE)
+  })
+  
+  output$rewind_top1 <- renderText({
+    req(rewind_filtered_data(), rv$contest_data)
+    threshold <- quantile(rv$contest_data$Points, 0.99, na.rm = TRUE)
+    sum(rewind_filtered_data()$ActualScore >= threshold, na.rm = TRUE)
+  })
+  
+  output$rewind_top5 <- renderText({
+    req(rewind_filtered_data(), rv$contest_data)
+    threshold <- quantile(rv$contest_data$Points, 0.95, na.rm = TRUE)
+    sum(rewind_filtered_data()$ActualScore >= threshold, na.rm = TRUE)
+  })
+  
+  output$rewind_top10 <- renderText({
+    req(rewind_filtered_data(), rv$contest_data)
+    threshold <- quantile(rv$contest_data$Points, 0.90, na.rm = TRUE)
+    sum(rewind_filtered_data()$ActualScore >= threshold, na.rm = TRUE)
+  })
+  
+  output$rewind_top20 <- renderText({
+    req(rewind_filtered_data(), rv$contest_data)
+    threshold <- quantile(rv$contest_data$Points, 0.80, na.rm = TRUE)
+    sum(rewind_filtered_data()$ActualScore >= threshold, na.rm = TRUE)
+  })
+  
+  output$rewind_avg <- renderText({
+    req(rewind_filtered_data())
+    round(mean(rewind_filtered_data()$ActualScore, na.rm = TRUE), 1)
+  })
+  
+  output$rewind_best <- renderText({
+    req(rewind_filtered_data())
+    round(max(rewind_filtered_data()$ActualScore, na.rm = TRUE), 1)
+  })
+  
+  output$rewind_dupe_dist <- renderPlotly({
+    req(rewind_filtered_data())
+    
+    data <- rewind_filtered_data()
+    dupe_counts <- data[, .N, by = UniquePlayerCount][order(UniquePlayerCount)]
+    dupe_counts[, Percentage := round(N / sum(N) * 100, 1)]
+    
+    plot_ly(dupe_counts, x = ~UniquePlayerCount, y = ~N, type = 'bar',
+            marker = list(color = '#FFE500', line = list(color = '#000000', width = 1)),
+            text = ~paste0(N, " (", Percentage, "%)"),
+            textposition = 'outside') %>%
+      layout(
+        xaxis = list(title = "Unique Players", color = '#FFFFFF', tickvals = 1:6),
+        yaxis = list(title = "Count", color = '#FFFFFF'),
+        paper_bgcolor = '#000000',
+        plot_bgcolor = '#1a1a1a',
+        font = list(color = '#FFFFFF'),
+        margin = list(t = 20)
+      )
   })
 }
 
