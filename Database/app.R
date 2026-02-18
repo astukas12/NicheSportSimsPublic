@@ -581,64 +581,10 @@ server <- function(input, output, session) {
   })
   
   #----- SALARY (auto-loaded from working directory) -----#
-  # Loads DKSalaries.csv and FDSalaries.csv from the app working directory
-  # DK format: Name, ID, Salary columns
-  # FD format: First Name, Last Name, Id, Salary columns
-  
-  load_dk_salaries <- function() {
-    for (f in c("DKSalaries.csv","DKSalaries.xlsx")) {
-      if (file.exists(f)) {
-        sal <- if(grepl(".csv",f)) read_csv(f,show_col_types=FALSE) else read_excel(f)
-        cols <- tolower(names(sal))
-        name_col <- names(sal)[cols == "name"][1]
-        id_col   <- names(sal)[cols == "id"][1]
-        sal_col  <- names(sal)[cols == "salary"][1]
-        if (!is.na(name_col) && !is.na(id_col)) {
-          return(sal %>% mutate(
-            FullName = trimws(.data[[name_col]]),
-            DKName   = FullName,
-            DKID     = as.character(.data[[id_col]]),
-            DKSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]]) else NA_real_
-          ) %>% select(FullName, DKName, DKID, DKSalary))
-        }
-      }
-    }
-    return(NULL)
-  }
-  
-  load_fd_salaries <- function() {
-    for (f in c("FDSalaries.csv","FDSalaries.xlsx")) {
-      if (file.exists(f)) {
-        sal <- if(grepl(".csv",f)) read_csv(f,show_col_types=FALSE) else read_excel(f)
-        cols_lower <- tolower(names(sal))
-        cols       <- names(sal)
-        if ("first name" %in% cols_lower && "last name" %in% cols_lower) {
-          fn_col  <- cols[cols_lower == "first name"][1]
-          ln_col  <- cols[cols_lower == "last name"][1]
-          id_col  <- cols[cols_lower == "id"][1]
-          sal_col <- cols[cols_lower == "salary"][1]
-          return(sal %>% mutate(
-            FullName = trimws(paste(.data[[fn_col]], .data[[ln_col]])),
-            FDName   = FullName,
-            FDID     = if(!is.na(id_col)) as.character(.data[[id_col]]) else NA_character_,
-            FDSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]]) else NA_real_
-          ) %>% select(FullName, FDName, FDID, FDSalary))
-        }
-      }
-    }
-    return(NULL)
-  }
-  
-  # Entry list with both DK and FD salaries merged in for display
+  # Entry list (no salary columns - salary integration not available in hosted version)
   entry_list_with_salaries <- reactive({
     req(values$analysis_entry_list)
-    el <- values$analysis_entry_list
-    if (nrow(el) == 0) return(el)
-    dk <- load_dk_salaries()
-    fd <- load_fd_salaries()
-    if (!is.null(dk)) el <- el %>% left_join(dk %>% select(FullName, DKSalary), by=c("Name"="FullName"))
-    if (!is.null(fd)) el <- el %>% left_join(fd %>% select(FullName, FDSalary), by=c("Name"="FullName"))
-    el
+    values$analysis_entry_list
   })
   
   #----- ENTRY LIST OUTPUT -----#
@@ -682,7 +628,7 @@ server <- function(input, output, session) {
   
   # Tier configuration UI
   output$tier_config_ui <- renderUI({
-    req(values$analysis_entry_list)
+    req(values$analysis_filtered_data)
     n <- values$num_tiers
     all_teams <- if(!is.null(values$analysis_filtered_data)) {
       sort(unique(values$analysis_filtered_data$team_name))
@@ -704,7 +650,7 @@ server <- function(input, output, session) {
   
   # Whenever any tier selection changes, update all other tiers to exclude already-selected teams
   observe({
-    req(values$analysis_entry_list, values$num_tiers)
+    req(values$analysis_filtered_data, values$num_tiers)
     n <- values$num_tiers
     all_teams <- if(!is.null(values$analysis_filtered_data)) {
       sort(unique(values$analysis_filtered_data$team_name))
@@ -898,13 +844,12 @@ server <- function(input, output, session) {
           .groups = 'drop'
         )
       
-      # Build the Driver sheet with exact column order:
-      # FDName DKName Name DKID FDID car team DKSalary FDSalary Starting DKOP FDOP W T3 T5 T10 T15 T20 T25 T30 DKMax FDMax
+      # Build the Driver sheet
       driver_sheet <- el %>%
         select(Name, car=Car, team=Team, Starting=Start) %>%
         mutate(
-          FDName   = NA_character_,
-          DKName   = NA_character_,
+          FDName   = Name,
+          DKName   = Name,
           DKID     = NA_character_,
           FDID     = NA_character_,
           DKSalary = NA_real_,
@@ -913,35 +858,6 @@ server <- function(input, output, session) {
           FDOP     = NA_real_,
           DKMax    = NA_real_,
           FDMax    = NA_real_
-        )
-      
-      # Merge DK and FD salaries from working directory files
-      dk <- load_dk_salaries()
-      fd <- load_fd_salaries()
-      if (!is.null(dk)) {
-        driver_sheet <- driver_sheet %>%
-          left_join(dk, by=c("Name"="FullName")) %>%
-          mutate(
-            DKName   = coalesce(DKName,   DKName.y),
-            DKID     = coalesce(DKID,     DKID.y),
-            DKSalary = coalesce(DKSalary, DKSalary.y)
-          ) %>% select(-any_of(c("DKName.y","DKID.y","DKSalary.y")))
-      }
-      if (!is.null(fd)) {
-        driver_sheet <- driver_sheet %>%
-          left_join(fd, by=c("Name"="FullName")) %>%
-          mutate(
-            FDName   = coalesce(FDName,   FDName.y),
-            FDID     = coalesce(FDID,     FDID.y),
-            FDSalary = coalesce(FDSalary, FDSalary.y)
-          ) %>% select(-any_of(c("FDName.y","FDID.y","FDSalary.y")))
-      }
-      
-      # Fall back: if DKName/FDName still blank after merge, use Name
-      driver_sheet <- driver_sheet %>%
-        mutate(
-          DKName = if_else(is.na(DKName), Name, DKName),
-          FDName = if_else(is.na(FDName), Name, FDName)
         )
       
       
