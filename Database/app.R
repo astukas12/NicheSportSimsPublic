@@ -188,7 +188,7 @@ ui <- fluidPage(
                                        column(3, selectizeInput("analysis_race_id", "Upcoming Race:", choices=NULL, options=list(placeholder="Select Race")))
                                      ),
                                      fluidRow(
-                                       column(3, numericInput("analysis_start_year", "Start Year:", value=2026, min=2022, max=2026, step=1)),
+                                       column(3, numericInput("analysis_start_year", "Start Year:", value=2022, min=2022, max=2026, step=1)),
                                        column(3, numericInput("analysis_end_year", "End Year:", value=2026, min=2022, max=2026, step=1)),
                                        column(6, div(style="margin-top:25px;",
                                                      actionButton("confirm_analysis_filters", "Load Races", class="btn-primary", style="width:100%;padding:10px;font-size:16px;")))
@@ -220,16 +220,11 @@ ui <- fluidPage(
                                                   div(class = "box-header", style="display:flex;justify-content:space-between;align-items:center;",
                                                       uiOutput("entry_list_title", inline=TRUE),
                                                       div(style="display:flex;gap:8px;align-items:center;",
-                                                          fileInput("salary_file_upload", NULL, accept=c(".csv",".xlsx",".xls"),
-                                                                    placeholder="Upload Salaries (CSV/Excel)",
-                                                                    buttonLabel="Browse", width="260px"),
-                                                          actionButton("clear_salaries", "Clear Salaries", class="btn-danger", style="margin-top:0;height:34px;"),
                                                           downloadButton("download_entry_list_csv", "CSV", class="btn-success", style="margin:0;"),
                                                           downloadButton("download_entry_list_excel", "Excel", class="btn-success", style="margin:0;")
                                                       )
                                                   ),
                                                   div(class = "box-body",
-                                                      uiOutput("salary_match_info"),
                                                       fluidRow(column(12, withSpinner(DT::dataTableOutput("entry_list_table"))))
                                                   )
                                               )
@@ -457,7 +452,6 @@ server <- function(input, output, session) {
     filters_confirmed = FALSE,
     pd_race_ids = NULL,
     performance_race_ids = NULL,
-    salary_data = NULL,
     num_tiers = 3
   )
   
@@ -586,102 +580,65 @@ server <- function(input, output, session) {
       pull(race_id)
   })
   
-  #----- SALARY UPLOAD -----#
-  observeEvent(input$salary_file_upload, {
-    req(input$salary_file_upload)
-    tryCatch({
-      ext <- tools::file_ext(input$salary_file_upload$name)
-      if (ext == "csv") {
-        sal <- read_csv(input$salary_file_upload$datapath, show_col_types=FALSE)
-      } else {
-        sal <- read_excel(input$salary_file_upload$datapath)
-      }
-      values$salary_data <- sal
-      showNotification(paste("Salary file loaded:", nrow(sal), "rows"), type="message", duration=4)
-    }, error=function(e) {
-      showNotification(paste("Error loading salary file:", e$message), type="error", duration=5)
-    })
-  })
+  #----- SALARY (auto-loaded from working directory) -----#
+  # Loads DKSalaries.csv and FDSalaries.csv from the app working directory
+  # DK format: Name, ID, Salary columns
+  # FD format: First Name, Last Name, Id, Salary columns
   
-  observeEvent(input$clear_salaries, {
-    values$salary_data <- NULL
-    showNotification("Salary data cleared.", type="message", duration=3)
-  })
-  # Parse salary file - handles exact FD and DK export formats
-  # FD: has "First Name", "Last Name", "Id", "Salary" columns
-  # DK: has "Name", "ID", "Salary" columns
-  parse_salary_file <- function(sal) {
-    cols       <- names(sal)
-    cols_lower <- tolower(cols)
-    
-    # --- FanDuel format ---
-    if ("first name" %in% cols_lower && "last name" %in% cols_lower) {
-      fn_col  <- cols[cols_lower == "first name"][1]
-      ln_col  <- cols[cols_lower == "last name"][1]
-      id_col  <- cols[cols_lower == "id"][1]
-      sal_col <- cols[cols_lower == "salary"][1]
-      result <- sal %>%
-        mutate(
-          FullName = trimws(paste(.data[[fn_col]], .data[[ln_col]])),
-          FDName   = FullName,
-          FDID     = if(!is.na(id_col))  as.character(.data[[id_col]])  else NA_character_,
-          FDSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]])   else NA_real_
-        ) %>%
-        select(FullName, FDName, FDID, FDSalary)
-      return(list(platform="FD", data=result))
+  load_dk_salaries <- function() {
+    for (f in c("DKSalaries.csv","DKSalaries.xlsx")) {
+      if (file.exists(f)) {
+        sal <- if(grepl(".csv",f)) read_csv(f,show_col_types=FALSE) else read_excel(f)
+        cols <- tolower(names(sal))
+        name_col <- names(sal)[cols == "name"][1]
+        id_col   <- names(sal)[cols == "id"][1]
+        sal_col  <- names(sal)[cols == "salary"][1]
+        if (!is.na(name_col) && !is.na(id_col)) {
+          return(sal %>% mutate(
+            FullName = trimws(.data[[name_col]]),
+            DKName   = FullName,
+            DKID     = as.character(.data[[id_col]]),
+            DKSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]]) else NA_real_
+          ) %>% select(FullName, DKName, DKID, DKSalary))
+        }
+      }
     }
-    
-    # --- DraftKings format ---
-    if ("name" %in% cols_lower && "id" %in% cols_lower) {
-      name_col <- cols[cols_lower == "name"][1]
-      id_col   <- cols[cols_lower == "id"][1]
-      sal_col  <- cols[cols_lower == "salary"][1]
-      result <- sal %>%
-        mutate(
-          FullName = trimws(.data[[name_col]]),
-          DKName   = FullName,
-          DKID     = as.character(.data[[id_col]]),
-          DKSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]]) else NA_real_
-        ) %>%
-        select(FullName, DKName, DKID, DKSalary)
-      return(list(platform="DK", data=result))
-    }
-    
-    return(list(platform="UNKNOWN", data=sal))
+    return(NULL)
   }
   
-  # Parsed salary reactive - parse once, reuse everywhere
-  parsed_salary <- reactive({
-    if (is.null(values$salary_data)) return(NULL)
-    parse_salary_file(values$salary_data)
-  })
+  load_fd_salaries <- function() {
+    for (f in c("FDSalaries.csv","FDSalaries.xlsx")) {
+      if (file.exists(f)) {
+        sal <- if(grepl(".csv",f)) read_csv(f,show_col_types=FALSE) else read_excel(f)
+        cols_lower <- tolower(names(sal))
+        cols       <- names(sal)
+        if ("first name" %in% cols_lower && "last name" %in% cols_lower) {
+          fn_col  <- cols[cols_lower == "first name"][1]
+          ln_col  <- cols[cols_lower == "last name"][1]
+          id_col  <- cols[cols_lower == "id"][1]
+          sal_col <- cols[cols_lower == "salary"][1]
+          return(sal %>% mutate(
+            FullName = trimws(paste(.data[[fn_col]], .data[[ln_col]])),
+            FDName   = FullName,
+            FDID     = if(!is.na(id_col)) as.character(.data[[id_col]]) else NA_character_,
+            FDSalary = if(!is.na(sal_col)) as.numeric(.data[[sal_col]]) else NA_real_
+          ) %>% select(FullName, FDName, FDID, FDSalary))
+        }
+      }
+    }
+    return(NULL)
+  }
   
-  # Entry list with salary column merged in for display
+  # Entry list with both DK and FD salaries merged in for display
   entry_list_with_salaries <- reactive({
     req(values$analysis_entry_list)
     el <- values$analysis_entry_list
-    ps <- parsed_salary()
-    if (is.null(ps) || ps$platform == "UNKNOWN" || nrow(el) == 0) return(el)
-    if (ps$platform == "FD") {
-      el <- el %>% left_join(ps$data %>% select(FullName, FDSalary), by=c("Name"="FullName"))
-    } else if (ps$platform == "DK") {
-      el <- el %>% left_join(ps$data %>% select(FullName, DKSalary), by=c("Name"="FullName"))
-    }
+    if (nrow(el) == 0) return(el)
+    dk <- load_dk_salaries()
+    fd <- load_fd_salaries()
+    if (!is.null(dk)) el <- el %>% left_join(dk %>% select(FullName, DKSalary), by=c("Name"="FullName"))
+    if (!is.null(fd)) el <- el %>% left_join(fd %>% select(FullName, FDSalary), by=c("Name"="FullName"))
     el
-  })
-  
-  output$salary_match_info <- renderUI({
-    req(values$analysis_entry_list)
-    ps <- parsed_salary()
-    if (is.null(ps)) return(NULL)
-    el   <- entry_list_with_salaries()
-    scol <- if(ps$platform=="FD") "FDSalary" else if(ps$platform=="DK") "DKSalary" else NULL
-    matched <- if(!is.null(scol) && scol %in% names(el)) sum(!is.na(el[[scol]])) else 0
-    plabel  <- if(ps$platform=="FD") "FanDuel" else if(ps$platform=="DK") "DraftKings" else "Unknown"
-    div(class="info-box",
-        p(style="margin:0;color:#ffffff;",
-          strong(paste0(plabel, " salary file: ")),
-          paste(matched, "of", nrow(el), "drivers matched")))
   })
   
   #----- ENTRY LIST OUTPUT -----#
@@ -727,12 +684,11 @@ server <- function(input, output, session) {
   output$tier_config_ui <- renderUI({
     req(values$analysis_entry_list)
     n <- values$num_tiers
-    all_teams <- if(!is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list)>0) {
-      sort(unique(values$analysis_entry_list$Team))
-    } else if (!is.null(values$analysis_filtered_data)) {
+    all_teams <- if(!is.null(values$analysis_filtered_data)) {
       sort(unique(values$analysis_filtered_data$team_name))
     } else character(0)
     
+    # Render all dropdowns with full choices - filtering handled by observer below
     tier_inputs <- lapply(1:n, function(i) {
       div(class="tier-box",
           div(class="tier-label", paste("Tier", i)),
@@ -744,6 +700,29 @@ server <- function(input, output, session) {
       )
     })
     tagList(tier_inputs)
+  })
+  
+  # Whenever any tier selection changes, update all other tiers to exclude already-selected teams
+  observe({
+    req(values$analysis_entry_list, values$num_tiers)
+    n <- values$num_tiers
+    all_teams <- if(!is.null(values$analysis_filtered_data)) {
+      sort(unique(values$analysis_filtered_data$team_name))
+    } else character(0)
+    
+    # Collect current selections for each tier
+    selections <- lapply(1:n, function(i) input[[paste0("tier_teams_",i)]])
+    
+    # For each tier, available choices = all teams minus teams selected in OTHER tiers
+    for (i in 1:n) {
+      other_selected <- unlist(selections[-i])
+      available <- setdiff(all_teams, other_selected)
+      # Keep current selection even if it would otherwise be excluded (already in this tier)
+      current <- selections[[i]]
+      updateSelectizeInput(session, paste0("tier_teams_",i),
+                           choices = available,
+                           selected = current)
+    }
   })
   
   observeEvent(input$add_tier, {
@@ -936,20 +915,26 @@ server <- function(input, output, session) {
           FDMax    = NA_real_
         )
       
-      # Merge salary data using parsed_salary() - handles both FD and DK formats
-      ps <- parsed_salary()
-      if (!is.null(ps) && ps$platform != "UNKNOWN") {
+      # Merge DK and FD salaries from working directory files
+      dk <- load_dk_salaries()
+      fd <- load_fd_salaries()
+      if (!is.null(dk)) {
         driver_sheet <- driver_sheet %>%
-          left_join(ps$data, by=c("Name"="FullName")) %>%
+          left_join(dk, by=c("Name"="FullName")) %>%
           mutate(
-            DKName   = if("DKName.y"   %in% names(.)) coalesce(DKName,   DKName.y)   else DKName,
-            DKSalary = if("DKSalary.y" %in% names(.)) coalesce(DKSalary, DKSalary.y) else DKSalary,
-            DKID     = if("DKID.y"     %in% names(.)) coalesce(DKID,     DKID.y)     else DKID,
-            FDName   = if("FDName.y"   %in% names(.)) coalesce(FDName,   FDName.y)   else FDName,
-            FDSalary = if("FDSalary.y" %in% names(.)) coalesce(FDSalary, FDSalary.y) else FDSalary,
-            FDID     = if("FDID.y"     %in% names(.)) coalesce(FDID,     FDID.y)     else FDID
-          ) %>%
-          select(-any_of(c("DKName.y","DKSalary.y","DKID.y","FDName.y","FDSalary.y","FDID.y")))
+            DKName   = coalesce(DKName,   DKName.y),
+            DKID     = coalesce(DKID,     DKID.y),
+            DKSalary = coalesce(DKSalary, DKSalary.y)
+          ) %>% select(-any_of(c("DKName.y","DKID.y","DKSalary.y")))
+      }
+      if (!is.null(fd)) {
+        driver_sheet <- driver_sheet %>%
+          left_join(fd, by=c("Name"="FullName")) %>%
+          mutate(
+            FDName   = coalesce(FDName,   FDName.y),
+            FDID     = coalesce(FDID,     FDID.y),
+            FDSalary = coalesce(FDSalary, FDSalary.y)
+          ) %>% select(-any_of(c("FDName.y","FDID.y","FDSalary.y")))
       }
       
       # Fall back: if DKName/FDName still blank after merge, use Name
@@ -1024,9 +1009,7 @@ server <- function(input, output, session) {
       panel.background=element_rect(fill="#2d2d2d"), plot.background=element_rect(fill="#2d2d2d"),
       panel.grid.major=element_line(color="#404040"), panel.grid.minor=element_line(color="#333333"))
     
-    dark_layout <- list(paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),
-                        xaxis=list(gridcolor="#404040",zerolinecolor="#666666"),
-                        yaxis=list(gridcolor="#404040",zerolinecolor="#666666"),height=700)
+    # dark_layout inlined below
     
     if (input$dom_visual_type == "score_dist") {
       viz_data <- plot_data %>% filter(!!sym(dom_rank_col)<=10, !!sym(dom_pts_col)>0)
@@ -1038,7 +1021,7 @@ Track: %s",
                                       !!sym(dom_rank_col),!!sym(dom_pts_col),Full_Name,track_name)),fill="forestgreen",alpha=0.7) +
         labs(title=paste(platform_name,"Dom Points by Dom Rank (Top 10)"),x="Dom Rank",y="Dom Points") +
         coord_flip() + scale_x_discrete(limits=factor(10:1)) + dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
     } else if (input$dom_visual_type == "rank_finish") {
       viz_data <- plot_data %>% filter(!!sym(dom_rank_col)<=10, !!sym(dom_pts_col)>0)
@@ -1051,7 +1034,7 @@ Track: %s",
         geom_smooth(aes(x=as.numeric(!!sym(dom_rank_col)),y=ps),method="loess",se=FALSE,color="#FFD700",linewidth=1.5) +
         labs(title=paste("Where Have Top",platform_name,"Dominators Finished"),x="Dom Rank",y="Finish Position") +
         scale_x_discrete(limits=factor(1:10)) + scale_y_continuous(breaks=seq(0,40,5)) + dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
     } else if (input$dom_visual_type %in% c("pts_by_finish","dom_pts_start","dom_rank_start","laps_led","laps_led_start","fast_laps","fast_laps_start")) {
       # Generic horizontal boxplot handler
@@ -1076,7 +1059,7 @@ Track: %%s" |>
                                         identity(), !!sym(cc$x), !!sym(cc$y), Full_Name, track_name)), fill=cc$fill, alpha=0.7) +
         labs(title=cc$ti, x=cc$xt, y=cc$yt) +
         coord_flip() + scale_x_discrete(limits=factor(40:1)) + dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout, height=900)
+      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
     } else if (input$dom_visual_type %in% c("driver_boxplot","team_boxplot","entry_boxplot")) {
       req(values$analysis_entry_list)
@@ -1161,8 +1144,7 @@ Track: %%s" |>
   output$pd_plot <- renderPlotly({
     req(pd_data(), input$pd_visual_type)
     plot_data <- pd_data()
-    dark_layout <- list(paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),
-                        xaxis=list(gridcolor="#404040",zerolinecolor="#666666"),yaxis=list(gridcolor="#404040",zerolinecolor="#666666"),height=700)
+    # dark_layout inlined below
     dark_theme <- theme_minimal()+theme(plot.title=element_text(size=20,face="bold",color="#FFD700"),
                                         plot.subtitle=element_text(size=14,color="#ffffff"),axis.title=element_text(size=16,color="#ffffff"),
                                         axis.text=element_text(size=14,color="#ffffff"),panel.background=element_rect(fill="#2d2d2d"),
@@ -1182,12 +1164,12 @@ Track: %s",Full_Name,start_ps,ps,PD,track_name)))+
         scale_size_continuous(range=c(2,12))+
         scale_x_continuous(limits=c(0,40),breaks=seq(0,40,5))+scale_y_continuous(limits=c(0,40),breaks=seq(0,40,5))+
         labs(title="Starting vs Finishing Position",x="Starting Position",y="Finishing Position")+dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
     } else if (input$pd_visual_type=="histogram") {
       p <- ggplot(plot_data,aes(x=PD))+geom_histogram(binwidth=1,fill="#FFD700",color="#000000",alpha=0.8)+
         geom_vline(xintercept=0,linetype="dashed",color="#FF0000",linewidth=1.5)+
         labs(title="Position Change Distribution",x="Place Differential",y="Count")+dark_theme
-      ggplotly(p) %>% layout(!!!dark_layout)
+      ggplotly(p,height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
     } else if (input$pd_visual_type=="boxplot_start") {
       viz_data <- plot_data %>% filter(start_ps<=40)
       p <- ggplot(viz_data,aes(x=factor(start_ps),y=PD,
@@ -1198,7 +1180,7 @@ Track: %s",start_ps,PD,Full_Name,track_name)))+
         geom_boxplot(fill="skyblue",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
         labs(title="Place Differential by Starting Position",x="Starting Position",y="Place Differential")+
         coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout,height=900)
+      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
     } else {
       viz_data <- plot_data %>% filter(ps<=40)
       p <- ggplot(viz_data,aes(x=factor(ps),y=PD,
@@ -1209,7 +1191,7 @@ Track: %s",ps,PD,Full_Name,track_name)))+
         geom_boxplot(fill="lightcoral",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
         labs(title="Place Differential by Finishing Position",x="Finishing Position",y="Place Differential")+
         coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout,height=900)
+      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
     }
   })
   
@@ -1332,7 +1314,7 @@ Track: %s",ps,PD,Full_Name,track_name)))+
     rank_col   <- if(platform=="DK") "DKRank"   else "FDRank"
     platform_name <- if(platform=="DK") "DraftKings" else "FanDuel"
     
-    dark_layout <- list(paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),height=700)
+    # dark_layout inlined below
     dark_theme <- theme_minimal()+theme(
       plot.title=element_text(size=18,face="bold",color="#FFD700"),
       axis.title=element_text(size=16,color="#ffffff"),axis.text=element_text(size=14,color="#ffffff"),
@@ -1351,7 +1333,7 @@ Track: %s",!!sym(rank_col),!!sym(points_col),Full_Name,track_name)),fill="dodger
         geom_smooth(aes(x=as.numeric(!!sym(rank_col)),y=!!sym(points_col),group=1),method="loess",se=FALSE,color="#FFD700",linewidth=1.5)+
         labs(title=paste(platform_name,"Points by Fantasy Rank"),x="Rank",y="Points")+
         scale_x_discrete(limits=factor(1:15))+dark_theme
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
     } else if (input$fs_visual_type %in% c("components","components_start","components_finish")) {
       make_comp <- function(d) {
@@ -1374,7 +1356,7 @@ Track: %s",!!sym(rank_col),!!sym(points_col),Full_Name,track_name)),fill="dodger
         geom_text(aes(label=sprintf("%.0f%%",Pct)),position=position_stack(vjust=0.5),color="white",fontface="bold",size=3)+
         scale_fill_manual(values=c("Finish Position"="#3406cc","Place Differential"="#33cc33","Dominator Points"="#ff9900"))+
         labs(title=paste(platform_name,"Scoring Components"),x=grp_col,y="%",fill="Type")+dark_theme
-      ggplotly(p,tooltip=c("x","y","fill")) %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip=c("x","y","fill"),height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
     } else {
       filt_col <- if(input$fs_visual_type=="score_by_start") "start_ps" else "ps"
@@ -1391,7 +1373,7 @@ Track: %%s" |>
              x=if(filt_col=="start_ps")"Starting Position" else "Finish Position",y="Points")+
         scale_x_discrete(limits=factor(1:40))+dark_theme+
         theme(axis.text.x=element_text(angle=45,hjust=1,color="#ffffff"))
-      ggplotly(p,tooltip="text") %>% layout(!!!dark_layout)
+      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
     }
   })
 }
