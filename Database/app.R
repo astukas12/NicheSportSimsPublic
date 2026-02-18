@@ -256,7 +256,7 @@ ui <- fluidPage(
                                                       fluidRow(
                                                         column(3,
                                                                radioButtons("fr_view", "View By:",
-                                                                            choices=c("Driver"="driver","Car/Team"="team","Tier"="tier"),
+                                                                            choices=c("Driver"="driver","Car"="car","Team"="team","Tier"="tier"),
                                                                             selected="driver", inline=TRUE)
                                                         ),
                                                         column(3,
@@ -760,14 +760,13 @@ server <- function(input, output, session) {
     
     if (input$fr_time == "2025") data <- data %>% filter(race_season == 2025)
     
-    # Filter to entry list drivers if available
-    if (!is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list) > 0 && input$fr_view == "driver") {
-      entry_drivers <- values$analysis_entry_list$Name
-      data <- data %>% filter(Full_Name %in% entry_drivers)
+    # Filter to entry list if available
+    has_entry <- !is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list) > 0
+    if (has_entry && input$fr_view == "driver") {
+      data <- data %>% filter(Full_Name %in% values$analysis_entry_list$Name)
     }
-    if (!is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list) > 0 && input$fr_view == "team") {
-      entry_teams <- unique(values$analysis_entry_list$Team)
-      data <- data %>% filter(team_name %in% entry_teams)
+    if (has_entry && input$fr_view %in% c("car", "team")) {
+      data <- data %>% filter(team_name %in% unique(values$analysis_entry_list$Team))
     }
     
     if (nrow(data) == 0) return(NULL)
@@ -775,10 +774,13 @@ server <- function(input, output, session) {
     if (input$fr_view == "driver") {
       result <- calc_finish_rates(data, "Full_Name", "Driver")
       result <- result %>% arrange(`Avg Finish`)
-    } else if (input$fr_view == "team") {
+    } else if (input$fr_view == "car") {
       result <- data %>%
-        mutate(team_car = paste0(team_name, " #", car_number))
-      result <- calc_finish_rates(result, "team_car", "Car / Team")
+        mutate(car_entry = paste0("#", car_number, " (", team_name, ")"))
+      result <- calc_finish_rates(result, "car_entry", "Car")
+      result <- result %>% arrange(`Avg Finish`)
+    } else if (input$fr_view == "team") {
+      result <- calc_finish_rates(data, "team_name", "Team")
       result <- result %>% arrange(`Avg Finish`)
     } else if (input$fr_view == "tier") {
       n <- values$num_tiers
@@ -800,7 +802,7 @@ server <- function(input, output, session) {
   output$finish_rates_table <- DT::renderDataTable({
     req(finish_rates_data())
     dt <- DT::datatable(finish_rates_data(),
-                        options=list(pageLength=50, scrollX=TRUE, dom='fti',
+                        options=list(pageLength=50, scrollX=TRUE, dom='ti',
                                      columnDefs=list(list(className="dt-center",targets="_all"))),
                         rownames=FALSE, class="display nowrap compact")
     
