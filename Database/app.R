@@ -8,6 +8,7 @@ library(DT)
 library(dplyr)
 library(readr)
 library(readxl)
+library(openxlsx)  # Added for Excel writing
 library(shinycssloaders)
 library(shinyWidgets)
 library(shinyjs)
@@ -515,25 +516,30 @@ server <- function(input, output, session) {
           filtered_nascar %>%
             group_by(race_id) %>%
             summarize(
-              total_laps = if("actual_laps" %in% names(cur_data())) first(actual_laps) else if("TotalLaps" %in% names(cur_data())) first(TotalLaps) else NA_real_,
+              total_laps = if("act_laps" %in% names(cur_data())) first(act_laps) else if("actual_laps" %in% names(cur_data())) first(actual_laps) else if("TotalLaps" %in% names(cur_data())) first(TotalLaps) else NA_real_,
               caution_laps = if("number_of_caution_laps" %in% names(cur_data())) first(number_of_caution_laps) else if("CautionLaps" %in% names(cur_data())) first(CautionLaps) else 0,
               lead_lap = sum(LapsDown==0, na.rm=TRUE),
               crash_dnfs = sum(finishing_status %in% c("Accident","DVP","Damage"), na.rm=TRUE),
               mech_dnfs = sum(!finishing_status %in% c("Running","Accident","DVP","Damage"), na.rm=TRUE),
+              # Calculate TOTAL dominator points scored by ALL drivers in this race
+              DK_Dom_Total = if("DKSP" %in% names(cur_data()) && any(!is.na(DKSP))) {
+                sum(DKSP, na.rm=TRUE)
+              } else if(all(c("fast_laps","lead_laps") %in% names(cur_data()))) {
+                sum((fast_laps * 0.45) + (lead_laps * 0.25), na.rm=TRUE)
+              } else NA_real_,
+              FD_Dom_Total = if("FDSP" %in% names(cur_data()) && any(!is.na(FDSP))) {
+                sum(FDSP, na.rm=TRUE)
+              } else if("lead_laps" %in% names(cur_data())) {
+                sum(lead_laps * 0.1, na.rm=TRUE)
+              } else NA_real_,
               .groups='drop'
             ), by="race_id"
         ) %>%
         mutate(
           total_laps = if_else(is.na(total_laps), scheduled_laps, total_laps),
-          green_flag_laps = total_laps - caution_laps
+          DK_Dom_Total = round(DK_Dom_Total, 1),
+          FD_Dom_Total = round(FD_Dom_Total, 1)
         ) %>%
-        rowwise() %>%
-        mutate(
-          dom_points = list(calc_dom_points(total_laps, green_flag_laps)),
-          DK_Dom_Available = dom_points$dk,
-          FD_Dom_Available = dom_points$fd
-        ) %>%
-        select(-dom_points) %>%
         ungroup()
       
       values$analysis_filtered_data <- filtered_nascar
@@ -556,7 +562,7 @@ server <- function(input, output, session) {
       select(Season=race_season, Track=track_name, Race=race_name, Cars=number_of_cars_in_field,
              Qualifying, Leaders=number_of_leaders, Cautions=number_of_cautions,
              `Scheduled Laps`=scheduled_laps, `Actual Laps`=total_laps,
-             `DK Dom Avail`=DK_Dom_Available, `FD Dom Avail`=FD_Dom_Available,
+             `DK Dom`=DK_Dom_Total, `FD Dom`=FD_Dom_Total,
              `Lead Lap`=lead_lap, `Crash DNFs`=crash_dnfs, `Mech DNFs`=mech_dnfs) %>%
       arrange(desc(Season))
     DT::datatable(race_selection_data, selection='none',
@@ -620,7 +626,8 @@ server <- function(input, output, session) {
                                  textDecoration="bold",border="TopBottomLeftRight",borderColour="#000000")
       addStyle(wb,"Starting Grid",headerStyle,rows=1,cols=1:ncol(entry_list_with_salaries()),gridExpand=TRUE)
       saveWorkbook(wb,file,overwrite=TRUE)
-    }
+    },
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   )
   
   #----- FINISH RATES -----#
@@ -688,9 +695,6 @@ server <- function(input, output, session) {
     has_entry <- !is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list) > 0
     if (has_entry && input$fr_view == "driver") {
       data <- data %>% filter(Full_Name %in% values$analysis_entry_list$Name)
-    }
-    if (has_entry && input$fr_view %in% c("car", "team")) {
-      data <- data %>% filter(team_name %in% unique(values$analysis_entry_list$Team))
     }
     
     if (nrow(data) == 0) return(NULL)
@@ -813,7 +817,8 @@ server <- function(input, output, session) {
       addWorksheet(wb,"Race_Weights"); writeData(wb,"Race_Weights",race_weights)
       addWorksheet(wb,"Race_Profiles"); writeData(wb,"Race_Profiles",race_profiles)
       saveWorkbook(wb,file,overwrite=TRUE)
-    }
+    },
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   )
   
   # ---- CREATE INPUT FILE ----#
@@ -906,7 +911,8 @@ server <- function(input, output, session) {
       }
       
       saveWorkbook(wb, file, overwrite=TRUE)
-    }
+    },
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   )
   
   #----- DOMINATOR VISUALIZATIONS -----#
