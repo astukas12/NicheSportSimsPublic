@@ -275,6 +275,45 @@ ui <- fluidPage(
         letter-spacing: 1px;
       }
       
+      /* Yellow sliders for Filter Review */
+      #filter_salary .irs-bar,
+      #filter_avgown .irs-bar,
+      #filter_avgstart .irs-bar,
+      #filter_totalown .irs-bar,
+      #filter_totalstart .irs-bar {
+        background: #FFE500 !important;
+        border-top: 1px solid #FFE500 !important;
+        border-bottom: 1px solid #FFE500 !important;
+      }
+      
+      #filter_salary .irs-from,
+      #filter_salary .irs-to,
+      #filter_salary .irs-single,
+      #filter_avgown .irs-from,
+      #filter_avgown .irs-to,
+      #filter_avgown .irs-single,
+      #filter_avgstart .irs-from,
+      #filter_avgstart .irs-to,
+      #filter_avgstart .irs-single,
+      #filter_totalown .irs-from,
+      #filter_totalown .irs-to,
+      #filter_totalown .irs-single,
+      #filter_totalstart .irs-from,
+      #filter_totalstart .irs-to,
+      #filter_totalstart .irs-single {
+        background: #FFE500 !important;
+        color: #000000 !important;
+      }
+      
+      #filter_salary .irs-handle,
+      #filter_avgown .irs-handle,
+      #filter_avgstart .irs-handle,
+      #filter_totalown .irs-handle,
+      #filter_totalstart .irs-handle {
+        background: #FFE500 !important;
+        border: 2px solid #FFE500 !important;
+      }
+      
       /* Fighter chip styling */
       .fighter-chip {
         display: inline-block;
@@ -1625,21 +1664,21 @@ server <- function(input, output, session) {
                                     column(6,
                                            div(style = "margin-bottom: 10px;",
                                                div(style = "color: #FFFFFF; font-size: 12px; margin-bottom: 3px;", "Salary (K)"),
-                                               sliderInput("filter_salary", NULL, min = 39, max = 50, value = c(39, 50), step = 0.5, width = "100%")),
+                                               sliderInput("filter_salary", NULL, min = 0, max = 50, value = c(0, 50), step = 0.5, width = "100%")),
                                            div(style = "margin-bottom: 10px;",
                                                div(style = "color: #FFFFFF; font-size: 12px; margin-bottom: 3px;", "Avg Own"),
-                                               sliderInput("filter_avgown", NULL, min = 0, max = 50, value = c(0, 50), step = 0.1, width = "100%")),
+                                               sliderInput("filter_avgown", NULL, min = 0, max = 100, value = c(0, 100), step = 0.1, width = "100%")),
                                            div(style = "margin-bottom: 10px;",
                                                div(style = "color: #FFFFFF; font-size: 12px; margin-bottom: 3px;", "Avg Start"),
-                                               sliderInput("filter_avgstart", NULL, min = 0, max = 40, value = c(0, 40), step = 0.5, width = "100%"))
+                                               sliderInput("filter_avgstart", NULL, min = 0, max = 50, value = c(0, 50), step = 0.5, width = "100%"))
                                     ),
                                     column(6,
                                            div(style = "margin-bottom: 10px;",
                                                div(style = "color: #FFFFFF; font-size: 12px; margin-bottom: 3px;", "Total Own"),
-                                               sliderInput("filter_totalown", NULL, min = 0, max = 300, value = c(0, 300), step = 5, width = "100%")),
+                                               sliderInput("filter_totalown", NULL, min = 0, max = 500, value = c(0, 500), step = 5, width = "100%")),
                                            div(style = "margin-bottom: 10px;",
                                                div(style = "color: #FFFFFF; font-size: 12px; margin-bottom: 3px;", "Total Start"),
-                                               sliderInput("filter_totalstart", NULL, min = 0, max = 200, value = c(0, 200), step = 5, width = "100%"))
+                                               sliderInput("filter_totalstart", NULL, min = 0, max = 300, value = c(0, 300), step = 5, width = "100%"))
                                     )
                                   )
                               )
@@ -1676,8 +1715,8 @@ server <- function(input, output, session) {
                                  div(class = "stat-label", "Top 10%"),
                                  div(class = "stat-value", textOutput("filter_top10")))),
                    column(2, div(class = "stat-box",
-                                 div(class = "stat-label", "Avg Score"),
-                                 div(class = "stat-value", textOutput("filter_avg_score"))))
+                                 div(class = "stat-label", "Top 20%"),
+                                 div(class = "stat-value", textOutput("filter_top20"))))
                  ),
                  br(),
                  
@@ -3615,9 +3654,11 @@ server <- function(input, output, session) {
     paste0(round(count / nrow(filter_review_pool()) * 100, 1), "%")
   })
   
-  output$filter_avg_score <- renderText({
-    req(filter_review_pool())
-    round(mean(filter_review_pool()$ActualScore, na.rm = TRUE), 1)
+  output$filter_top20 <- renderText({
+    req(filter_review_pool(), rv$data)
+    threshold <- quantile(rv$data$Points, 0.80, na.rm = TRUE)
+    count <- sum(filter_review_pool()$ActualScore >= threshold, na.rm = TRUE)
+    paste0(round(count / nrow(filter_review_pool()) * 100, 1), "%")
   })
   
   output$filter_lineups_table <- renderDT({
