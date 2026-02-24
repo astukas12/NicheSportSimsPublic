@@ -1567,7 +1567,7 @@ server <- function(input, output, session) {
         ),
         
         # Ownership vs ActualOwnership Tab
-        tabPanel("Ownership vs ActualOwnership",
+        tabPanel("Ownership",
                  br(),
                  h4("Predicted Ownership vs Actual Duplication", style = "color: #FFE500;"),
                  p("How often were lineups with similar predicted ownership actually duplicated?", 
@@ -1777,7 +1777,7 @@ server <- function(input, output, session) {
         ),
         
         # Ownership/Dupe Analysis Tab
-        tabPanel("Ownership vs ActualOwnership",
+        tabPanel("Ownership",
                  br(),
                  h4("Predicted Ownership vs Actual Duplication", style = "color: #FFE500;"),
                  p("How often were lineups with similar predicted ownership actually duplicated?", 
@@ -2112,7 +2112,7 @@ server <- function(input, output, session) {
                  y = ~ActualScore,
                  color = ~Status,
                  colors = c("In Sim & Played" = "#FFE500",
-                            "In Sim Only" = "#666666",
+                            "In Sim Only" = "#3498db",
                             "Played (Not in Sim)" = "#FF0000"),
                  type = 'scatter',
                  mode = 'markers',
@@ -3254,7 +3254,7 @@ server <- function(input, output, session) {
   output$all_sim_lineups_table <- renderDT({
     req(rv$unified_pool)
     
-    data <- rv$unified_pool[InSim == TRUE]
+    data <- rv$unified_pool[InSim == TRUE][order(-ActualScore)]
     
     player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
     
@@ -3335,7 +3335,9 @@ server <- function(input, output, session) {
     
     plot_ly(finish_data, x = ~Finish, y = ~Percentage, type = 'bar',
             marker = list(color = '#FFE500', line = list(color = '#000000', width = 1)),
-            text = ~paste0(round(Percentage, 1), "%"), textposition = 'outside') %>%
+            text = ~paste0(round(Percentage, 1), "%"), 
+            textposition = 'outside',
+            textfont = list(color = '#FFFFFF', size = 14)) %>%
       layout(
         title = list(text = "Sim Lineups by Finish Threshold", font = list(color = '#FFE500')),
         xaxis = list(title = "", color = '#FFFFFF'),
@@ -3421,7 +3423,7 @@ server <- function(input, output, session) {
             pointpos = 0,
             color = ~Group,
             colors = c("Sim (Played)" = "#FFE500", 
-                       "Sim (Not Played)" = "#666666", 
+                       "Sim (Not Played)" = "#3498db", 
                        "Contest Only" = "#FF0000"),
             marker = list(size = 4, opacity = 0.5)) %>%
       layout(
