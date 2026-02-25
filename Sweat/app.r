@@ -1813,18 +1813,6 @@ server <- function(input, output, session) {
                  br(),
                  h5("Performance by Salary Bucket", style = "color: #FFE500;"),
                  DTOutput("salary_buckets")
-        ),
-        
-        # Ownership/Dupe Analysis Tab
-        tabPanel("Ownership",
-                 br(),
-                 h4("Predicted Ownership vs Actual Duplication", style = "color: #FFE500;"),
-                 p("How often were lineups with similar predicted ownership actually duplicated?", 
-                   style = "color: #CCCCCC;"),
-                 plotlyOutput("ownership_dupe_scatter", height = "600px"),
-                 br(),
-                 h4("Duplication Statistics by Ownership Bucket", style = "color: #FFE500;"),
-                 DTOutput("ownership_dupe_table")
         )
       )
     )
@@ -3223,14 +3211,26 @@ server <- function(input, output, session) {
   # ============================================================================
   
   output$ownership_dupe_scatter <- renderPlotly({
-    req(rv$unified_pool)
+    req(rv$unified_pool, rv$data)
     
     data <- rv$unified_pool[InSim == TRUE & InContest == TRUE]
     
+    if (nrow(data) == 0) {
+      return(plot_ly() %>% layout(
+        title = list(text = "No sim lineups were played in contest", font = list(color = '#FFE500')),
+        paper_bgcolor = '#000000', plot_bgcolor = '#1a1a1a',
+        xaxis = list(showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE),
+        yaxis = list(showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE)
+      ))
+    }
+    
     if (nrow(data) < 2) {
       return(plot_ly() %>% layout(
-        title = list(text = "Not enough played lineups", font = list(color = '#FFE500')),
-        paper_bgcolor = '#000000', plot_bgcolor = '#1a1a1a'
+        title = list(text = paste("Only", nrow(data), "sim lineup played - need at least 2 for scatter"), 
+                     font = list(color = '#FFE500')),
+        paper_bgcolor = '#000000', plot_bgcolor = '#1a1a1a',
+        xaxis = list(showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE),
+        yaxis = list(showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE)
       ))
     }
     
@@ -3243,7 +3243,7 @@ server <- function(input, output, session) {
                           "Score:", round(ActualScore, 1)),
             hoverinfo = 'text') %>%
       layout(
-        title = list(text = "Predicted Ownership % vs Times Actually Played", 
+        title = list(text = paste("Predicted Ownership % vs Times Actually Played (", nrow(data), "lineups)"), 
                      font = list(color = '#FFE500', size = 18)),
         xaxis = list(title = "Predicted Ownership %", color = '#FFFFFF', gridcolor = '#333333'),
         yaxis = list(title = "Times Played in Contest", color = '#FFFFFF', gridcolor = '#333333'),
