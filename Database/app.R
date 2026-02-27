@@ -221,7 +221,8 @@ ui <- fluidPage(
                                                       uiOutput("entry_list_title", inline=TRUE),
                                                       div(style="display:flex;gap:8px;align-items:center;",
                                                           downloadButton("download_entry_list_csv", "CSV", class="btn-success", style="margin:0;"),
-                                                          downloadButton("download_entry_list_excel", "Excel", class="btn-success", style="margin:0;")
+                                                          downloadButton("download_entry_list_excel", "Excel", class="btn-success", style="margin:0;"),
+                                                          downloadButton("download_input_file","Create Input File",class="btn-warning",style="margin:0;")
                                                       )
                                                   ),
                                                   div(class = "box-body",
@@ -301,8 +302,7 @@ ui <- fluidPage(
                                                       h3("Dominator Data", class="box-title", style="margin:0;"),
                                                       div(style="display:flex;gap:8px;",
                                                           downloadButton("download_dominator_csv","CSV",class="btn-success",style="margin:0;"),
-                                                          downloadButton("download_dominator_profile","Download Profile",class="btn-success",style="margin:0;"),
-                                                          downloadButton("download_input_file","Create Input File",class="btn-warning",style="margin:0;")
+                                                          downloadButton("download_dominator_profile","Download Profile",class="btn-success",style="margin:0;")
                                                       )
                                                   ),
                                                   div(class="box-body", withSpinner(DT::dataTableOutput("dominator_data_table")))
@@ -996,59 +996,43 @@ server <- function(input, output, session) {
   )
   
   # ---- CREATE INPUT FILE ----#
+  # Creates simulation input file with:
+  # - Driver sheet: Only includes drivers with DK/FD salaries (if files loaded)
+  # - Race_Profiles sheet: Historical dominator data
+  # - Race_Weights sheet: Race weights for simulation
+  # - FDLaps sheet: FD lap points by finish position
   output$download_input_file <- downloadHandler(
     filename=function() paste0("NASCAR_Sim_Input_",Sys.Date(),".xlsx"),
     content=function(file) {
       req(dominator_data(), values$analysis_races_available, values$analysis_entry_list)
       
       # --- Build Driver sheet ---
-      # Start with entry list (already has salaries merged)
+      # Start with entry list (already has salaries merged if files exist)
       el <- entry_list_with_salaries()
       
-      # Get finish rates data from filtered races
-      fr_data <- values$analysis_filtered_data
-      entry_drivers <- values$analysis_entry_list$Name
-      
-      if (length(entry_drivers) > 0 && !is.null(fr_data)) {
-        fr_sheet <- fr_data %>%
-          filter(Full_Name %in% entry_drivers) %>%
-          group_by(Full_Name) %>%
-          summarize(
-            W   = round(mean(ps == 1,  na.rm=TRUE) * 100, 1),
-            T3  = round(mean(ps <= 3,  na.rm=TRUE) * 100, 1),
-            T5  = round(mean(ps <= 5,  na.rm=TRUE) * 100, 1),
-            T10 = round(mean(ps <= 10, na.rm=TRUE) * 100, 1),
-            T15 = round(mean(ps <= 15, na.rm=TRUE) * 100, 1),
-            T20 = round(mean(ps <= 20, na.rm=TRUE) * 100, 1),
-            T25 = round(mean(ps <= 25, na.rm=TRUE) * 100, 1),
-            T30 = round(mean(ps <= 30, na.rm=TRUE) * 100, 1),
-            .groups = 'drop'
-          )
-        
-        # Get DKMax and FDMax from dominator data
-        dom_max <- dominator_data() %>%
-          filter(Full_Name %in% entry_drivers) %>%
-          group_by(Full_Name) %>%
-          summarize(
-            DKMax = round(max(DKSP, na.rm=TRUE), 1),
-            FDMax = round(max(FDSP, na.rm=TRUE), 1),
-            .groups = 'drop'
-          )
-      } else {
-        # Create empty data frames if no data
-        fr_sheet <- data.frame(Full_Name = character(), W=numeric(), T3=numeric(), T5=numeric(),
-                               T10=numeric(), T15=numeric(), T20=numeric(), T25=numeric(), T30=numeric())
-        dom_max <- data.frame(Full_Name = character(), DKMax=numeric(), FDMax=numeric())
+      # Only include drivers that have salary data (at least one platform)
+      if ("DK_Salary" %in% names(el) || "FD_Salary" %in% names(el)) {
+        # Filter to only drivers with at least one salary
+        if ("DK_Salary" %in% names(el) && "FD_Salary" %in% names(el)) {
+          el <- el %>% filter(!is.na(DK_Salary) | !is.na(FD_Salary))
+        } else if ("DK_Salary" %in% names(el)) {
+          el <- el %>% filter(!is.na(DK_Salary))
+        } else if ("FD_Salary" %in% names(el)) {
+          el <- el %>% filter(!is.na(FD_Salary))
+        }
       }
+      
       
       # Build the Driver sheet
       driver_sheet <- el %>%
         mutate(
           FDName   = Name,
-          DKName   = Name,
-          DKID     = NA_character_,
-          FDID     = NA_character_
+          DKName   = Name
         )
+      
+      # Add DKID and FDID if they exist from salary files, otherwise create empty
+      if (!"DKID" %in% names(driver_sheet)) driver_sheet$DKID <- NA_character_
+      if (!"FDID" %in% names(driver_sheet)) driver_sheet$FDID <- NA_character_
       
       # Add DK/FD Salary columns if they exist, otherwise create empty ones
       if (!"DK_Salary" %in% names(driver_sheet)) driver_sheet$DKSalary <- NA_real_
@@ -1064,23 +1048,10 @@ server <- function(input, output, session) {
           FDOP = NA_real_
         )
       
-      # Merge finish rates
-      driver_sheet <- driver_sheet %>%
-        left_join(fr_sheet, by=c("Name"="Full_Name"))
-      
-      # Merge DKMax and FDMax
-      driver_sheet <- driver_sheet %>%
-        left_join(dom_max, by=c("Name"="Full_Name"))
-      
-      # Merge finish rates
-      driver_sheet <- driver_sheet %>%
-        left_join(fr_sheet, by=c("Name"="Full_Name"))
-      
-      # Final column order
+      # Final column order - just basic info + salaries + ownership
       driver_sheet <- driver_sheet %>%
         select(FDName, DKName, Name, DKID, FDID, Car, Team,
-               DKSalary, FDSalary, Starting, DKOP, FDOP,
-               W, T3, T5, T10, T15, T20, T25, T30, DKMax, FDMax)
+               DKSalary, FDSalary, Start, DKOP, FDOP)
       
       # --- Sheet 2: Race_Profiles ---
       race_profiles <- dominator_data() %>%
