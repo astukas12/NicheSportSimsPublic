@@ -640,39 +640,74 @@ server <- function(input, output, session) {
                           "3" = "Trucks",
                           "Cup")  # default
     
-    # Try to load DraftKings salary file
-    dk_file <- paste0("DK", series_name, ".csv")
+    # Try to load DraftKings salary file (try multiple naming patterns)
+    dk_file <- NULL
+    for (pattern in c(paste0("DK", series_name, ".csv"),
+                      paste0("DKSalaries", series_name, ".csv"),
+                      paste0("dk", tolower(series_name), ".csv"))) {
+      if (file.exists(pattern)) {
+        dk_file <- pattern
+        break
+      }
+    }
+    
     dk_salaries <- NULL
-    if (file.exists(dk_file)) {
+    if (!is.null(dk_file)) {
       tryCatch({
         dk_salaries <- read_csv(dk_file, show_col_types = FALSE)
-        # Standardize column names - adjust these based on actual DK CSV format
-        # Common DK formats have: Name, Salary, Position, etc.
+        # DK format: Position, Name + ID, Name, ID, Roster Position, Salary, ...
         if ("Name" %in% names(dk_salaries) && "Salary" %in% names(dk_salaries)) {
-          dk_salaries <- dk_salaries %>% 
-            select(Name, DK_Salary = Salary) %>%
-            mutate(Name = trimws(Name))  # Clean whitespace
+          if ("ID" %in% names(dk_salaries)) {
+            dk_salaries <- dk_salaries %>% 
+              select(Name, DK_Salary = Salary, DKID = ID) %>%
+              mutate(Name = trimws(Name))
+          } else {
+            dk_salaries <- dk_salaries %>% 
+              select(Name, DK_Salary = Salary) %>%
+              mutate(Name = trimws(Name))
+          }
         }
       }, error = function(e) {
         message("Could not load ", dk_file, ": ", e$message)
       })
     }
     
-    # Try to load FanDuel salary file
-    fd_file <- paste0("FD", series_name, ".csv")
+    # Try to load FanDuel salary file (try multiple naming patterns)
+    fd_file <- NULL
+    for (pattern in c(paste0("FD", series_name, ".csv"),
+                      paste0("FDSalaries", series_name, ".csv"),
+                      paste0("fd", tolower(series_name), ".csv"))) {
+      if (file.exists(pattern)) {
+        fd_file <- pattern
+        break
+      }
+    }
+    
     fd_salaries <- NULL
-    if (file.exists(fd_file)) {
+    if (!is.null(fd_file)) {
       tryCatch({
         fd_salaries <- read_csv(fd_file, show_col_types = FALSE)
         # Standardize column names - adjust based on actual FD CSV format
         if ("Nickname" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
-          fd_salaries <- fd_salaries %>% 
-            select(Name = Nickname, FD_Salary = Salary) %>%
-            mutate(Name = trimws(Name))
+          if ("Id" %in% names(fd_salaries)) {
+            fd_salaries <- fd_salaries %>% 
+              select(Name = Nickname, FD_Salary = Salary, FDID = Id) %>%
+              mutate(Name = trimws(Name))
+          } else {
+            fd_salaries <- fd_salaries %>% 
+              select(Name = Nickname, FD_Salary = Salary) %>%
+              mutate(Name = trimws(Name))
+          }
         } else if ("Name" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
-          fd_salaries <- fd_salaries %>% 
-            select(Name, FD_Salary = Salary) %>%
-            mutate(Name = trimws(Name))
+          if ("Id" %in% names(fd_salaries)) {
+            fd_salaries <- fd_salaries %>% 
+              select(Name, FD_Salary = Salary, FDID = Id) %>%
+              mutate(Name = trimws(Name))
+          } else {
+            fd_salaries <- fd_salaries %>% 
+              select(Name, FD_Salary = Salary) %>%
+              mutate(Name = trimws(Name))
+          }
         }
       }, error = function(e) {
         message("Could not load ", fd_file, ": ", e$message)
@@ -686,23 +721,29 @@ server <- function(input, output, session) {
     # Merge salaries if available
     if (!is.null(dk_salaries)) {
       dk_salaries <- dk_salaries %>% mutate(Name_Clean = trimws(Name))
-      entry_list <- entry_list %>%
-        left_join(dk_salaries %>% select(Name_Clean, DK_Salary), by = "Name_Clean")
+      merge_cols <- intersect(c("DK_Salary", "DKID"), names(dk_salaries))
+      if (length(merge_cols) > 0) {
+        entry_list <- entry_list %>%
+          left_join(dk_salaries %>% select(Name_Clean, all_of(merge_cols)), by = "Name_Clean")
+      }
     }
     
     if (!is.null(fd_salaries)) {
       fd_salaries <- fd_salaries %>% mutate(Name_Clean = trimws(Name))
-      entry_list <- entry_list %>%
-        left_join(fd_salaries %>% select(Name_Clean, FD_Salary), by = "Name_Clean")
+      merge_cols <- intersect(c("FD_Salary", "FDID"), names(fd_salaries))
+      if (length(merge_cols) > 0) {
+        entry_list <- entry_list %>%
+          left_join(fd_salaries %>% select(Name_Clean, all_of(merge_cols)), by = "Name_Clean")
+      }
     }
     
     # Remove the cleaning column
     entry_list <- entry_list %>% select(-Name_Clean)
     
     # Reorder columns to put salaries after basic info
-    if ("DK_Salary" %in% names(entry_list) || "FD_Salary" %in% names(entry_list)) {
+    if (any(c("DK_Salary", "FD_Salary", "DKID", "FDID") %in% names(entry_list))) {
       base_cols <- c("Start", "Name", "Car", "Team", "Make", "CC", "Sponsor")
-      salary_cols <- intersect(c("DK_Salary", "FD_Salary"), names(entry_list))
+      salary_cols <- intersect(c("DK_Salary", "FD_Salary", "DKID", "FDID"), names(entry_list))
       other_cols <- setdiff(names(entry_list), c(base_cols, salary_cols))
       entry_list <- entry_list %>% select(all_of(c(base_cols, salary_cols, other_cols)))
     }
@@ -867,13 +908,13 @@ server <- function(input, output, session) {
                                      columnDefs=list(list(className="dt-center",targets="_all"))),
                         rownames=FALSE, class="display nowrap compact")
     
-    # Color the percentage columns green-to-yellow gradient
+    # Color the percentage columns black-to-gold gradient
     pct_cols <- c("Win","Top 3","Top 5","Top 10","Top 15","Top 20","Top 25","Top 30")
     pct_cols_present <- intersect(pct_cols, names(finish_rates_data()))
     for (col in pct_cols_present) {
       dt <- dt %>% formatStyle(col,
                                backgroundColor = styleInterval(c(0,5,10,20,40,60),
-                                                               c('#2d2d2d','#1a3a1a','#1a5a1a','#228b22','#90ee90','#ffd700','#ffd700')),
+                                                               c('#2d2d2d','#1a1a1a','#333333','#555555','#DAA520','#FFD700','#FFD700')),
                                color = styleInterval(c(40), c('#ffffff','#000000')))
     }
     dt
@@ -906,7 +947,7 @@ server <- function(input, output, session) {
     req(dominator_data())
     display_data <- dominator_data() %>%
       filter(DKSP>0|FDSP>0) %>%
-      select(Driver=Full_Name,Start=start_ps,Finish=ps,Qualifying,Team=team_name,
+      select(Driver=Full_Name,Start=start_ps,Finish=ps,Team=team_name,
              `Laps Led`=lead_laps,`Fast Laps`=fast_laps,`DK Dom Pts`=DKSP,`DK Dom Rank`=DKDomRank,
              `FD Dom Pts`=FDSP,`FD Dom Rank`=FDDomRank,Season=race_season,Race=race_name,Track=track_name) %>%
       mutate(`DK Dom Pts`=round(`DK Dom Pts`,1),`FD Dom Pts`=round(`FD Dom Pts`,1)) %>%
@@ -921,7 +962,7 @@ server <- function(input, output, session) {
     content=function(file) {
       req(dominator_data())
       export_data <- dominator_data() %>% filter(DKSP>0|FDSP>0) %>%
-        select(Driver=Full_Name,Start=start_ps,Finish=ps,Qualifying,Team=team_name,
+        select(Driver=Full_Name,Start=start_ps,Finish=ps,Team=team_name,
                `Laps Led`=lead_laps,`Fast Laps`=fast_laps,`DK Dom Pts`=DKSP,`DK Dom Rank`=DKDomRank,
                `FD Dom Pts`=FDSP,`FD Dom Rank`=FDDomRank,Season=race_season,Race=race_name,Track=track_name) %>%
         mutate(`DK Dom Pts`=round(`DK Dom Pts`,1),`FD Dom Pts`=round(`FD Dom Pts`,1))
@@ -961,42 +1002,75 @@ server <- function(input, output, session) {
       req(dominator_data(), values$analysis_races_available, values$analysis_entry_list)
       
       # --- Build Driver sheet ---
-      # Start with entry list
+      # Start with entry list (already has salaries merged)
       el <- entry_list_with_salaries()
-      entry_drivers <- values$analysis_entry_list$Name
-      if (length(entry_drivers) > 0)
-        fr_data <- fr_data %>% filter(Full_Name %in% entry_drivers)
       
-      fr_sheet <- fr_data %>%
-        group_by(Full_Name) %>%
-        summarize(
-          W   = round(mean(ps == 1,  na.rm=TRUE) * 100, 1),
-          T3  = round(mean(ps <= 3,  na.rm=TRUE) * 100, 1),
-          T5  = round(mean(ps <= 5,  na.rm=TRUE) * 100, 1),
-          T10 = round(mean(ps <= 10, na.rm=TRUE) * 100, 1),
-          T15 = round(mean(ps <= 15, na.rm=TRUE) * 100, 1),
-          T20 = round(mean(ps <= 20, na.rm=TRUE) * 100, 1),
-          T25 = round(mean(ps <= 25, na.rm=TRUE) * 100, 1),
-          T30 = round(mean(ps <= 30, na.rm=TRUE) * 100, 1),
-          .groups = 'drop'
-        )
+      # Get finish rates data from filtered races
+      fr_data <- values$analysis_filtered_data
+      entry_drivers <- values$analysis_entry_list$Name
+      
+      if (length(entry_drivers) > 0 && !is.null(fr_data)) {
+        fr_sheet <- fr_data %>%
+          filter(Full_Name %in% entry_drivers) %>%
+          group_by(Full_Name) %>%
+          summarize(
+            W   = round(mean(ps == 1,  na.rm=TRUE) * 100, 1),
+            T3  = round(mean(ps <= 3,  na.rm=TRUE) * 100, 1),
+            T5  = round(mean(ps <= 5,  na.rm=TRUE) * 100, 1),
+            T10 = round(mean(ps <= 10, na.rm=TRUE) * 100, 1),
+            T15 = round(mean(ps <= 15, na.rm=TRUE) * 100, 1),
+            T20 = round(mean(ps <= 20, na.rm=TRUE) * 100, 1),
+            T25 = round(mean(ps <= 25, na.rm=TRUE) * 100, 1),
+            T30 = round(mean(ps <= 30, na.rm=TRUE) * 100, 1),
+            .groups = 'drop'
+          )
+        
+        # Get DKMax and FDMax from dominator data
+        dom_max <- dominator_data() %>%
+          filter(Full_Name %in% entry_drivers) %>%
+          group_by(Full_Name) %>%
+          summarize(
+            DKMax = round(max(DKSP, na.rm=TRUE), 1),
+            FDMax = round(max(FDSP, na.rm=TRUE), 1),
+            .groups = 'drop'
+          )
+      } else {
+        # Create empty data frames if no data
+        fr_sheet <- data.frame(Full_Name = character(), W=numeric(), T3=numeric(), T5=numeric(),
+                               T10=numeric(), T15=numeric(), T20=numeric(), T25=numeric(), T30=numeric())
+        dom_max <- data.frame(Full_Name = character(), DKMax=numeric(), FDMax=numeric())
+      }
       
       # Build the Driver sheet
       driver_sheet <- el %>%
-        select(Name, car=Car, team=Team, Starting=Start) %>%
         mutate(
           FDName   = Name,
           DKName   = Name,
           DKID     = NA_character_,
-          FDID     = NA_character_,
-          DKSalary = NA_real_,
-          FDSalary = NA_real_,
-          DKOP     = NA_real_,
-          FDOP     = NA_real_,
-          DKMax    = NA_real_,
-          FDMax    = NA_real_
+          FDID     = NA_character_
         )
       
+      # Add DK/FD Salary columns if they exist, otherwise create empty ones
+      if (!"DK_Salary" %in% names(driver_sheet)) driver_sheet$DKSalary <- NA_real_
+      else driver_sheet <- driver_sheet %>% rename(DKSalary = DK_Salary)
+      
+      if (!"FD_Salary" %in% names(driver_sheet)) driver_sheet$FDSalary <- NA_real_
+      else driver_sheet <- driver_sheet %>% rename(FDSalary = FD_Salary)
+      
+      # Add ownership placeholders
+      driver_sheet <- driver_sheet %>%
+        mutate(
+          DKOP = NA_real_,
+          FDOP = NA_real_
+        )
+      
+      # Merge finish rates
+      driver_sheet <- driver_sheet %>%
+        left_join(fr_sheet, by=c("Name"="Full_Name"))
+      
+      # Merge DKMax and FDMax
+      driver_sheet <- driver_sheet %>%
+        left_join(dom_max, by=c("Name"="Full_Name"))
       
       # Merge finish rates
       driver_sheet <- driver_sheet %>%
@@ -1004,7 +1078,7 @@ server <- function(input, output, session) {
       
       # Final column order
       driver_sheet <- driver_sheet %>%
-        select(FDName, DKName, Name, DKID, FDID, car, team,
+        select(FDName, DKName, Name, DKID, FDID, Car, Team,
                DKSalary, FDSalary, Starting, DKOP, FDOP,
                W, T3, T5, T10, T15, T20, T25, T30, DKMax, FDMax)
       
@@ -1072,7 +1146,7 @@ server <- function(input, output, session) {
 Dom Pts: %.1f
 Driver: %s
 Track: %s",
-                                      !!sym(dom_rank_col),!!sym(dom_pts_col),Full_Name,track_name)),fill="forestgreen",alpha=0.7) +
+                                      !!sym(dom_rank_col),!!sym(dom_pts_col),Full_Name,track_name)),fill="#FFD700",alpha=0.7) +
         labs(title=paste(platform_name,"Dom Points by Dom Rank (Top 10)"),x="Dom Rank",y="Dom Points") +
         coord_flip() + scale_x_discrete(limits=factor(10:1)) + dark_theme
       ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
@@ -1084,7 +1158,7 @@ Track: %s",
 Finish: %d
 Driver: %s
 Track: %s",
-                                      !!sym(dom_rank_col),ps,Full_Name,track_name)),fill="darkgreen",alpha=0.7) +
+                                      !!sym(dom_rank_col),ps,Full_Name,track_name)),fill="#FFD700",alpha=0.7) +
         geom_smooth(aes(x=as.numeric(!!sym(dom_rank_col)),y=ps),method="loess",se=FALSE,color="#FFD700",linewidth=1.5) +
         labs(title=paste("Where Have Top",platform_name,"Dominators Finished"),x="Dom Rank",y="Finish Position") +
         scale_x_discrete(limits=factor(1:10)) + scale_y_continuous(breaks=seq(0,40,5)) + dark_theme
@@ -1093,13 +1167,13 @@ Track: %s",
     } else if (input$dom_visual_type %in% c("pts_by_finish","dom_pts_start","dom_rank_start","laps_led","laps_led_start","fast_laps","fast_laps_start")) {
       # Generic horizontal boxplot handler
       cfg <- list(
-        pts_by_finish  = list(x="ps",       y=dom_pts_col,  fill="darkgreen",  xt="Finish Position",    yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Finish")),
-        dom_pts_start  = list(x="start_ps", y=dom_pts_col,  fill="darkgreen",  xt="Starting Position",  yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Start")),
-        dom_rank_start = list(x="start_ps", y=dom_rank_col, fill="forestgreen",xt="Starting Position",  yt="Dom Rank",      ti=paste(platform_name,"Dom Rank by Start")),
-        laps_led       = list(x="ps",       y="lead_laps",  fill="lightgreen", xt="Finish Position",    yt="Laps Led",      ti="Laps Led by Finish"),
-        laps_led_start = list(x="start_ps", y="lead_laps",  fill="lightgreen", xt="Starting Position",  yt="Laps Led",      ti="Laps Led by Start"),
-        fast_laps      = list(x="ps",       y="fast_laps",  fill="green",      xt="Finish Position",    yt="Fast Laps",     ti="Fast Laps by Finish"),
-        fast_laps_start= list(x="start_ps", y="fast_laps",  fill="green",      xt="Starting Position",  yt="Fast Laps",     ti="Fast Laps by Start")
+        pts_by_finish  = list(x="ps",       y=dom_pts_col,  fill="#FFD700",  xt="Finish Position",    yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Finish")),
+        dom_pts_start  = list(x="start_ps", y=dom_pts_col,  fill="#FFD700",  xt="Starting Position",  yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Start")),
+        dom_rank_start = list(x="start_ps", y=dom_rank_col, fill="#FFD700",xt="Starting Position",  yt="Dom Rank",      ti=paste(platform_name,"Dom Rank by Start")),
+        laps_led       = list(x="ps",       y="lead_laps",  fill="#DAA520", xt="Finish Position",    yt="Laps Led",      ti="Laps Led by Finish"),
+        laps_led_start = list(x="start_ps", y="lead_laps",  fill="#DAA520", xt="Starting Position",  yt="Laps Led",      ti="Laps Led by Start"),
+        fast_laps      = list(x="ps",       y="fast_laps",  fill="#FFD700",      xt="Finish Position",    yt="Fast Laps",     ti="Fast Laps by Finish"),
+        fast_laps_start= list(x="start_ps", y="fast_laps",  fill="#FFD700",      xt="Starting Position",  yt="Fast Laps",     ti="Fast Laps by Start")
       )
       cc <- cfg[[input$dom_visual_type]]
       filt_col <- if(cc$x=="ps") "ps" else "start_ps"
@@ -1214,7 +1288,7 @@ Finish: %d
 PD: %d
 Track: %s",Full_Name,start_ps,ps,PD,track_name)))+
         geom_point(alpha=0.6)+geom_abline(linetype="dashed",color="#FFD700",linewidth=1.2)+
-        scale_color_gradient2(low="#DC143C",mid="#cccccc",high="#32CD32",midpoint=0,name="PD")+
+        scale_color_gradient2(low="#DC143C",mid="#cccccc",high="#FFD700",midpoint=0,name="PD")+
         scale_size_continuous(range=c(2,12))+
         scale_x_continuous(limits=c(0,40),breaks=seq(0,40,5))+scale_y_continuous(limits=c(0,40),breaks=seq(0,40,5))+
         labs(title="Starting vs Finishing Position",x="Starting Position",y="Finishing Position")+dark_theme
@@ -1231,7 +1305,7 @@ Track: %s",Full_Name,start_ps,ps,PD,track_name)))+
 PD: %d
 Driver: %s
 Track: %s",start_ps,PD,Full_Name,track_name)))+
-        geom_boxplot(fill="skyblue",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
+        geom_boxplot(fill="#FFD700",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
         labs(title="Place Differential by Starting Position",x="Starting Position",y="Place Differential")+
         coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
       ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
@@ -1242,7 +1316,7 @@ Track: %s",start_ps,PD,Full_Name,track_name)))+
 PD: %d
 Driver: %s
 Track: %s",ps,PD,Full_Name,track_name)))+
-        geom_boxplot(fill="lightcoral",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
+        geom_boxplot(fill="#FFD700",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
         labs(title="Place Differential by Finishing Position",x="Finishing Position",y="Place Differential")+
         coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
       ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
@@ -1408,7 +1482,7 @@ Track: %s",!!sym(rank_col),!!sym(points_col),Full_Name,track_name)),fill="dodger
       p <- ggplot(comp_data,aes(x=factor(!!sym(grp_col)),y=Pct,fill=Type))+
         geom_bar(stat="identity",position="stack")+
         geom_text(aes(label=sprintf("%.0f%%",Pct)),position=position_stack(vjust=0.5),color="white",fontface="bold",size=3)+
-        scale_fill_manual(values=c("Finish Position"="#3406cc","Place Differential"="#33cc33","Dominator Points"="#ff9900"))+
+        scale_fill_manual(values=c("Finish Position"="#1a1a1a","Place Differential"="#DAA520","Dominator Points"="#FFD700"))+
         labs(title=paste(platform_name,"Scoring Components"),x=grp_col,y="%",fill="Type")+dark_theme
       ggplotly(p,tooltip=c("x","y","fill"),height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
       
