@@ -455,7 +455,7 @@ server <- function(input, output, session) {
     num_tiers = 3
   )
   
-  # Load initial data
+  # Load initial data and set defaults
   observe({
     withProgress(message='Loading Golden Ticket Database...', {
       values$nascar_data <- load_nascar_database()
@@ -465,14 +465,55 @@ server <- function(input, output, session) {
         all_race_data <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else NULL
         if (!is.null(all_race_data)) {
           all_tracks <- sort(unique(all_race_data$track_name[!is.na(all_race_data$track_name)]))
+          
+          # Find next upcoming race and set as default
+          upcoming_races <- all_race_data %>%
+            filter(Historical == "N") %>%
+            arrange(race_season, race_id)
+          
+          if (nrow(upcoming_races) > 0) {
+            next_race <- upcoming_races[1, ]
+            updateSelectizeInput(session, "analysis_series", selected = next_race$series_id)
+            updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks, selected = next_race$track_name)
+          } else {
+            updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
+          }
         } else {
           all_tracks <- sort(unique(values$nascar_data$track_name[!is.na(values$nascar_data$track_name)]))
+          updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
         }
-        updateSelectizeInput(session,"analysis_primary_track",choices=all_tracks)
-        updateSelectizeInput(session,"analysis_similar_tracks",choices=all_tracks)
+        updateSelectizeInput(session, "analysis_similar_tracks", choices = all_tracks)
         incProgress(1.0)
       }
     })
+  })
+  
+  # Auto-populate similar tracks when primary track changes
+  observeEvent(input$analysis_primary_track, {
+    req(input$analysis_primary_track)
+    all_race_data <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else NULL
+    
+    if (!is.null(all_race_data)) {
+      # Get track type of primary track
+      primary_track_type <- all_race_data %>%
+        filter(track_name == input$analysis_primary_track) %>%
+        pull(track_type) %>%
+        unique() %>%
+        first()
+      
+      if (!is.na(primary_track_type) && length(primary_track_type) > 0) {
+        # Find all tracks with same track type (excluding primary track)
+        similar_tracks <- all_race_data %>%
+          filter(track_type == primary_track_type, track_name != input$analysis_primary_track) %>%
+          pull(track_name) %>%
+          unique() %>%
+          sort()
+        
+        # Update similar tracks dropdown with these tracks pre-selected
+        all_tracks <- sort(unique(all_race_data$track_name[!is.na(all_race_data$track_name)]))
+        updateSelectizeInput(session, "analysis_similar_tracks", choices = all_tracks, selected = similar_tracks)
+      }
+    }
   })
   
   observe({
@@ -482,7 +523,7 @@ server <- function(input, output, session) {
       available_races <- all_races %>%
         filter(series_id==as.numeric(input$analysis_series), track_name==input$analysis_primary_track,
                race_season>=input$analysis_start_year, race_season<=input$analysis_end_year, Historical=="N") %>%
-        arrange(desc(race_season)) %>%
+        arrange(race_season, race_id) %>%  # Changed to chronological order to get next race first
         mutate(race_label=paste0(race_season," - ",race_name))
       race_choices <- setNames(available_races$race_id, available_races$race_label)
       updateSelectizeInput(session,"analysis_race_id",choices=race_choices,
@@ -585,11 +626,88 @@ server <- function(input, output, session) {
       pull(race_id)
   })
   
-  #----- SALARY (auto-loaded from working directory) -----#
-  # Entry list (no salary columns - salary integration not available in hosted version)
+  #----- SALARY AUTO-LOADING -----#
+  # Automatically load salaries based on series selection
   entry_list_with_salaries <- reactive({
-    req(values$analysis_entry_list)
-    values$analysis_entry_list
+    req(values$analysis_entry_list, input$analysis_series)
+    
+    entry_list <- values$analysis_entry_list
+    
+    # Determine series name for file lookup
+    series_name <- switch(as.character(input$analysis_series),
+                          "1" = "Cup",
+                          "2" = "Xfinity", 
+                          "3" = "Trucks",
+                          "Cup")  # default
+    
+    # Try to load DraftKings salary file
+    dk_file <- paste0("DK", series_name, ".csv")
+    dk_salaries <- NULL
+    if (file.exists(dk_file)) {
+      tryCatch({
+        dk_salaries <- read_csv(dk_file, show_col_types = FALSE)
+        # Standardize column names - adjust these based on actual DK CSV format
+        # Common DK formats have: Name, Salary, Position, etc.
+        if ("Name" %in% names(dk_salaries) && "Salary" %in% names(dk_salaries)) {
+          dk_salaries <- dk_salaries %>% 
+            select(Name, DK_Salary = Salary) %>%
+            mutate(Name = trimws(Name))  # Clean whitespace
+        }
+      }, error = function(e) {
+        message("Could not load ", dk_file, ": ", e$message)
+      })
+    }
+    
+    # Try to load FanDuel salary file
+    fd_file <- paste0("FD", series_name, ".csv")
+    fd_salaries <- NULL
+    if (file.exists(fd_file)) {
+      tryCatch({
+        fd_salaries <- read_csv(fd_file, show_col_types = FALSE)
+        # Standardize column names - adjust based on actual FD CSV format
+        if ("Nickname" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
+          fd_salaries <- fd_salaries %>% 
+            select(Name = Nickname, FD_Salary = Salary) %>%
+            mutate(Name = trimws(Name))
+        } else if ("Name" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
+          fd_salaries <- fd_salaries %>% 
+            select(Name, FD_Salary = Salary) %>%
+            mutate(Name = trimws(Name))
+        }
+      }, error = function(e) {
+        message("Could not load ", fd_file, ": ", e$message)
+      })
+    }
+    
+    # Clean entry list names for matching
+    entry_list <- entry_list %>%
+      mutate(Name_Clean = trimws(Name))
+    
+    # Merge salaries if available
+    if (!is.null(dk_salaries)) {
+      dk_salaries <- dk_salaries %>% mutate(Name_Clean = trimws(Name))
+      entry_list <- entry_list %>%
+        left_join(dk_salaries %>% select(Name_Clean, DK_Salary), by = "Name_Clean")
+    }
+    
+    if (!is.null(fd_salaries)) {
+      fd_salaries <- fd_salaries %>% mutate(Name_Clean = trimws(Name))
+      entry_list <- entry_list %>%
+        left_join(fd_salaries %>% select(Name_Clean, FD_Salary), by = "Name_Clean")
+    }
+    
+    # Remove the cleaning column
+    entry_list <- entry_list %>% select(-Name_Clean)
+    
+    # Reorder columns to put salaries after basic info
+    if ("DK_Salary" %in% names(entry_list) || "FD_Salary" %in% names(entry_list)) {
+      base_cols <- c("Start", "Name", "Car", "Team", "Make", "CC", "Sponsor")
+      salary_cols <- intersect(c("DK_Salary", "FD_Salary"), names(entry_list))
+      other_cols <- setdiff(names(entry_list), c(base_cols, salary_cols))
+      entry_list <- entry_list %>% select(all_of(c(base_cols, salary_cols, other_cols)))
+    }
+    
+    return(entry_list)
   })
   
   #----- ENTRY LIST OUTPUT -----#
@@ -601,14 +719,29 @@ server <- function(input, output, session) {
   })
   
   output$entry_list_title <- renderUI({
-    req(values$analysis_races_available, input$analysis_race_id)
+    req(values$analysis_races_available, input$analysis_race_id, input$analysis_series)
     race_info <- values$analysis_races_available %>% filter(race_id==as.numeric(input$analysis_race_id)) %>% slice(1)
     if (nrow(race_info)==0) {
       all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
       race_info <- all_races %>% filter(race_id==as.numeric(input$analysis_race_id)) %>% slice(1)
     }
     race_name <- if(nrow(race_info)>0) race_info$race_name else "Entry List"
-    h3(paste(race_name,"Entry List"), class="box-title")
+    
+    # Check if salaries were loaded
+    series_name <- switch(as.character(input$analysis_series), "1" = "Cup", "2" = "Xfinity", "3" = "Trucks", "Cup")
+    dk_exists <- file.exists(paste0("DK", series_name, ".csv"))
+    fd_exists <- file.exists(paste0("FD", series_name, ".csv"))
+    
+    salary_status <- ""
+    if (dk_exists && fd_exists) {
+      salary_status <- " (DK + FD Salaries Loaded)"
+    } else if (dk_exists) {
+      salary_status <- " (DK Salaries Loaded)"
+    } else if (fd_exists) {
+      salary_status <- " (FD Salaries Loaded)"
+    }
+    
+    h3(paste0(race_name, " Entry List", salary_status), class="box-title")
   })
   
   output$download_entry_list_csv <- downloadHandler(

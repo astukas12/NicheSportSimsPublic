@@ -314,8 +314,8 @@ ui <- fluidPage(
         border: 2px solid #FFE500 !important;
       }
       
-      /* Fighter chip styling */
-      .fighter-chip {
+      /* Player chip styling */
+      .player-chip {
         display: inline-block;
         background-color: #2a2a2a;
         color: #FFFFFF;
@@ -328,13 +328,13 @@ ui <- fluidPage(
         transition: all 0.3s ease;
       }
       
-      .fighter-chip:hover {
+      .player-chip:hover {
         background-color: #FFE500;
         color: #000000;
         transform: scale(1.05);
       }
       
-      .fighter-chip.eliminated {
+      .player-chip.eliminated {
         background-color: #dc3545;
         border-color: #dc3545;
         color: #FFFFFF;
@@ -458,10 +458,10 @@ server <- function(input, output, session) {
   rv <- reactiveValues(
     data = NULL,
     sport = NULL,
-    fighters = NULL,
+    players = NULL,
     player_scores = NULL,
-    eliminated_fighters = character(0),
-    lineup_fighters_cache = list(),
+    eliminated_players = character(0),
+    lineup_players_cache = list(),
     all_usernames = NULL,
     sim_data = NULL,
     sim_loaded = FALSE
@@ -473,23 +473,39 @@ server <- function(input, output, session) {
     span(class = "sport-badge", rv$sport)
   })
   
-  # Fast fighter extraction with caching
-  extract_fighters <- function(lineup) {
-    if (!lineup %in% names(rv$lineup_fighters_cache)) {
-      # Detect sport prefix (F for MMA, D for NASCAR)
-      if (grepl(" D ", lineup, fixed = TRUE)) {
+  # Fast player extraction with caching
+  extract_players <- function(lineup) {
+    if (!lineup %in% names(rv$lineup_players_cache)) {
+      # Detect sport prefix (F for MMA, D for NASCAR, G for Golf)
+      if (grepl(" G ", lineup, fixed = TRUE)) {
+        # Golf
+        players <- unlist(strsplit(lineup, " G ", fixed = TRUE))
+        players <- trimws(sub("^G ", "", players))
+      } else if (grepl(" D ", lineup, fixed = TRUE)) {
         # NASCAR
-        fighters <- unlist(strsplit(lineup, " D ", fixed = TRUE))
-        fighters <- trimws(sub("^D ", "", fighters))
+        players <- unlist(strsplit(lineup, " D ", fixed = TRUE))
+        players <- trimws(sub("^D ", "", players))
       } else {
-        # MMA (default)
-        fighters <- unlist(strsplit(lineup, " F ", fixed = TRUE))
-        fighters <- trimws(sub("^F ", "", fighters))
+        # MMA (default - F prefix)
+        players <- unlist(strsplit(lineup, " F ", fixed = TRUE))
+        players <- trimws(sub("^F ", "", players))
       }
-      fighters <- fighters[nzchar(fighters)]
-      rv$lineup_fighters_cache[[lineup]] <- fighters
+      players <- players[nzchar(players)]
+      rv$lineup_players_cache[[lineup]] <- players
     }
-    rv$lineup_fighters_cache[[lineup]]
+    rv$lineup_players_cache[[lineup]]
+  }
+  
+  # Format lineup for display (remove position prefixes)
+  format_lineup_display <- function(lineup) {
+    # Remove F, D, or G prefixes
+    lineup <- gsub(" G ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" D ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" F ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub("^G ", "", lineup)
+    lineup <- gsub("^D ", "", lineup)
+    lineup <- gsub("^F ", "", lineup)
+    return(lineup)
   }
   
   # Load and process data (OPTIMIZED)
@@ -572,7 +588,7 @@ server <- function(input, output, session) {
           setkey(rv$player_scores, Player)
           
           # Get unique players from player_scores (much faster than parsing lineups)
-          rv$fighters <- sort(unique(rv$player_scores$Player))
+          rv$players <- sort(unique(rv$player_scores$Player))
           
         } else {
           # Fallback: try column positions
@@ -584,10 +600,10 @@ server <- function(input, output, session) {
             
             rv$player_scores <- player_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
             setkey(rv$player_scores, Player)
-            rv$fighters <- sort(unique(rv$player_scores$Player))
+            rv$players <- sort(unique(rv$player_scores$Player))
           } else {
             rv$player_scores <- NULL
-            rv$fighters <- character(0)
+            rv$players <- character(0)
           }
         }
         
@@ -603,9 +619,9 @@ server <- function(input, output, session) {
             nzchar(usernames)                # Not empty
         ]
         
-        # Only filter by fighters if we have them
-        if (length(rv$fighters) > 0) {
-          usernames <- usernames[!usernames %in% rv$fighters]
+        # Only filter by players if we have them
+        if (length(rv$players) > 0) {
+          usernames <- usernames[!usernames %in% rv$players]
         }
         
         # Sort once
@@ -642,7 +658,7 @@ server <- function(input, output, session) {
         incProgress(0.15, detail = "Processing lineups...")
         
         # Detect player columns dynamically
-        player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]", names(sim_raw), value = TRUE)
+        player_cols <- grep("^(Player|Driver|Player|Golfer)[0-9]", names(sim_raw), value = TRUE)
         
         if (length(player_cols) == 0) {
           # Try alternate naming pattern
@@ -693,7 +709,7 @@ server <- function(input, output, session) {
         # Vectorized contest key creation for speed
         contest_with_scores <- rv$data[, {
           # Parse all lineups at once
-          all_players <- lapply(Lineup, extract_fighters)
+          all_players <- lapply(Lineup, extract_players)
           
           # Score and create keys vectorized
           scores <- sapply(all_players, function(players) sum(score_lookup[players], na.rm = TRUE))
@@ -770,7 +786,7 @@ server <- function(input, output, session) {
     req(rv$data, input$username, input$username != "")
     
     # Dynamic labels
-    player_label <- if(rv$sport == "NASCAR") "Driver" else "Fighter"
+    player_label <- if(rv$sport == "NASCAR") "Driver" else "Player"
     
     user_data <- rv$data[Username == input$username]
     field_data <- rv$data[Username != input$username]
@@ -784,38 +800,38 @@ server <- function(input, output, session) {
     user_lineups <- unique(user_data$Lineup)
     n_user_entries <- nrow(user_data)
     
-    # Get fighter exposures
-    user_fighter_counts <- data.table()
+    # Get player exposures
+    user_player_counts <- data.table()
     for (lineup in user_lineups) {
-      fighters <- extract_fighters(lineup)
-      user_fighter_counts <- rbind(user_fighter_counts, 
-                                   data.table(Fighter = fighters))
+      players <- extract_players(lineup)
+      user_player_counts <- rbind(user_player_counts, 
+                                  data.table(Player = players))
     }
-    user_exposure <- user_fighter_counts[, .(
+    user_exposure <- user_player_counts[, .(
       UserExp = .N / n_user_entries * 100
-    ), by = Fighter]
+    ), by = Player]
     
     # Field exposure from %Drafted column if available
     if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
-      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+      field_exposure <- rv$player_scores[, .(Player = Player, FieldExp)]
     } else {
       # Fallback to manual calculation
       field_lineups <- unique(field_data$Lineup)
       n_field_entries <- nrow(field_data)
       
-      field_fighter_counts <- data.table()
+      field_player_counts <- data.table()
       for (lineup in field_lineups) {
-        fighters <- extract_fighters(lineup)
-        field_fighter_counts <- rbind(field_fighter_counts,
-                                      data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        field_player_counts <- rbind(field_player_counts,
+                                     data.table(Player = players))
       }
-      field_exposure <- field_fighter_counts[, .(
+      field_exposure <- field_player_counts[, .(
         FieldExp = .N / n_field_entries * 100
-      ), by = Fighter]
+      ), by = Player]
     }
     
     # Merge and calculate leverage
-    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data <- merge(user_exposure, field_exposure, by = "Player", all = TRUE)
     exposure_data[is.na(UserExp), UserExp := 0]
     exposure_data[is.na(FieldExp), FieldExp := 0]
     exposure_data[, Leverage := UserExp - FieldExp]
@@ -827,12 +843,12 @@ server <- function(input, output, session) {
       
       br(),
       
-      h4("Positive Leverage Fighters"),
+      h4("Positive Leverage Players"),
       plotlyOutput("positive_leverage_plot", height = "400px"),
       
       br(),
       
-      h4("Negative Leverage Fighters"),
+      h4("Negative Leverage Players"),
       plotlyOutput("negative_leverage_plot", height = "400px")
     )
   })
@@ -841,8 +857,8 @@ server <- function(input, output, session) {
   output$exposure_table <- renderDT({
     req(rv$data, input$username, input$username != "")
     
-    # Make reactive to eliminated fighters
-    eliminated <- rv$eliminated_fighters
+    # Make reactive to eliminated players
+    eliminated <- rv$eliminated_players
     
     user_data <- rv$data[Username == input$username]
     field_data <- rv$data[Username != input$username]
@@ -851,89 +867,89 @@ server <- function(input, output, session) {
     n_user_entries <- nrow(user_data)
     
     # User exposure
-    user_fighter_counts <- data.table()
+    user_player_counts <- data.table()
     for (lineup in user_lineups) {
-      fighters <- extract_fighters(lineup)
-      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+      players <- extract_players(lineup)
+      user_player_counts <- rbind(user_player_counts, data.table(Player = players))
     }
-    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    user_exposure <- user_player_counts[, .(UserExp = .N / n_user_entries * 100), by = Player]
     
     # Field exposure from %Drafted
     if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
-      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+      field_exposure <- rv$player_scores[, .(Player = Player, FieldExp)]
     } else {
       # Fallback
       field_lineups <- unique(field_data$Lineup)
       n_field_entries <- nrow(field_data)
       
-      field_fighter_counts <- data.table()
+      field_player_counts <- data.table()
       for (lineup in field_lineups) {
-        fighters <- extract_fighters(lineup)
-        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        field_player_counts <- rbind(field_player_counts, data.table(Player = players))
       }
-      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
+      field_exposure <- field_player_counts[, .(FieldExp = .N / n_field_entries * 100), by = Player]
     }
     
     # Merge
-    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data <- merge(user_exposure, field_exposure, by = "Player", all = TRUE)
     exposure_data[is.na(UserExp), UserExp := 0]
     exposure_data[is.na(FieldExp), FieldExp := 0]
     exposure_data[, Leverage := UserExp - FieldExp]
     
-    # Add live exposure columns if fighters are eliminated
-    if (length(rv$eliminated_fighters) > 0) {
-      # Calculate live exposures (only counting lineups with ALL 6 fighters still alive)
+    # Add live exposure columns if players are eliminated
+    if (length(rv$eliminated_players) > 0) {
+      # Calculate live exposures (only counting lineups with ALL 6 players still alive)
       
       # User live exposure
-      user_live_fighter_counts <- data.table()
+      user_live_player_counts <- data.table()
       for (lineup in user_lineups) {
-        fighters <- extract_fighters(lineup)
-        # Only count if ALL 6 fighters are still alive
-        if (length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)) {
-          user_live_fighter_counts <- rbind(user_live_fighter_counts, 
-                                            data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        # Only count if ALL 6 players are still alive
+        if (length(players) == 6 && !any(players %in% rv$eliminated_players)) {
+          user_live_player_counts <- rbind(user_live_player_counts, 
+                                           data.table(Player = players))
         }
       }
       
-      if (nrow(user_live_fighter_counts) > 0) {
+      if (nrow(user_live_player_counts) > 0) {
         user_live_lineups <- sum(sapply(user_lineups, function(lineup) {
-          fighters <- extract_fighters(lineup)
-          length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)
+          players <- extract_players(lineup)
+          length(players) == 6 && !any(players %in% rv$eliminated_players)
         }))
-        user_live_exposure <- user_live_fighter_counts[, .(
+        user_live_exposure <- user_live_player_counts[, .(
           UserLiveExp = .N / user_live_lineups * 100
-        ), by = Fighter]
+        ), by = Player]
       } else {
-        user_live_exposure <- data.table(Fighter = character(0), UserLiveExp = numeric(0))
+        user_live_exposure <- data.table(Player = character(0), UserLiveExp = numeric(0))
       }
       
       # Field live exposure
       field_lineups <- unique(field_data$Lineup)
-      field_live_fighter_counts <- data.table()
+      field_live_player_counts <- data.table()
       for (lineup in field_lineups) {
-        fighters <- extract_fighters(lineup)
-        # Only count if ALL 6 fighters are still alive
-        if (length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)) {
-          field_live_fighter_counts <- rbind(field_live_fighter_counts,
-                                             data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        # Only count if ALL 6 players are still alive
+        if (length(players) == 6 && !any(players %in% rv$eliminated_players)) {
+          field_live_player_counts <- rbind(field_live_player_counts,
+                                            data.table(Player = players))
         }
       }
       
-      if (nrow(field_live_fighter_counts) > 0) {
+      if (nrow(field_live_player_counts) > 0) {
         field_live_lineups <- sum(sapply(field_lineups, function(lineup) {
-          fighters <- extract_fighters(lineup)
-          length(fighters) == 6 && !any(fighters %in% rv$eliminated_fighters)
+          players <- extract_players(lineup)
+          length(players) == 6 && !any(players %in% rv$eliminated_players)
         }))
-        field_live_exposure <- field_live_fighter_counts[, .(
+        field_live_exposure <- field_live_player_counts[, .(
           FieldLiveExp = .N / field_live_lineups * 100
-        ), by = Fighter]
+        ), by = Player]
       } else {
-        field_live_exposure <- data.table(Fighter = character(0), FieldLiveExp = numeric(0))
+        field_live_exposure <- data.table(Player = character(0), FieldLiveExp = numeric(0))
       }
       
       # Merge live exposures
-      exposure_data <- merge(exposure_data, user_live_exposure, by = "Fighter", all.x = TRUE)
-      exposure_data <- merge(exposure_data, field_live_exposure, by = "Fighter", all.x = TRUE)
+      exposure_data <- merge(exposure_data, user_live_exposure, by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_live_exposure, by = "Player", all.x = TRUE)
       exposure_data[is.na(UserLiveExp), UserLiveExp := 0]
       exposure_data[is.na(FieldLiveExp), FieldLiveExp := 0]
       exposure_data[, LiveLeverage := UserLiveExp - FieldLiveExp]
@@ -942,9 +958,9 @@ server <- function(input, output, session) {
     exposure_data <- exposure_data[order(-UserExp)]
     
     # Format for display - keep numeric leverage for coloring
-    if (length(rv$eliminated_fighters) > 0 && "UserLiveExp" %in% names(exposure_data)) {
+    if (length(rv$eliminated_players) > 0 && "UserLiveExp" %in% names(exposure_data)) {
       display_data <- exposure_data[, .(
-        Fighter,
+        Player,
         `Your Exposure` = paste0(round(UserExp, 1), "%"),
         `Field Exposure` = paste0(round(FieldExp, 1), "%"),
         Leverage = round(Leverage, 1),
@@ -954,7 +970,7 @@ server <- function(input, output, session) {
       )]
     } else {
       display_data <- exposure_data[, .(
-        Fighter,
+        Player,
         `Your Exposure` = paste0(round(UserExp, 1), "%"),
         `Field Exposure` = paste0(round(FieldExp, 1), "%"),
         Leverage = round(Leverage, 1)
@@ -1019,29 +1035,29 @@ server <- function(input, output, session) {
     user_lineups <- unique(user_data$Lineup)
     n_user_entries <- nrow(user_data)
     
-    user_fighter_counts <- data.table()
+    user_player_counts <- data.table()
     for (lineup in user_lineups) {
-      fighters <- extract_fighters(lineup)
-      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+      players <- extract_players(lineup)
+      user_player_counts <- rbind(user_player_counts, data.table(Player = players))
     }
-    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    user_exposure <- user_player_counts[, .(UserExp = .N / n_user_entries * 100), by = Player]
     
     # Field exposure from %Drafted
     if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
-      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+      field_exposure <- rv$player_scores[, .(Player = Player, FieldExp)]
     } else {
       field_lineups <- unique(field_data$Lineup)
       n_field_entries <- nrow(field_data)
       
-      field_fighter_counts <- data.table()
+      field_player_counts <- data.table()
       for (lineup in field_lineups) {
-        fighters <- extract_fighters(lineup)
-        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        field_player_counts <- rbind(field_player_counts, data.table(Player = players))
       }
-      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
+      field_exposure <- field_player_counts[, .(FieldExp = .N / n_field_entries * 100), by = Player]
     }
     
-    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data <- merge(user_exposure, field_exposure, by = "Player", all = TRUE)
     exposure_data[is.na(UserExp), UserExp := 0]
     exposure_data[is.na(FieldExp), FieldExp := 0]
     exposure_data[, Leverage := UserExp - FieldExp]
@@ -1054,7 +1070,7 @@ server <- function(input, output, session) {
     }
     
     plot_ly(positive_data, 
-            x = ~reorder(Fighter, Leverage), 
+            x = ~reorder(Player, Leverage), 
             y = ~Leverage,
             type = 'bar',
             marker = list(
@@ -1094,29 +1110,29 @@ server <- function(input, output, session) {
     user_lineups <- unique(user_data$Lineup)
     n_user_entries <- nrow(user_data)
     
-    user_fighter_counts <- data.table()
+    user_player_counts <- data.table()
     for (lineup in user_lineups) {
-      fighters <- extract_fighters(lineup)
-      user_fighter_counts <- rbind(user_fighter_counts, data.table(Fighter = fighters))
+      players <- extract_players(lineup)
+      user_player_counts <- rbind(user_player_counts, data.table(Player = players))
     }
-    user_exposure <- user_fighter_counts[, .(UserExp = .N / n_user_entries * 100), by = Fighter]
+    user_exposure <- user_player_counts[, .(UserExp = .N / n_user_entries * 100), by = Player]
     
     # Field exposure from %Drafted
     if (!is.null(rv$player_scores) && "FieldExp" %in% names(rv$player_scores)) {
-      field_exposure <- rv$player_scores[, .(Fighter = Player, FieldExp)]
+      field_exposure <- rv$player_scores[, .(Player = Player, FieldExp)]
     } else {
       field_lineups <- unique(field_data$Lineup)
       n_field_entries <- nrow(field_data)
       
-      field_fighter_counts <- data.table()
+      field_player_counts <- data.table()
       for (lineup in field_lineups) {
-        fighters <- extract_fighters(lineup)
-        field_fighter_counts <- rbind(field_fighter_counts, data.table(Fighter = fighters))
+        players <- extract_players(lineup)
+        field_player_counts <- rbind(field_player_counts, data.table(Player = players))
       }
-      field_exposure <- field_fighter_counts[, .(FieldExp = .N / n_field_entries * 100), by = Fighter]
+      field_exposure <- field_player_counts[, .(FieldExp = .N / n_field_entries * 100), by = Player]
     }
     
-    exposure_data <- merge(user_exposure, field_exposure, by = "Fighter", all = TRUE)
+    exposure_data <- merge(user_exposure, field_exposure, by = "Player", all = TRUE)
     exposure_data[is.na(UserExp), UserExp := 0]
     exposure_data[is.na(FieldExp), FieldExp := 0]
     exposure_data[, Leverage := UserExp - FieldExp]
@@ -1129,7 +1145,7 @@ server <- function(input, output, session) {
     }
     
     plot_ly(negative_data, 
-            x = ~reorder(Fighter, -Leverage), 
+            x = ~reorder(Player, -Leverage), 
             y = ~Leverage,
             type = 'bar',
             marker = list(
@@ -1258,18 +1274,18 @@ server <- function(input, output, session) {
   
   # Live Sweat Content
   output$live_sweat_content <- renderUI({
-    req(rv$data, rv$fighters)
+    req(rv$data, rv$players)
     
     # Dynamic labels based on sport
-    player_label <- if(rv$sport == "NASCAR") "Driver" else "Fighter"
-    players_label <- if(rv$sport == "NASCAR") "Drivers" else "Fighters"
+    player_label <- if(rv$sport == "NASCAR") "Driver" else "Player"
+    players_label <- if(rv$sport == "NASCAR") "Drivers" else "Players"
     
     tagList(
       div(class = "well",
           h4(paste(player_label, "Status - Click to Mark as Eliminated"), style = "margin-top: 0;"),
           p(paste(players_label, "with current scores shown. Click to mark as eliminated."), 
             style = "color: #CCCCCC; margin-bottom: 15px;"),
-          uiOutput("fighter_chips"),
+          uiOutput("player_chips"),
           br(),
           div(style = "display: flex; gap: 10px; margin-top: 15px;",
               actionButton("clear_eliminated", "Clear All Eliminated", class = "btn-danger"),
@@ -1292,25 +1308,25 @@ server <- function(input, output, session) {
     )
   })
   
-  # Fighter Chips
-  output$fighter_chips <- renderUI({
-    req(rv$fighters)
+  # Player Chips
+  output$player_chips <- renderUI({
+    req(rv$players)
     
     # Get scores if available
     if (!is.null(rv$player_scores)) {
-      fighter_info <- lapply(rv$fighters, function(fighter) {
-        score <- rv$player_scores[Player == fighter, FPTS]
+      player_info <- lapply(rv$players, function(player) {
+        score <- rv$player_scores[Player == player, FPTS]
         if (length(score) == 0) score <- NA
-        list(name = fighter, score = score)
+        list(name = player, score = score)
       })
     } else {
-      fighter_info <- lapply(rv$fighters, function(fighter) {
-        list(name = fighter, score = NA)
+      player_info <- lapply(rv$players, function(player) {
+        list(name = player, score = NA)
       })
     }
     
-    lapply(fighter_info, function(info) {
-      is_eliminated <- info$name %in% rv$eliminated_fighters
+    lapply(player_info, function(info) {
+      is_eliminated <- info$name %in% rv$eliminated_players
       
       # Create label with score if available
       if (!is.na(info$score)) {
@@ -1320,39 +1336,39 @@ server <- function(input, output, session) {
       }
       
       actionButton(
-        inputId = paste0("fighter_", gsub("[^A-Za-z0-9]", "_", info$name)),
+        inputId = paste0("player_", gsub("[^A-Za-z0-9]", "_", info$name)),
         label = label_text,
-        class = if(is_eliminated) "fighter-chip eliminated" else "fighter-chip",
-        onclick = sprintf("Shiny.setInputValue('toggle_fighter', '%s', {priority: 'event'})", info$name)
+        class = if(is_eliminated) "player-chip eliminated" else "player-chip",
+        onclick = sprintf("Shiny.setInputValue('toggle_player', '%s', {priority: 'event'})", info$name)
       )
     })
   })
   
-  # Toggle fighter elimination
-  observeEvent(input$toggle_fighter, {
-    fighter <- input$toggle_fighter
+  # Toggle player elimination
+  observeEvent(input$toggle_player, {
+    player <- input$toggle_player
     
-    if (fighter %in% rv$eliminated_fighters) {
-      rv$eliminated_fighters <- rv$eliminated_fighters[rv$eliminated_fighters != fighter]
+    if (player %in% rv$eliminated_players) {
+      rv$eliminated_players <- rv$eliminated_players[rv$eliminated_players != player]
     } else {
-      rv$eliminated_fighters <- c(rv$eliminated_fighters, fighter)
+      rv$eliminated_players <- c(rv$eliminated_players, player)
     }
   })
   
-  # Clear eliminated fighters
+  # Clear eliminated players
   observeEvent(input$clear_eliminated, {
-    rv$eliminated_fighters <- character(0)
+    rv$eliminated_players <- character(0)
   })
   
-  # Mark all 0.0 fighters as eliminated
+  # Mark all 0.0 players as eliminated
   observeEvent(input$mark_zeros, {
     req(rv$player_scores)
     
-    zero_fighters <- rv$player_scores[FPTS == 0, Player]
-    rv$eliminated_fighters <- union(rv$eliminated_fighters, zero_fighters)
+    zero_players <- rv$player_scores[FPTS == 0, Player]
+    rv$eliminated_players <- union(rv$eliminated_players, zero_players)
     
     showNotification(
-      sprintf("Marked %d fighters with 0.0 points as eliminated", length(zero_fighters)),
+      sprintf("Marked %d players with 0.0 points as eliminated", length(zero_players)),
       type = "message",
       duration = 3
     )
@@ -1365,22 +1381,22 @@ server <- function(input, output, session) {
     user_data <- rv$data[Username == input$username]
     field_data <- rv$data[Username != input$username]
     
-    # Calculate live fighters for each lineup
-    calc_live_fighters <- function(lineups) {
+    # Calculate live players for each lineup
+    calc_live_players <- function(lineups) {
       sapply(lineups, function(lineup) {
-        fighters <- extract_fighters(lineup)
-        sum(!fighters %in% rv$eliminated_fighters)
+        players <- extract_players(lineup)
+        sum(!players %in% rv$eliminated_players)
       })
     }
     
     # User distribution
     user_lineups <- unique(user_data$Lineup)
-    user_live <- calc_live_fighters(user_lineups)
+    user_live <- calc_live_players(user_lineups)
     user_dist <- data.table(live = user_live)[, .(You = .N), by = live]
     
     # Field distribution
     field_lineups <- unique(field_data$Lineup)
-    field_live <- calc_live_fighters(field_lineups)
+    field_live <- calc_live_players(field_lineups)
     field_dist <- data.table(live = field_live)[, .(Field = .N), by = live]
     
     # Merge
@@ -1399,7 +1415,7 @@ server <- function(input, output, session) {
     dist_table[, `Field %` := paste0(round(Field / sum(Field) * 100, 1), "%")]
     
     # Rename and reorder
-    player_label_plural <- if(rv$sport == "NASCAR") "Drivers" else "Fighters"
+    player_label_plural <- if(rv$sport == "NASCAR") "Drivers" else "Players"
     
     display_table <- dist_table[, .(
       `Live Count` = live,
@@ -1449,15 +1465,15 @@ server <- function(input, output, session) {
     
     # Process each lineup
     lineup_status <- rbindlist(lapply(unique(user_data$Lineup), function(lineup) {
-      fighters <- extract_fighters(lineup)
-      live_fighters <- fighters[!fighters %in% rv$eliminated_fighters]
-      dead_fighters <- fighters[fighters %in% rv$eliminated_fighters]
+      players <- extract_players(lineup)
+      live_players <- players[!players %in% rv$eliminated_players]
+      dead_players <- players[players %in% rv$eliminated_players]
       
       # Calculate projected score if player_scores available
       projected_score <- NA
       if (!is.null(rv$player_scores)) {
-        # Get scores for live fighters
-        live_scores <- sapply(live_fighters, function(f) {
+        # Get scores for live players
+        live_scores <- sapply(live_players, function(f) {
           score <- rv$player_scores[Player == f, FPTS]
           if (length(score) == 0) return(0)
           return(score)
@@ -1467,18 +1483,18 @@ server <- function(input, output, session) {
       
       data.table(
         Lineup = lineup,
-        `Live Fighters` = length(live_fighters),
+        `Live Players` = length(live_players),
         `Score` = if(!is.na(projected_score)) round(projected_score, 1) else NA_real_,
-        `Live` = paste(live_fighters, collapse = ", "),
-        `Eliminated` = if(length(dead_fighters) > 0) paste(dead_fighters, collapse = ", ") else "-"
+        `Live` = paste(live_players, collapse = ", "),
+        `Eliminated` = if(length(dead_players) > 0) paste(dead_players, collapse = ", ") else "-"
       )
     }))
     
-    # Sort by projected score descending (then by live fighters)
+    # Sort by projected score descending (then by live players)
     if (!is.null(rv$player_scores)) {
-      lineup_status <- lineup_status[order(-`Score`, -`Live Fighters`)]
+      lineup_status <- lineup_status[order(-`Score`, -`Live Players`)]
     } else {
-      lineup_status <- lineup_status[order(-`Live Fighters`)]
+      lineup_status <- lineup_status[order(-`Live Players`)]
     }
     
     # Create table
@@ -1495,7 +1511,7 @@ server <- function(input, output, session) {
       )
     ) %>%
       formatStyle(
-        'Live Fighters',
+        'Live Players',
         background = styleColorBar(c(0, 6), '#28a745'),
         backgroundSize = '100% 90%',
         backgroundRepeat = 'no-repeat',
@@ -1838,8 +1854,8 @@ server <- function(input, output, session) {
       # Create lineup keys for contest lineups
       lineup_counts[, LineupKey := {
         sapply(Lineup, function(lineup) {
-          fighters <- extract_fighters(lineup)
-          paste(sort(fighters), collapse = "|")
+          players <- extract_players(lineup)
+          paste(sort(players), collapse = "|")
         })
       }]
       
@@ -1857,8 +1873,8 @@ server <- function(input, output, session) {
         contest_only <- rv$data[Lineup %in% contest_only_keys$Lineup]
         contest_only[, LineupKey := {
           sapply(Lineup, function(lineup) {
-            fighters <- extract_fighters(lineup)
-            paste(sort(fighters), collapse = "|")
+            players <- extract_players(lineup)
+            paste(sort(players), collapse = "|")
           })
         }]
         
@@ -1866,13 +1882,13 @@ server <- function(input, output, session) {
         score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
         contest_only[, ActualScore := {
           sapply(Lineup, function(lineup) {
-            fighters <- extract_fighters(lineup)
-            sum(score_lookup[fighters], na.rm = TRUE)
+            players <- extract_players(lineup)
+            sum(score_lookup[players], na.rm = TRUE)
           })
         }]
         
         # Extract player columns
-        player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
+        player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
         for (i in seq_along(player_cols)) {
           contest_only[, (player_cols[i]) := {
             sapply(LineupKey, function(key) {
@@ -1921,12 +1937,8 @@ server <- function(input, output, session) {
         rng <- range(sim_data$Top20Pct, na.rm = TRUE)
         updateSliderInput(session, "top20_slider", min = floor(rng[1]), max = ceiling(rng[2]), value = rng)
       }
-      if ("CumulativeOwnership" %in% names(sim_data)) {
-        rng <- range(sim_data$CumulativeOwnership, na.rm = TRUE)
-        updateSliderInput(session, "totalown_slider", min = floor(rng[1]), max = ceiling(rng[2]), value = rng)
-      }
-      if ("GeometricMeanOwnership" %in% names(sim_data)) {
-        rng <- range(sim_data$GeometricMeanOwnership, na.rm = TRUE)
+      if ("AvgOwn" %in% names(sim_data)) {
+        rng <- range(sim_data$AvgOwn, na.rm = TRUE)
         updateSliderInput(session, "avgown_slider", min = floor(rng[1]), max = ceiling(rng[2]), value = rng)
       }
       if ("TotalSalary" %in% names(sim_data)) {
@@ -1943,7 +1955,7 @@ server <- function(input, output, session) {
       }
       
       # Update player dropdowns
-      player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
+      player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
       all_players <- sort(unique(unlist(sim_data[, player_cols, with = FALSE])))
       
       updateSelectizeInput(session, "sim_include_players", choices = all_players, server = TRUE)
@@ -1961,7 +1973,7 @@ server <- function(input, output, session) {
     
     data <- copy(rv$unified_pool)
     
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     # Player filters
     if (!is.null(input$sim_include_players) && length(input$sim_include_players) > 0) {
@@ -1993,11 +2005,8 @@ server <- function(input, output, session) {
     if (!is.null(input$top20_slider) && "Top20Pct" %in% names(data)) {
       data <- data[InSim == FALSE | (Top20Pct >= input$top20_slider[1] & Top20Pct <= input$top20_slider[2])]
     }
-    if (!is.null(input$totalown_slider) && "CumulativeOwnership" %in% names(data)) {
-      data <- data[InSim == FALSE | (CumulativeOwnership >= input$totalown_slider[1] & CumulativeOwnership <= input$totalown_slider[2])]
-    }
-    if (!is.null(input$avgown_slider) && "GeometricMeanOwnership" %in% names(data)) {
-      data <- data[InSim == FALSE | (GeometricMeanOwnership >= input$avgown_slider[1] & GeometricMeanOwnership <= input$avgown_slider[2])]
+    if (!is.null(input$avgown_slider) && "AvgOwn" %in% names(data)) {
+      data <- data[InSim == FALSE | (AvgOwn >= input$avgown_slider[1] & AvgOwn <= input$avgown_slider[2])]
     }
     if (!is.null(input$salary_slider) && "TotalSalary" %in% names(data)) {
       before <- nrow(data)
@@ -2211,18 +2220,16 @@ server <- function(input, output, session) {
     req(filtered_sim_pool())
     
     data <- copy(filtered_sim_pool())
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     # Select columns to display
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
-                      "CumulativeOwnership", "GeometricMeanOwnership", 
+                      "AvgOwn", 
                       "ActualScore", "InContest", "TimesPlayed")
     display_cols <- intersect(display_cols, names(data))
     
     # Rename columns for display
     col_names <- display_cols
-    col_names <- gsub("CumulativeOwnership", "TotalOwn", col_names)
-    col_names <- gsub("GeometricMeanOwnership", "AvgOwn", col_names)
     col_names <- gsub("ActualOwnership", "Dupes", col_names)
     
     datatable(data[, ..display_cols],
@@ -2275,13 +2282,13 @@ server <- function(input, output, session) {
   })
   
   output$totalown_chart <- renderPlotly({
-    req(rv$unified_pool, "CumulativeOwnership" %in% names(rv$unified_pool))
-    create_metric_scatter(rv$unified_pool, "CumulativeOwnership", "Total Ownership %", "Total Ownership", rv$data)
+    req(rv$unified_pool %in% names(rv$unified_pool))
+    create_metric_scatter(rv$unified_pool, "Total Ownership %", "Total Ownership", rv$data)
   })
   
   output$avgown_chart <- renderPlotly({
-    req(rv$unified_pool, "GeometricMeanOwnership" %in% names(rv$unified_pool))
-    create_metric_scatter(rv$unified_pool, "GeometricMeanOwnership", "Avg Ownership %", "Avg Ownership", rv$data)
+    req(rv$unified_pool, "AvgOwn" %in% names(rv$unified_pool))
+    create_metric_scatter(rv$unified_pool, "AvgOwn", "Avg Ownership %", "Avg Ownership", rv$data)
   })
   
   output$totalstart_chart <- renderPlotly({
@@ -2384,15 +2391,15 @@ server <- function(input, output, session) {
   })
   
   output$totalown_buckets <- renderDT({
-    req(filtered_sim_pool(), "CumulativeOwnership" %in% names(filtered_sim_pool()))
-    create_bucket_table(filtered_sim_pool(), "CumulativeOwnership",
+    req(filtered_sim_pool() %in% names(filtered_sim_pool()))
+    create_bucket_table(filtered_sim_pool(),
                         breaks = c(0, 100, 200, 300, 400, 1000),
                         labels = c("0-100%", "100-200%", "200-300%", "300-400%", "400%+"))
   })
   
   output$avgown_buckets <- renderDT({
-    req(filtered_sim_pool(), "GeometricMeanOwnership" %in% names(filtered_sim_pool()))
-    create_bucket_table(filtered_sim_pool(), "GeometricMeanOwnership",
+    req(filtered_sim_pool(), "AvgOwn" %in% names(filtered_sim_pool()))
+    create_bucket_table(filtered_sim_pool(), "AvgOwn",
                         breaks = c(0, 10, 20, 30, 40, 100),
                         labels = c("0-10%", "10-20%", "20-30%", "30-40%", "40%+"))
   })
@@ -2474,7 +2481,7 @@ server <- function(input, output, session) {
     
     # Similar for all metrics...
     # Update player filter choices
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     all_players <- sort(unique(unlist(data[, player_cols, with = FALSE])))
     
     updateSelectizeInput(session, "sim_include_players", choices = all_players, server = TRUE)
@@ -2556,7 +2563,7 @@ server <- function(input, output, session) {
     
     # Calculate correlations with ActualScore
     cor_cols <- c("WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
-                  "CumulativeOwnership", "GeometricMeanOwnership", 
+                  "AvgOwn", 
                   "TotalSalary", "CumulativeStarting", "GeometricMeanStarting")
     cor_cols <- intersect(cor_cols, names(data))
     
@@ -2608,10 +2615,10 @@ server <- function(input, output, session) {
     data <- filtered_sim_pool()
     
     # Select columns to display
-    player_cols <- grep("^(Player|Driver|Fighter|Golfer)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Driver|Player|Golfer)[0-9]$", names(data), value = TRUE)
     
     metric_cols <- c("SimRank", "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
-                     "CumulativeOwnership", "GeometricMeanOwnership",
+                     "AvgOwn",
                      "TotalSalary", "CumulativeStarting", "GeometricMeanStarting",
                      "ActualScore", "InContest", 
                      "TimesPlayed", "PlayedBy")
@@ -2896,28 +2903,28 @@ server <- function(input, output, session) {
   
   # Ownership scatter
   output$ownership_scatter <- renderPlotly({
-    req(filtered_sim_pool(), "CumulativeOwnership" %in% names(filtered_sim_pool()))
+    req(filtered_sim_pool() %in% names(filtered_sim_pool()))
     
     data <- filtered_sim_pool()
     
     # Calculate trendline
-    model <- lm(ActualScore ~ CumulativeOwnership, data = data)
+    model <- lm(ActualScore ~ AvgOwn, data = data)
     data$fitted <- predict(model)
     
     plot_ly(data, 
-            x = ~CumulativeOwnership, 
+            x = ~AvgOwn, 
             y = ~ActualScore,
             color = ~InContest,
             colors = c("#888888", "#FFE500"),
             type = 'scatter',
             mode = 'markers',
             marker = list(size = 8, opacity = 0.6),
-            text = ~paste("Ownership:", round(CumulativeOwnership, 1), "%<br>",
+            text = ~paste("Ownership:", round(AvgOwn, 1), "%<br>",
                           "Actual Score:", round(ActualScore, 2)),
             hoverinfo = 'text',
             name = ~ifelse(InContest, "Played", "Not Played")) %>%
       add_trace(
-        x = ~CumulativeOwnership,
+        x = ~AvgOwn,
         y = ~fitted,
         type = 'scatter',
         mode = 'lines',
@@ -2941,11 +2948,11 @@ server <- function(input, output, session) {
   })
   
   output$ownership_buckets <- renderDT({
-    req(filtered_sim_pool(), "CumulativeOwnership" %in% names(filtered_sim_pool()))
+    req(filtered_sim_pool() %in% names(filtered_sim_pool()))
     
     data <- copy(filtered_sim_pool())
     
-    data[, OwnBucket := cut(CumulativeOwnership, 
+    data[, OwnBucket := cut(AvgOwn, 
                             breaks = c(0, 100, 150, 200, 300, 1000),
                             labels = c("0-100%", "100-150%", "150-200%", "200-300%", "300%+"),
                             include.lowest = TRUE)]
@@ -2974,28 +2981,28 @@ server <- function(input, output, session) {
   
   # Geometric Ownership scatter
   output$geo_ownership_scatter <- renderPlotly({
-    req(filtered_sim_pool(), "GeometricMeanOwnership" %in% names(filtered_sim_pool()))
+    req(filtered_sim_pool(), "AvgOwn" %in% names(filtered_sim_pool()))
     
     data <- filtered_sim_pool()
     
     # Calculate trendline
-    model <- lm(ActualScore ~ GeometricMeanOwnership, data = data)
+    model <- lm(ActualScore ~ AvgOwn, data = data)
     data$fitted <- predict(model)
     
     plot_ly(data, 
-            x = ~GeometricMeanOwnership, 
+            x = ~AvgOwn, 
             y = ~ActualScore,
             color = ~InContest,
             colors = c("#888888", "#FFE500"),
             type = 'scatter',
             mode = 'markers',
             marker = list(size = 8, opacity = 0.6),
-            text = ~paste("Geo Mean Ownership:", round(GeometricMeanOwnership, 1), "%<br>",
+            text = ~paste("Geo Mean Ownership:", round(AvgOwn, 1), "%<br>",
                           "Actual Score:", round(ActualScore, 2)),
             hoverinfo = 'text',
             name = ~ifelse(InContest, "Played", "Not Played")) %>%
       add_trace(
-        x = ~GeometricMeanOwnership,
+        x = ~AvgOwn,
         y = ~fitted,
         type = 'scatter',
         mode = 'lines',
@@ -3019,11 +3026,11 @@ server <- function(input, output, session) {
   })
   
   output$geo_ownership_buckets <- renderDT({
-    req(filtered_sim_pool(), "GeometricMeanOwnership" %in% names(filtered_sim_pool()))
+    req(filtered_sim_pool(), "AvgOwn" %in% names(filtered_sim_pool()))
     
     data <- copy(filtered_sim_pool())
     
-    data[, GeoOwnBucket := cut(GeometricMeanOwnership, 
+    data[, GeoOwnBucket := cut(AvgOwn, 
                                breaks = c(0, 20, 30, 40, 50, 100),
                                labels = c("0-20%", "20-30%", "30-40%", "40-50%", "50%+"),
                                include.lowest = TRUE)]
@@ -3234,11 +3241,11 @@ server <- function(input, output, session) {
       ))
     }
     
-    plot_ly(data, x = ~CumulativeOwnership, y = ~ActualOwnership,
+    plot_ly(data, x = ~AvgOwn, y = ~ActualOwnership,
             type = 'scatter', mode = 'markers',
             marker = list(size = 10, color = '#FFE500', opacity = 0.7,
                           line = list(color = '#000000', width = 1)),
-            text = ~paste("Predicted Own:", round(CumulativeOwnership, 1), "%<br>",
+            text = ~paste("Predicted Own:", round(AvgOwn, 1), "%<br>",
                           "Times Played:", ActualOwnership, "<br>",
                           "Score:", round(ActualScore, 1)),
             hoverinfo = 'text') %>%
@@ -3263,14 +3270,14 @@ server <- function(input, output, session) {
     }
     
     # Create ownership buckets
-    data[, OwnBucket := cut(CumulativeOwnership, 
+    data[, OwnBucket := cut(AvgOwn, 
                             breaks = c(0, 50, 100, 150, 200, 1000),
                             labels = c("0-50%", "50-100%", "100-150%", "150-200%", "200%+"),
                             include.lowest = TRUE)]
     
     bucket_stats <- data[, .(
       `Lineups` = .N,
-      `Avg Predicted Own %` = round(mean(CumulativeOwnership, na.rm = TRUE), 1),
+      `Avg Predicted Own %` = round(mean(AvgOwn, na.rm = TRUE), 1),
       `Avg Times Played` = round(mean(ActualOwnership, na.rm = TRUE), 2),
       `Max ActualOwnership` = max(ActualOwnership, na.rm = TRUE),
       `Single Entry %` = round(sum(ActualOwnership == 1) / .N * 100, 1),
@@ -3295,17 +3302,15 @@ server <- function(input, output, session) {
     
     data <- rv$unified_pool[InSim == TRUE][order(-ActualScore)]
     
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
-                      "CumulativeOwnership", "GeometricMeanOwnership", 
+                      "AvgOwn", 
                       "ActualScore", "InContest", "ActualOwnership")
     display_cols <- intersect(display_cols, names(data))
     
     # Rename columns for display
     col_names <- display_cols
-    col_names <- gsub("CumulativeOwnership", "TotalOwn", col_names)
-    col_names <- gsub("GeometricMeanOwnership", "AvgOwn", col_names)
     col_names <- gsub("ActualOwnership", "Dupes", col_names)
     
     datatable(data[, ..display_cols],
@@ -3313,7 +3318,7 @@ server <- function(input, output, session) {
               options = list(pageLength = 50, scrollX = TRUE),
               rownames = FALSE) %>%
       formatRound(c("WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct", 
-                    "CumulativeOwnership", "GeometricMeanOwnership"), 1) %>%
+                    "AvgOwn"), 1) %>%
       formatRound("ActualScore", 1) %>%
       formatStyle('InContest',
                   backgroundColor = styleEqual(c(TRUE, FALSE), c('#2ecc71', '#34495e')))
@@ -3391,7 +3396,7 @@ server <- function(input, output, session) {
     
     data <- rv$unified_pool[InSim == TRUE]
     
-    plot_ly(data, x = ~CumulativeOwnership, type = 'histogram', nbinsx = 40,
+    plot_ly(data, x = ~AvgOwn, type = 'histogram', nbinsx = 40,
             marker = list(color = '#FFE500', line = list(color = '#000000', width = 1))) %>%
       layout(
         title = list(text = "Predicted Ownership Distribution", font = list(color = '#FFE500')),
@@ -3537,7 +3542,7 @@ server <- function(input, output, session) {
     
     data <- rv$contest_only[order(-ActualScore)]
     
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     display_cols <- c(player_cols, "ActualScore", "ActualOwnership")
     
@@ -3562,7 +3567,7 @@ server <- function(input, output, session) {
     req(rv$unified_pool)
     
     data <- copy(rv$unified_pool[InSim == TRUE])
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     # Player filters
     if (!is.null(input$filter_include_players) && length(input$filter_include_players) > 0) {
@@ -3598,11 +3603,8 @@ server <- function(input, output, session) {
     if (!is.null(input$filter_salary) && "TotalSalary" %in% names(data)) {
       data <- data[TotalSalary >= (input$filter_salary[1] * 1000) & TotalSalary <= (input$filter_salary[2] * 1000)]
     }
-    if (!is.null(input$filter_totalown) && "CumulativeOwnership" %in% names(data)) {
-      data <- data[CumulativeOwnership >= input$filter_totalown[1] & CumulativeOwnership <= input$filter_totalown[2]]
-    }
-    if (!is.null(input$filter_avgown) && "GeometricMeanOwnership" %in% names(data)) {
-      data <- data[GeometricMeanOwnership >= input$filter_avgown[1] & GeometricMeanOwnership <= input$filter_avgown[2]]
+    if (!is.null(input$filter_avgown) && "AvgOwn" %in% names(data)) {
+      data <- data[AvgOwn >= input$filter_avgown[1] & AvgOwn <= input$filter_avgown[2]]
     }
     if (!is.null(input$filter_totalstart) && "CumulativeStarting" %in% names(data)) {
       data <- data[CumulativeStarting >= input$filter_totalstart[1] & CumulativeStarting <= input$filter_totalstart[2]]
@@ -3665,7 +3667,7 @@ server <- function(input, output, session) {
     req(filter_review_pool())
     
     data <- filter_review_pool()
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
     
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
                       "ActualScore", "InContest")
@@ -3673,8 +3675,6 @@ server <- function(input, output, session) {
     
     # Rename columns for display
     col_names <- display_cols
-    col_names <- gsub("CumulativeOwnership", "TotalOwn", col_names)
-    col_names <- gsub("GeometricMeanOwnership", "AvgOwn", col_names)
     
     datatable(data[, ..display_cols],
               colnames = col_names,
@@ -3699,7 +3699,7 @@ server <- function(input, output, session) {
   # Update player dropdowns and slider ranges when sim loads
   observe({
     req(rv$unified_pool)
-    player_cols <- grep("^(Fighter|Player|Driver)[0-9]$", names(rv$unified_pool), value = TRUE)
+    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(rv$unified_pool), value = TRUE)
     all_players <- sort(unique(unlist(rv$unified_pool[, player_cols, with = FALSE])))
     
     updateSelectizeInput(session, "filter_include_players", choices = all_players, server = TRUE)
@@ -3710,12 +3710,8 @@ server <- function(input, output, session) {
       rng <- range(rv$unified_pool$TotalSalary / 1000, na.rm = TRUE)
       updateSliderInput(session, "filter_salary", min = floor(rng[1]), max = ceiling(rng[2]), value = c(floor(rng[1]), ceiling(rng[2])))
     }
-    if ("CumulativeOwnership" %in% names(rv$unified_pool)) {
-      rng <- range(rv$unified_pool$CumulativeOwnership, na.rm = TRUE)
-      updateSliderInput(session, "filter_totalown", min = floor(rng[1]), max = ceiling(rng[2]), value = c(floor(rng[1]), ceiling(rng[2])))
-    }
-    if ("GeometricMeanOwnership" %in% names(rv$unified_pool)) {
-      rng <- range(rv$unified_pool$GeometricMeanOwnership, na.rm = TRUE)
+    if ("AvgOwn" %in% names(rv$unified_pool)) {
+      rng <- range(rv$unified_pool$AvgOwn, na.rm = TRUE)
       updateSliderInput(session, "filter_avgown", min = floor(rng[1]), max = ceiling(rng[2]), value = c(floor(rng[1]), ceiling(rng[2])))
     }
     if ("CumulativeStarting" %in% names(rv$unified_pool)) {
