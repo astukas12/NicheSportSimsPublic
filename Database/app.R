@@ -182,7 +182,7 @@ ui <- fluidPage(
                                  div(class = "box-header", h3("Race Selection Configuration", class = "box-title")),
                                  div(class = "box-body",
                                      fluidRow(
-                                       column(3, selectizeInput("analysis_series", "Series:", choices = c("Cup Series"=1,"Xfinity Series"=2,"Truck Series"=3), selected=1)),
+                                       column(3, selectizeInput("analysis_series", "Series:", choices = c("Cup Series"=1,"OReilly Series"=2,"Truck Series"=3), selected=1)),
                                        column(3, selectizeInput("analysis_primary_track", "Primary Track:", choices=NULL, options=list(placeholder="Select Track"))),
                                        column(3, selectizeInput("analysis_similar_tracks", "Similar Tracks (Optional):", choices=NULL, multiple=TRUE, options=list(placeholder="Select Track(s)"))),
                                        column(3, selectizeInput("analysis_race_id", "Upcoming Race:", choices=NULL, options=list(placeholder="Select Race")))
@@ -636,7 +636,7 @@ server <- function(input, output, session) {
     # Determine series name for file lookup
     series_name <- switch(as.character(input$analysis_series),
                           "1" = "Cup",
-                          "2" = "Xfinity", 
+                          "2" = "OReilly", 
                           "3" = "Trucks",
                           "Cup")  # default
     
@@ -769,7 +769,7 @@ server <- function(input, output, session) {
     race_name <- if(nrow(race_info)>0) race_info$race_name else "Entry List"
     
     # Check if salaries were loaded
-    series_name <- switch(as.character(input$analysis_series), "1" = "Cup", "2" = "Xfinity", "3" = "Trucks", "Cup")
+    series_name <- switch(as.character(input$analysis_series), "1" = "Cup", "2" = "OReilly", "3" = "Trucks", "Cup")
     dk_exists <- file.exists(paste0("DK", series_name, ".csv"))
     fd_exists <- file.exists(paste0("FD", series_name, ".csv"))
     
