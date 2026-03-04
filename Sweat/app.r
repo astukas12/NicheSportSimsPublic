@@ -464,7 +464,9 @@ server <- function(input, output, session) {
     lineup_players_cache = list(),
     all_usernames = NULL,
     sim_data = NULL,
-    sim_loaded = FALSE
+    sim_loaded = FALSE,
+    cpt_score_lookup = NULL,
+    util_score_lookup = NULL
   )
   
   # Sport badge
@@ -476,8 +478,15 @@ server <- function(input, output, session) {
   # Fast player extraction with caching
   extract_players <- function(lineup) {
     if (!lineup %in% names(rv$lineup_players_cache)) {
-      # Detect sport prefix (F for MMA, D for NASCAR, G for Golf)
-      if (grepl(" G ", lineup, fixed = TRUE)) {
+      # Detect sport prefix (F for MMA, D for NASCAR, G for Golf, CPT for MMA-SD, P for Tennis)
+      if (grepl("^CPT ", lineup)) {
+        # MMA Showdown: CPT <name> F <name> F <name> ...
+        # Remove leading "CPT "
+        rest <- sub("^CPT ", "", lineup)
+        # Split on " F " to get captain + utils
+        parts <- unlist(strsplit(rest, " F ", fixed = TRUE))
+        players <- trimws(parts)
+      } else if (grepl(" G ", lineup, fixed = TRUE)) {
         # Golf
         players <- unlist(strsplit(lineup, " G ", fixed = TRUE))
         players <- trimws(sub("^G ", "", players))
@@ -485,8 +494,12 @@ server <- function(input, output, session) {
         # NASCAR
         players <- unlist(strsplit(lineup, " D ", fixed = TRUE))
         players <- trimws(sub("^D ", "", players))
+      } else if (grepl("^P ", lineup)) {
+        # Tennis
+        players <- unlist(strsplit(lineup, " P ", fixed = TRUE))
+        players <- trimws(sub("^P ", "", players))
       } else {
-        # MMA (default - F prefix)
+        # MMA classic (default - F prefix)
         players <- unlist(strsplit(lineup, " F ", fixed = TRUE))
         players <- trimws(sub("^F ", "", players))
       }
@@ -496,15 +509,37 @@ server <- function(input, output, session) {
     rv$lineup_players_cache[[lineup]]
   }
   
+  # For MMA-SD: extract captain name from lineup string (first player after CPT)
+  extract_captain <- function(lineup) {
+    if (!grepl("^CPT ", lineup)) return(NA_character_)
+    rest <- sub("^CPT ", "", lineup)
+    # Captain is everything before the first " F "
+    trimws(sub(" F .*$", "", rest))
+  }
+  
+  # Helper: get player column names from a data frame (handles classic and SD)
+  get_player_cols <- function(df_names) {
+    # MMA-SD sim: Captain + Util[0-9]
+    sd_cols <- c(
+      grep("^Captain$", df_names, value = TRUE),
+      grep("^Util[0-9]", df_names, value = TRUE)
+    )
+    if (length(sd_cols) > 0) return(sd_cols)
+    # Classic: Player[0-9], Driver[0-9], Golfer[0-9]
+    grep("^(Player|Driver|Golfer)[0-9]", df_names, value = TRUE)
+  }
+  
   # Format lineup for display (remove position prefixes)
   format_lineup_display <- function(lineup) {
-    # Remove F, D, or G prefixes
+    # Remove F, D, G, or P prefixes
     lineup <- gsub(" G ", " | ", lineup, fixed = TRUE)
     lineup <- gsub(" D ", " | ", lineup, fixed = TRUE)
     lineup <- gsub(" F ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" P ", " | ", lineup, fixed = TRUE)
     lineup <- gsub("^G ", "", lineup)
     lineup <- gsub("^D ", "", lineup)
     lineup <- gsub("^F ", "", lineup)
+    lineup <- gsub("^P ", "", lineup)
     return(lineup)
   }
   
@@ -531,8 +566,12 @@ server <- function(input, output, session) {
         sample_lineup <- dt[2, Lineup]
         if (grepl(" D ", sample_lineup, fixed = TRUE)) {
           rv$sport <- "NASCAR"
+        } else if (grepl("^CPT ", sample_lineup)) {
+          rv$sport <- "MMA-SD"
         } else if (grepl(" F ", sample_lineup, fixed = TRUE)) {
           rv$sport <- "MMA"
+        } else if (grepl("^P ", sample_lineup)) {
+          rv$sport <- "Tennis"
         } else {
           rv$sport <- "UNKNOWN"
         }
@@ -560,29 +599,56 @@ server <- function(input, output, session) {
         # Extract player scores if Player and FPTS columns exist
         if ("Player" %in% names(dt) && "FPTS" %in% names(dt)) {
           drafted_col <- grep("%Drafted", names(dt), value = TRUE)[1]
+          roster_pos_col <- grep("Roster Position", names(dt), value = TRUE)[1]
           
           if (!is.na(drafted_col)) {
             player_data <- dt[, .(
               Player = trimws(Player),
               FPTS = as.numeric(FPTS),
-              FieldExp = as.numeric(gsub("%", "", get(drafted_col)))
+              FieldExp = as.numeric(gsub("%", "", get(drafted_col))),
+              RosterPosition = if (!is.na(roster_pos_col)) trimws(get(roster_pos_col)) else NA_character_
             )][!is.na(Player) & Player != "" & Player != "Player"]
           } else {
             player_data <- dt[, .(
               Player = trimws(Player),
-              FPTS = as.numeric(FPTS)
+              FPTS = as.numeric(FPTS),
+              RosterPosition = if (!is.na(roster_pos_col)) trimws(get(roster_pos_col)) else NA_character_
             )][!is.na(Player) & Player != "" & Player != "Player"]
           }
           
-          if ("FieldExp" %in% names(player_data)) {
-            rv$player_scores <- player_data[, .(
-              FPTS = max(FPTS, na.rm = TRUE),
-              FieldExp = max(FieldExp, na.rm = TRUE)
-            ), by = Player]
+          # For MMA-SD: build separate CPT and UTIL score lookups
+          if (rv$sport == "MMA-SD" && "RosterPosition" %in% names(player_data) && 
+              any(player_data$RosterPosition == "CPT", na.rm = TRUE)) {
+            
+            cpt_data  <- player_data[RosterPosition == "CPT"]
+            util_data <- player_data[RosterPosition == "F"]
+            
+            rv$cpt_score_lookup  <- setNames(cpt_data$FPTS,  cpt_data$Player)
+            rv$util_score_lookup <- setNames(util_data$FPTS, util_data$Player)
+            
+            # player_scores uses F (util) rows for display/exposure purposes
+            if ("FieldExp" %in% names(util_data)) {
+              rv$player_scores <- util_data[, .(
+                FPTS = max(FPTS, na.rm = TRUE),
+                FieldExp = max(FieldExp, na.rm = TRUE)
+              ), by = Player]
+            } else {
+              rv$player_scores <- util_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
+            }
           } else {
-            rv$player_scores <- player_data[, .(
-              FPTS = max(FPTS, na.rm = TRUE)
-            ), by = Player]
+            rv$cpt_score_lookup  <- NULL
+            rv$util_score_lookup <- NULL
+            
+            if ("FieldExp" %in% names(player_data)) {
+              rv$player_scores <- player_data[, .(
+                FPTS = max(FPTS, na.rm = TRUE),
+                FieldExp = max(FieldExp, na.rm = TRUE)
+              ), by = Player]
+            } else {
+              rv$player_scores <- player_data[, .(
+                FPTS = max(FPTS, na.rm = TRUE)
+              ), by = Player]
+            }
           }
           
           setkey(rv$player_scores, Player)
@@ -660,6 +726,13 @@ server <- function(input, output, session) {
         # Detect player columns dynamically
         player_cols <- grep("^(Player|Driver|Player|Golfer)[0-9]", names(sim_raw), value = TRUE)
         
+        # MMA-SD: detect Captain + Util columns
+        is_showdown_sim <- "Captain" %in% names(sim_raw) && any(grepl("^Util[0-9]", names(sim_raw)))
+        if (is_showdown_sim) {
+          util_cols   <- grep("^Util[0-9]", names(sim_raw), value = TRUE)
+          player_cols <- c("Captain", util_cols)
+        }
+        
         if (length(player_cols) == 0) {
           # Try alternate naming pattern
           player_cols <- names(sim_raw)[1:6]
@@ -678,6 +751,21 @@ server <- function(input, output, session) {
           cat("Using pre-computed LineupKey - FAST!\n")
           # Keys already exist, just need to ensure they're clean
           sim_clean[, LineupKey := trimws(LineupKey)]
+        } else if (is_showdown_sim) {
+          cat("Computing MMA-SD LineupKey (captain-aware)...\n")
+          # Captain is fixed; utils are sorted so slot order doesn't matter
+          # Key format: "Captain=KingGreen|AlphaSort1|AlphaSort2|..."
+          captain_vec <- trimws(gsub("\\s*\\(\\d+\\)\\s*", "", sim_clean[["Captain"]]))
+          util_matrix <- as.matrix(sim_clean[, util_cols, with = FALSE])
+          for (j in seq_len(ncol(util_matrix))) {
+            util_matrix[, j] <- trimws(gsub("\\s*\\(\\d+\\)\\s*", "", util_matrix[, j]))
+          }
+          sim_clean[, LineupKey := {
+            paste0(
+              "CPT=", captain_vec, "|",
+              apply(util_matrix, 1, function(x) paste(sort(x), collapse = "|"))
+            )
+          }]
         } else {
           cat("Computing LineupKey (slow - consider adding to sim app)...\n")
           # Need to create keys - this is slow
@@ -690,14 +778,28 @@ server <- function(input, output, session) {
         # Score sim lineups against actual scores (vectorized)
         score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
         
-        # Vectorized scoring - much faster than loop
-        for (col in player_cols) {
-          score_col <- paste0(col, "Score")
-          set(sim_clean, j = score_col, value = score_lookup[sim_clean[[col]]])
+        if (is_showdown_sim && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+          # MMA-SD: Captain uses CPT score, utils use F score
+          cpt_scores  <- rv$cpt_score_lookup[sim_clean[["Captain"]]]
+          sim_clean[, CaptainScore := cpt_scores]
+          
+          for (col in util_cols) {
+            score_col <- paste0(col, "Score")
+            set(sim_clean, j = score_col, value = rv$util_score_lookup[sim_clean[[col]]])
+          }
+          
+          util_score_cols <- paste0(util_cols, "Score")
+          sim_clean[, ActualScore := rowSums(cbind(CaptainScore, .SD), na.rm = TRUE), .SDcols = util_score_cols]
+        } else {
+          # Standard scoring (MMA classic, NASCAR, Golf)
+          for (col in player_cols) {
+            score_col <- paste0(col, "Score")
+            set(sim_clean, j = score_col, value = score_lookup[sim_clean[[col]]])
+          }
+          
+          score_cols <- paste0(player_cols, "Score")
+          sim_clean[, ActualScore := rowSums(.SD, na.rm = TRUE), .SDcols = score_cols]
         }
-        
-        score_cols <- paste0(player_cols, "Score")
-        sim_clean[, ActualScore := rowSums(.SD, na.rm = TRUE), .SDcols = score_cols]
         
         # Store available ranking metrics for dropdown
         # SimRank will be calculated reactively based on user selection
@@ -711,9 +813,24 @@ server <- function(input, output, session) {
           # Parse all lineups at once
           all_players <- lapply(Lineup, extract_players)
           
-          # Score and create keys vectorized
-          scores <- sapply(all_players, function(players) sum(score_lookup[players], na.rm = TRUE))
-          keys <- sapply(all_players, function(players) paste(sort(players), collapse = "|"))
+          # For MMA-SD: captain-aware scoring and key building
+          if (rv$sport == "MMA-SD" && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+            captains <- sapply(Lineup, extract_captain)
+            scores <- mapply(function(players, capt) {
+              cpt_s  <- rv$cpt_score_lookup[capt]
+              if (is.na(cpt_s)) cpt_s <- 0
+              util_players <- players[players != capt]
+              util_s <- sum(rv$util_score_lookup[util_players], na.rm = TRUE)
+              cpt_s + util_s
+            }, all_players, captains)
+            keys <- mapply(function(players, capt) {
+              util_players <- players[players != capt]
+              paste0("CPT=", capt, "|", paste(sort(util_players), collapse = "|"))
+            }, all_players, captains)
+          } else {
+            scores <- sapply(all_players, function(players) sum(score_lookup[players], na.rm = TRUE))
+            keys   <- sapply(all_players, function(players) paste(sort(players), collapse = "|"))
+          }
           
           .(LineupKey = keys, ActualScore = scores)
         }, by = .(Lineup, Username, Points)]
@@ -745,8 +862,9 @@ server <- function(input, output, session) {
         
         incProgress(0.1, detail = "Calculating unique players...")
         
-        # Simple apply for unique counts
-        sim_clean[, UniquePlayerCount := apply(player_matrix, 1, function(x) length(unique(x)))]
+        # Simple apply for unique counts (works for both SD and classic)
+        player_matrix_for_unique <- as.matrix(sim_clean[, player_cols, with = FALSE])
+        sim_clean[, UniquePlayerCount := apply(player_matrix_for_unique, 1, function(x) length(unique(x)))]
         
         rv$sim_data <- sim_clean
         rv$sim_loaded <- TRUE
@@ -1847,16 +1965,42 @@ server <- function(input, output, session) {
     sim_data <- copy(rv$sim_data)
     sim_data[, `:=`(InSim = TRUE, InContest = PlayedInContest)]
     
+    # Helper: build contest lineup key (captain-aware for MMA-SD)
+    build_contest_key <- function(lineup) {
+      if (rv$sport == "MMA-SD") {
+        capt <- extract_captain(lineup)
+        players <- extract_players(lineup)
+        utils  <- players[players != capt]
+        paste0("CPT=", capt, "|", paste(sort(utils), collapse = "|"))
+      } else {
+        players <- extract_players(lineup)
+        paste(sort(players), collapse = "|")
+      }
+    }
+    
+    # Helper: score a contest lineup (captain-aware for MMA-SD)
+    score_contest_lineup <- function(lineup) {
+      if (rv$sport == "MMA-SD" && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+        capt <- extract_captain(lineup)
+        players <- extract_players(lineup)
+        utils <- players[players != capt]
+        cpt_s  <- ifelse(is.na(rv$cpt_score_lookup[capt]),  0, rv$cpt_score_lookup[capt])
+        util_s <- sum(rv$util_score_lookup[utils], na.rm = TRUE)
+        cpt_s + util_s
+      } else {
+        score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
+        players <- extract_players(lineup)
+        sum(score_lookup[players], na.rm = TRUE)
+      }
+    }
+    
     # Calculate actual ownership for sim lineups
     if (!is.null(rv$data) && nrow(rv$data) > 0) {
       lineup_counts <- rv$data[, .(ActualOwnership = .N), by = Lineup]
       
-      # Create lineup keys for contest lineups
+      # Create lineup keys for contest lineups (captain-aware for MMA-SD)
       lineup_counts[, LineupKey := {
-        sapply(Lineup, function(lineup) {
-          players <- extract_players(lineup)
-          paste(sort(players), collapse = "|")
-        })
+        sapply(Lineup, build_contest_key)
       }]
       
       # Merge actual ownership to sim lineups
@@ -1872,23 +2016,16 @@ server <- function(input, output, session) {
         # Get full contest data for these lineups
         contest_only <- rv$data[Lineup %in% contest_only_keys$Lineup]
         contest_only[, LineupKey := {
-          sapply(Lineup, function(lineup) {
-            players <- extract_players(lineup)
-            paste(sort(players), collapse = "|")
-          })
+          sapply(Lineup, build_contest_key)
         }]
         
-        # Score them
-        score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
+        # Score them (captain-aware for MMA-SD)
         contest_only[, ActualScore := {
-          sapply(Lineup, function(lineup) {
-            players <- extract_players(lineup)
-            sum(score_lookup[players], na.rm = TRUE)
-          })
+          sapply(Lineup, score_contest_lineup)
         }]
         
         # Extract player columns
-        player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
+        player_cols <- get_player_cols(names(sim_data))
         for (i in seq_along(player_cols)) {
           contest_only[, (player_cols[i]) := {
             sapply(LineupKey, function(key) {
@@ -1955,7 +2092,7 @@ server <- function(input, output, session) {
       }
       
       # Update player dropdowns
-      player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(sim_data), value = TRUE)
+      player_cols <- get_player_cols(names(sim_data))
       all_players <- sort(unique(unlist(sim_data[, player_cols, with = FALSE])))
       
       updateSelectizeInput(session, "sim_include_players", choices = all_players, server = TRUE)
@@ -1973,7 +2110,7 @@ server <- function(input, output, session) {
     
     data <- copy(rv$unified_pool)
     
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     # Player filters
     if (!is.null(input$sim_include_players) && length(input$sim_include_players) > 0) {
@@ -2220,7 +2357,7 @@ server <- function(input, output, session) {
     req(filtered_sim_pool())
     
     data <- copy(filtered_sim_pool())
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     # Select columns to display
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
@@ -2231,6 +2368,8 @@ server <- function(input, output, session) {
     # Rename columns for display
     col_names <- display_cols
     col_names <- gsub("ActualOwnership", "Dupes", col_names)
+    col_names <- gsub("^Captain$", "CPT", col_names)
+    col_names <- gsub("^Util([0-9]+)$", "UTIL\\1", col_names)
     
     datatable(data[, ..display_cols],
               colnames = col_names,
@@ -2481,7 +2620,7 @@ server <- function(input, output, session) {
     
     # Similar for all metrics...
     # Update player filter choices
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     all_players <- sort(unique(unlist(data[, player_cols, with = FALSE])))
     
     updateSelectizeInput(session, "sim_include_players", choices = all_players, server = TRUE)
@@ -2615,7 +2754,7 @@ server <- function(input, output, session) {
     data <- filtered_sim_pool()
     
     # Select columns to display
-    player_cols <- grep("^(Player|Driver|Player|Golfer)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     metric_cols <- c("SimRank", "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
                      "AvgOwn",
@@ -3302,7 +3441,7 @@ server <- function(input, output, session) {
     
     data <- rv$unified_pool[InSim == TRUE][order(-ActualScore)]
     
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
                       "AvgOwn", 
@@ -3312,6 +3451,8 @@ server <- function(input, output, session) {
     # Rename columns for display
     col_names <- display_cols
     col_names <- gsub("ActualOwnership", "Dupes", col_names)
+    col_names <- gsub("^Captain$", "CPT", col_names)
+    col_names <- gsub("^Util([0-9]+)$", "UTIL\\1", col_names)
     
     datatable(data[, ..display_cols],
               colnames = col_names,
@@ -3542,13 +3683,15 @@ server <- function(input, output, session) {
     
     data <- rv$contest_only[order(-ActualScore)]
     
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     display_cols <- c(player_cols, "ActualScore", "ActualOwnership")
     
     # Rename columns for display
     col_names <- display_cols
     col_names <- gsub("ActualOwnership", "Dupes", col_names)
+    col_names <- gsub("^Captain$", "CPT", col_names)
+    col_names <- gsub("^Util([0-9]+)$", "UTIL\\1", col_names)
     display_cols <- intersect(display_cols, names(data))
     
     datatable(data[, ..display_cols], 
@@ -3567,7 +3710,7 @@ server <- function(input, output, session) {
     req(rv$unified_pool)
     
     data <- copy(rv$unified_pool[InSim == TRUE])
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     # Player filters
     if (!is.null(input$filter_include_players) && length(input$filter_include_players) > 0) {
@@ -3667,7 +3810,7 @@ server <- function(input, output, session) {
     req(filter_review_pool())
     
     data <- filter_review_pool()
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(data), value = TRUE)
+    player_cols <- get_player_cols(names(data))
     
     display_cols <- c(player_cols, "WinRate", "Top1Pct", "Top5Pct", "Top10Pct", "Top20Pct",
                       "ActualScore", "InContest")
@@ -3699,7 +3842,7 @@ server <- function(input, output, session) {
   # Update player dropdowns and slider ranges when sim loads
   observe({
     req(rv$unified_pool)
-    player_cols <- grep("^(Player|Player|Driver)[0-9]$", names(rv$unified_pool), value = TRUE)
+    player_cols <- get_player_cols(names(rv$unified_pool))
     all_players <- sort(unique(unlist(rv$unified_pool[, player_cols, with = FALSE])))
     
     updateSelectizeInput(session, "filter_include_players", choices = all_players, server = TRUE)
