@@ -1,38 +1,37 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Shane Van Gisbergen (42107037),Shane Van Gisbergen,42107037,D,13000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,34.6
-D,Connor Zilisch (42107038),Connor Zilisch,42107038,D,11500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,18.69
-D,William Byron (42107039),William Byron,42107039,D,10000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,32.85
-D,Christopher Bell (42107040),Christopher Bell,42107040,D,9800,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,22.29
-D,Tyler Reddick (42107041),Tyler Reddick,42107041,D,9500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,45.74
-D,Kyle Larson (42107042),Kyle Larson,42107042,D,9200,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,27.25
-D,Chase Elliott (42107043),Chase Elliott,42107043,D,9000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,35.52
-D,Chase Briscoe (42107044),Chase Briscoe,42107044,D,8700,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,33.78
-D,AJ Allmendinger (42107045),AJ Allmendinger,42107045,D,8500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,35.9
-D,Chris Buescher (42107046),Chris Buescher,42107046,D,8300,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,33.32
-D,Ross Chastain (42107047),Ross Chastain,42107047,D,8100,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,40.66
-D,Kyle Busch (42107048),Kyle Busch,42107048,D,8000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,9.4
-D,Alex Bowman (42107049),Alex Bowman,42107049,D,7800,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,23.38
-D,Ty Gibbs (42107050),Ty Gibbs,42107050,D,7700,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,17.04
-D,Michael McDowell (42107051),Michael McDowell,42107051,D,7600,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,28.25
-D,Ryan Blaney (42107052),Ryan Blaney,42107052,D,7500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,40.32
-D,Joey Logano (42107053),Joey Logano,42107053,D,7400,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,38.11
-D,Austin Cindric (42107054),Austin Cindric,42107054,D,7200,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,19.08
-D,Denny Hamlin (42107055),Denny Hamlin,42107055,D,7100,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,30.64
-D,Ryan Preece (42107056),Ryan Preece,42107056,D,7000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,48.11
-D,Daniel Suarez (42107057),Daniel Suarez,42107057,D,6900,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,48.25
-D,Carson Hocevar (42107058),Carson Hocevar,42107058,D,6700,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,40.16
-D,Bubba Wallace (42107059),Bubba Wallace,42107059,D,6500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,36.94
-D,Brad Keselowski (42107060),Brad Keselowski,42107060,D,6300,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,37.12
-D,Austin Dillon (42107061),Austin Dillon,42107061,D,6200,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,22.01
-D,Todd Gilliland (42107062),Todd Gilliland,42107062,D,6100,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,19.97
-D,Zane Smith (42107063),Zane Smith,42107063,D,6000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,42.7
-D,Noah Gragson (42107064),Noah Gragson,42107064,D,5900,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,39.95
-D,John H. Nemechek (42107065),John H. Nemechek,42107065,D,5800,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,27.37
-D,Erik Jones (42107066),Erik Jones,42107066,D,5700,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,26.32
-D,Jesse Love (42107067),Jesse Love,42107067,D,5500,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,0
-D,Cole Custer (42107068),Cole Custer,42107068,D,5400,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,27.23
-D,Ricky Stenhouse Jr (42107069),Ricky Stenhouse Jr,42107069,D,5300,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,27.65
-D,Josh Berry (42107070),Josh Berry,42107070,D,5200,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,25.9
-D,Ty Dillon (42107071),Ty Dillon,42107071,D,5000,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,38.38
-D,Riley Herbst (42107072),Riley Herbst,42107072,D,4900,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,25.25
-D,Cody Ware (42107073),Cody Ware,42107073,D,4800,DuraMAX Texas Grand Prix Powered by RelaDyne,Nasca,25.48
+D,Kyle Larson (42252943),Kyle Larson,42252943,D,11000,Pennzoil 400 presented by Jiffy Lube,Nasca,33.12
+D,Christopher Bell (42252944),Christopher Bell,42252944,D,10700,Pennzoil 400 presented by Jiffy Lube,Nasca,47.82
+D,Denny Hamlin (42252945),Denny Hamlin,42252945,D,10500,Pennzoil 400 presented by Jiffy Lube,Nasca,36.05
+D,William Byron (42252946),William Byron,42252946,D,10000,Pennzoil 400 presented by Jiffy Lube,Nasca,33.06
+D,Ryan Blaney (42252947),Ryan Blaney,42252947,D,9700,Pennzoil 400 presented by Jiffy Lube,Nasca,46.06
+D,Tyler Reddick (42252948),Tyler Reddick,42252948,D,9500,Pennzoil 400 presented by Jiffy Lube,Nasca,48.21
+D,Chase Briscoe (42252949),Chase Briscoe,42252949,D,9200,Pennzoil 400 presented by Jiffy Lube,Nasca,15.91
+D,Chase Elliott (42252950),Chase Elliott,42252950,D,9000,Pennzoil 400 presented by Jiffy Lube,Nasca,33.18
+D,Joey Logano (42252951),Joey Logano,42252951,D,8700,Pennzoil 400 presented by Jiffy Lube,Nasca,31.59
+D,Ross Chastain (42252952),Ross Chastain,42252952,D,8500,Pennzoil 400 presented by Jiffy Lube,Nasca,22.42
+D,Chris Buescher (42252953),Chris Buescher,42252953,D,8300,Pennzoil 400 presented by Jiffy Lube,Nasca,28.88
+D,Bubba Wallace (42252954),Bubba Wallace,42252954,D,8200,Pennzoil 400 presented by Jiffy Lube,Nasca,42.2
+D,Carson Hocevar (42252955),Carson Hocevar,42252955,D,8000,Pennzoil 400 presented by Jiffy Lube,Nasca,26.94
+D,Kyle Busch (42252956),Kyle Busch,42252956,D,7800,Pennzoil 400 presented by Jiffy Lube,Nasca,20.77
+D,Josh Berry (42252957),Josh Berry,42252957,D,7700,Pennzoil 400 presented by Jiffy Lube,Nasca,17.64
+D,Ryan Preece (42252958),Ryan Preece,42252958,D,7500,Pennzoil 400 presented by Jiffy Lube,Nasca,43.24
+D,Ty Gibbs (42252959),Ty Gibbs,42252959,D,7400,Pennzoil 400 presented by Jiffy Lube,Nasca,28.88
+D,Austin Cindric (42252960),Austin Cindric,42252960,D,7200,Pennzoil 400 presented by Jiffy Lube,Nasca,9.78
+D,Connor Zilisch (42252961),Connor Zilisch,42252961,D,7000,Pennzoil 400 presented by Jiffy Lube,Nasca,20.08
+D,Brad Keselowski (42252962),Brad Keselowski,42252962,D,6900,Pennzoil 400 presented by Jiffy Lube,Nasca,38.16
+D,Justin Allgaier (42252963),Justin Allgaier,42252963,D,6800,Pennzoil 400 presented by Jiffy Lube,Nasca,9.78
+D,Daniel Suarez (42252964),Daniel Suarez,42252964,D,6600,Pennzoil 400 presented by Jiffy Lube,Nasca,32.63
+D,Erik Jones (42252965),Erik Jones,42252965,D,6500,Pennzoil 400 presented by Jiffy Lube,Nasca,28.79
+D,Shane Van Gisbergen (42252966),Shane Van Gisbergen,42252966,D,6300,Pennzoil 400 presented by Jiffy Lube,Nasca,39.01
+D,Michael McDowell (42252967),Michael McDowell,42252967,D,6200,Pennzoil 400 presented by Jiffy Lube,Nasca,33.87
+D,AJ Allmendinger (42252968),AJ Allmendinger,42252968,D,6100,Pennzoil 400 presented by Jiffy Lube,Nasca,33.79
+D,John H. Nemechek (42252969),John H. Nemechek,42252969,D,6000,Pennzoil 400 presented by Jiffy Lube,Nasca,25.82
+D,Zane Smith (42252970),Zane Smith,42252970,D,5900,Pennzoil 400 presented by Jiffy Lube,Nasca,25.67
+D,Austin Dillon (42252971),Austin Dillon,42252971,D,5800,Pennzoil 400 presented by Jiffy Lube,Nasca,27.08
+D,Ricky Stenhouse Jr (42252972),Ricky Stenhouse Jr,42252972,D,5700,Pennzoil 400 presented by Jiffy Lube,Nasca,24.39
+D,Todd Gilliland (42252973),Todd Gilliland,42252973,D,5600,Pennzoil 400 presented by Jiffy Lube,Nasca,25.18
+D,Noah Gragson (42252974),Noah Gragson,42252974,D,5500,Pennzoil 400 presented by Jiffy Lube,Nasca,31.37
+D,Ty Dillon (42252975),Ty Dillon,42252975,D,5300,Pennzoil 400 presented by Jiffy Lube,Nasca,34.03
+D,Riley Herbst (42252976),Riley Herbst,42252976,D,5200,Pennzoil 400 presented by Jiffy Lube,Nasca,26.55
+D,Cole Custer (42252977),Cole Custer,42252977,D,5100,Pennzoil 400 presented by Jiffy Lube,Nasca,18.14
+D,Cody Ware (42252978),Cody Ware,42252978,D,5000,Pennzoil 400 presented by Jiffy Lube,Nasca,24.69

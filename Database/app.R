@@ -19,6 +19,19 @@ library(tidyr)
 
 #--------------------- Helper Functions ---------------------#
 
+# Safe trimws that handles encoding issues
+safe_trimws <- function(x) {
+  tryCatch({
+    # First try to fix encoding
+    x_clean <- iconv(x, from = "UTF-8", to = "UTF-8", sub = "")
+    # Then trim whitespace
+    trimws(x_clean)
+  }, error = function(e) {
+    # If that fails, just return the original (might have some whitespace)
+    x
+  })
+}
+
 load_nascar_database <- function() {
   if (file.exists("NascarDatabase.csv")) {
     data <- read_csv("NascarDatabase.csv", show_col_types = FALSE)
@@ -59,7 +72,16 @@ load_entry_list <- function(race_season, series_id, race_id) {
         Car = results_car_number, Team = results_team_name,
         Make = results_car_make, CC = results_crew_chief_fullname, Sponsor = results_sponsor
       ) %>%
-      mutate(Car = as.integer(Car), Start = as.integer(Start)) %>%
+      mutate(
+        Car = as.integer(Car), 
+        Start = as.integer(Start),
+        # Clean special characters and fix encoding issues
+        Name = iconv(Name, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
+        Team = iconv(Team, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
+        CC = iconv(CC, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
+        Sponsor = iconv(Sponsor, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
+        Make = iconv(Make, from = "UTF-8", to = "ASCII//TRANSLIT", sub = "")
+      ) %>%
       arrange(Start)
     return(entry_list)
   }, error = function(e) {
@@ -654,17 +676,17 @@ server <- function(input, output, session) {
     dk_salaries <- NULL
     if (!is.null(dk_file)) {
       tryCatch({
-        dk_salaries <- read_csv(dk_file, show_col_types = FALSE)
+        dk_salaries <- read_csv(dk_file, show_col_types = FALSE, locale = locale(encoding = "UTF-8"))
         # DK format: Position, Name + ID, Name, ID, Roster Position, Salary, ...
         if ("Name" %in% names(dk_salaries) && "Salary" %in% names(dk_salaries)) {
           if ("ID" %in% names(dk_salaries)) {
             dk_salaries <- dk_salaries %>% 
               select(Name, DK_Salary = Salary, DKID = ID) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           } else {
             dk_salaries <- dk_salaries %>% 
               select(Name, DK_Salary = Salary) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           }
         }
       }, error = function(e) {
@@ -686,27 +708,27 @@ server <- function(input, output, session) {
     fd_salaries <- NULL
     if (!is.null(fd_file)) {
       tryCatch({
-        fd_salaries <- read_csv(fd_file, show_col_types = FALSE)
+        fd_salaries <- read_csv(fd_file, show_col_types = FALSE, locale = locale(encoding = "UTF-8"))
         # Standardize column names - adjust based on actual FD CSV format
         if ("Nickname" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
           if ("Id" %in% names(fd_salaries)) {
             fd_salaries <- fd_salaries %>% 
               select(Name = Nickname, FD_Salary = Salary, FDID = Id) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           } else {
             fd_salaries <- fd_salaries %>% 
               select(Name = Nickname, FD_Salary = Salary) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           }
         } else if ("Name" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
           if ("Id" %in% names(fd_salaries)) {
             fd_salaries <- fd_salaries %>% 
               select(Name, FD_Salary = Salary, FDID = Id) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           } else {
             fd_salaries <- fd_salaries %>% 
               select(Name, FD_Salary = Salary) %>%
-              mutate(Name = trimws(Name))
+              mutate(Name = safe_trimws(Name))
           }
         }
       }, error = function(e) {
@@ -716,11 +738,11 @@ server <- function(input, output, session) {
     
     # Clean entry list names for matching
     entry_list <- entry_list %>%
-      mutate(Name_Clean = trimws(Name))
+      mutate(Name_Clean = safe_trimws(Name))
     
     # Merge salaries if available
     if (!is.null(dk_salaries)) {
-      dk_salaries <- dk_salaries %>% mutate(Name_Clean = trimws(Name))
+      dk_salaries <- dk_salaries %>% mutate(Name_Clean = safe_trimws(Name))
       merge_cols <- intersect(c("DK_Salary", "DKID"), names(dk_salaries))
       if (length(merge_cols) > 0) {
         entry_list <- entry_list %>%
@@ -729,7 +751,7 @@ server <- function(input, output, session) {
     }
     
     if (!is.null(fd_salaries)) {
-      fd_salaries <- fd_salaries %>% mutate(Name_Clean = trimws(Name))
+      fd_salaries <- fd_salaries %>% mutate(Name_Clean = safe_trimws(Name))
       merge_cols <- intersect(c("FD_Salary", "FDID"), names(fd_salaries))
       if (length(merge_cols) > 0) {
         entry_list <- entry_list %>%
@@ -1053,6 +1075,12 @@ server <- function(input, output, session) {
         select(FDName, DKName, Name, DKID, FDID, Car, Team,
                DKSalary, FDSalary, Start, DKOP, FDOP)
       
+      # Clean all character columns for Excel export (fix encoding issues)
+      char_cols <- sapply(driver_sheet, is.character)
+      for (col in names(driver_sheet)[char_cols]) {
+        driver_sheet[[col]] <- iconv(driver_sheet[[col]], from = "UTF-8", to = "UTF-8", sub = "")
+      }
+      
       # --- Sheet 2: Race_Profiles ---
       race_profiles <- dominator_data() %>%
         select(RaceID=race_id, StartPos=start_ps, FinPos=ps, LeadLaps=lead_laps, FastLaps=fast_laps,
@@ -1060,11 +1088,23 @@ server <- function(input, output, session) {
         mutate(DKDomPoints=round(DKDomPoints,1), FDDomPoints=round(FDDomPoints,1)) %>%
         filter(DKDomPoints > 0) %>% arrange(desc(DKDomPoints))
       
+      # Clean character columns
+      char_cols <- sapply(race_profiles, is.character)
+      for (col in names(race_profiles)[char_cols]) {
+        race_profiles[[col]] <- iconv(race_profiles[[col]], from = "UTF-8", to = "UTF-8", sub = "")
+      }
+      
       # --- Sheet 3: Race_Weights ---
       race_weights <- values$analysis_races_available %>%
         filter(race_id %in% dominator_filtered_races()) %>%
         select(RaceID=race_id, RaceName=race_name, Season=race_season, Track=track_name) %>%
         mutate(Weight=round(1/n(),4)) %>% arrange(Season, Track)
+      
+      # Clean character columns
+      char_cols <- sapply(race_weights, is.character)
+      for (col in names(race_weights)[char_cols]) {
+        race_weights[[col]] <- iconv(race_weights[[col]], from = "UTF-8", to = "UTF-8", sub = "")
+      }
       
       # --- Sheet 4: FDLaps ---
       fd_laps <- dominator_data() %>%
