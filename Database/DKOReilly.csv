@@ -1,42 +1,41 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Kyle Larson (42253051),Kyle Larson,42253051,D,15000,The LiUNA,Nasca,0
-D,Connor Zilisch (42253052),Connor Zilisch,42253052,D,11500,The LiUNA,Nasca,7.85
-D,Justin Allgaier (42253053),Justin Allgaier,42253053,D,11200,The LiUNA,Nasca,36.88
-D,Chase Briscoe (42253054),Chase Briscoe,42253054,D,11000,The LiUNA,Nasca,0
-D,Jesse Love (42253055),Jesse Love,42253055,D,9500,The LiUNA,Nasca,57.86
-D,Brandon Jones (42253056),Brandon Jones,42253056,D,9200,The LiUNA,Nasca,17.65
-D,Sam Mayer (42253057),Sam Mayer,42253057,D,9000,The LiUNA,Nasca,24.85
-D,Sammy Smith (42253058),Sammy Smith,42253058,D,8800,The LiUNA,Nasca,34.25
-D,Taylor Gray (42253059),Taylor Gray,42253059,D,8600,The LiUNA,Nasca,19.96
-D,Austin Hill (42253060),Austin Hill,42253060,D,8500,The LiUNA,Nasca,48.35
-D,Carson Kvapil (42253061),Carson Kvapil,42253061,D,8300,The LiUNA,Nasca,25.71
-D,Cole Custer (42253062),Cole Custer,42253062,D,8000,The LiUNA,Nasca,0
-D,Sheldon Creed (42253063),Sheldon Creed,42253063,D,7800,The LiUNA,Nasca,36.14
-D,Corey Day (42253064),Corey Day,42253064,D,7700,The LiUNA,Nasca,30.99
-D,Ryan Sieg (42253065),Ryan Sieg,42253065,D,7500,The LiUNA,Nasca,22.44
-D,William Sawalich (42253066),William Sawalich,42253066,D,7300,The LiUNA,Nasca,6.84
-D,Rajah Caruth (42253067),Rajah Caruth,42253067,D,7200,The LiUNA,Nasca,31.62
-D,Harrison Burton (42253068),Harrison Burton,42253068,D,7000,The LiUNA,Nasca,1.61
-D,Jeb Burton (42253069),Jeb Burton,42253069,D,6800,The LiUNA,Nasca,33.24
-D,Nicholas Sanchez (42253070),Nicholas Sanchez,42253070,D,6700,The LiUNA,Nasca,17.55
-D,Parker Retzlaff (42253071),Parker Retzlaff,42253071,D,6600,The LiUNA,Nasca,41.06
-D,Chandler Smith (42253072),Chandler Smith,42253072,D,6500,The LiUNA,Nasca,24
-D,Dean Thompson (42253073),Dean Thompson,42253073,D,6300,The LiUNA,Nasca,15.31
-D,Kyle Sieg (42253074),Kyle Sieg,42253074,D,6200,The LiUNA,Nasca,16.48
-D,Jeremy Clements (42253075),Jeremy Clements,42253075,D,6100,The LiUNA,Nasca,19.55
-D,Anthony Alfredo (42253076),Anthony Alfredo,42253076,D,6000,The LiUNA,Nasca,26.65
-D,Brennan Poole (42253077),Brennan Poole,42253077,D,5900,The LiUNA,Nasca,35.34
-D,Patrick Staropoli (42253078),Patrick Staropoli,42253078,D,5800,The LiUNA,Nasca,25.99
-D,Daniel Dye (42253079),Daniel Dye,42253079,D,5700,The LiUNA,Nasca,32.95
-D,Austin Green (42253080),Austin Green,42253080,D,5600,The LiUNA,Nasca,18.9
-D,Blaine Perkins (42253081),Blaine Perkins,42253081,D,5500,The LiUNA,Nasca,19.61
-D,Ryan Ellis (42253082),Ryan Ellis,42253082,D,5400,The LiUNA,Nasca,24.54
-D,Myatt Snider (42253083),Myatt Snider,42253083,D,5300,The LiUNA,Nasca,0
-D,Lavar Scott (42253084),Lavar Scott,42253084,D,5200,The LiUNA,Nasca,25.9
-D,Josh Bilicki (42253085),Josh Bilicki,42253085,D,5100,The LiUNA,Nasca,25.22
-D,Josh Williams (42253086),Josh Williams,42253086,D,5000,The LiUNA,Nasca,7.4
-D,Mason Maggio (42253087),Mason Maggio,42253087,D,4900,The LiUNA,Nasca,3
-D,Joey Gase (42253088),Joey Gase,42253088,D,4800,The LiUNA,Nasca,14.5
-D,Nathan Byrd (42253089),Nathan Byrd,42253089,D,4700,The LiUNA,Nasca,11
-D,Chad Finchum (42274300),Chad Finchum,42274300,D,4600,The LiUNA,Nasca,46.45
-D,Dawson Cram (42253090),Dawson Cram,42253090,D,4500,The LiUNA,Nasca,5
+D,Kyle Larson (42329782),Kyle Larson,42329782,D,15000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,63.15
+D,Christopher Bell (42329783),Christopher Bell,42329783,D,12500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,0
+D,Justin Allgaier (42329784),Justin Allgaier,42329784,D,11500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,44.05
+D,Ross Chastain (42329785),Ross Chastain,42329785,D,10000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,59.05
+D,Jesse Love (42329786),Jesse Love,42329786,D,9500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,56.88
+D,Austin Hill (42329787),Austin Hill,42329787,D,9200,Sport Clips Haircuts VFW Help a Hero 200,Nasca,46.08
+D,Brandon Jones (42329788),Brandon Jones,42329788,D,9000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,18.9
+D,Carson Kvapil (42329789),Carson Kvapil,42329789,D,8800,Sport Clips Haircuts VFW Help a Hero 200,Nasca,28.37
+D,Sam Mayer (42329790),Sam Mayer,42329790,D,8500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,17.23
+D,Taylor Gray (42329791),Taylor Gray,42329791,D,8300,Sport Clips Haircuts VFW Help a Hero 200,Nasca,12.52
+D,Sammy Smith (42329792),Sammy Smith,42329792,D,8100,Sport Clips Haircuts VFW Help a Hero 200,Nasca,35.45
+D,Sheldon Creed (42329793),Sheldon Creed,42329793,D,8000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,38.51
+D,Corey Day (42329794),Corey Day,42329794,D,7700,Sport Clips Haircuts VFW Help a Hero 200,Nasca,33.49
+D,William Sawalich (42329795),William Sawalich,42329795,D,7500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,13.47
+D,Harrison Burton (42329796),Harrison Burton,42329796,D,7400,Sport Clips Haircuts VFW Help a Hero 200,Nasca,7.89
+D,Ryan Sieg (42329797),Ryan Sieg,42329797,D,7300,Sport Clips Haircuts VFW Help a Hero 200,Nasca,17.58
+D,Rajah Caruth (42329798),Rajah Caruth,42329798,D,7200,Sport Clips Haircuts VFW Help a Hero 200,Nasca,27.9
+D,Jeb Burton (42329799),Jeb Burton,42329799,D,7000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,27.19
+D,Alex Labbe (42329800),Alex Labbe,42329800,D,6800,Sport Clips Haircuts VFW Help a Hero 200,Nasca,45
+D,Parker Retzlaff (42329801),Parker Retzlaff,42329801,D,6700,Sport Clips Haircuts VFW Help a Hero 200,Nasca,39.14
+D,Dean Thompson (42329802),Dean Thompson,42329802,D,6600,Sport Clips Haircuts VFW Help a Hero 200,Nasca,13.23
+D,Nicholas Sanchez (42329803),Nicholas Sanchez,42329803,D,6500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,11.24
+D,Brennan Poole (42329804),Brennan Poole,42329804,D,6300,Sport Clips Haircuts VFW Help a Hero 200,Nasca,34.07
+D,Anthony Alfredo (42329805),Anthony Alfredo,42329805,D,6200,Sport Clips Haircuts VFW Help a Hero 200,Nasca,22.12
+D,Jeremy Clements (42329806),Jeremy Clements,42329806,D,6100,Sport Clips Haircuts VFW Help a Hero 200,Nasca,16.44
+D,Kyle Sieg (42329807),Kyle Sieg,42329807,D,6000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,21.98
+D,Matt DiBenedetto (42342222),Matt DiBenedetto,42342222,D,5900,Sport Clips Haircuts VFW Help a Hero 200,Nasca,0
+D,Patrick Staropoli (42329808),Patrick Staropoli,42329808,D,5800,Sport Clips Haircuts VFW Help a Hero 200,Nasca,25.19
+D,JJ Yeley (42339421),JJ Yeley,42339421,D,5700,Sport Clips Haircuts VFW Help a Hero 200,Nasca,22
+D,Blaine Perkins (42329809),Blaine Perkins,42329809,D,5600,Sport Clips Haircuts VFW Help a Hero 200,Nasca,21.89
+D,Ryan Ellis (42329810),Ryan Ellis,42329810,D,5500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,23.21
+D,Austin Green (42329811),Austin Green,42329811,D,5400,Sport Clips Haircuts VFW Help a Hero 200,Nasca,17.32
+D,Josh Bilicki (42329812),Josh Bilicki,42329812,D,5300,Sport Clips Haircuts VFW Help a Hero 200,Nasca,26.98
+D,Lavar Scott (42329813),Lavar Scott,42329813,D,5200,Sport Clips Haircuts VFW Help a Hero 200,Nasca,24.72
+D,Josh Williams (42329814),Josh Williams,42329814,D,5100,Sport Clips Haircuts VFW Help a Hero 200,Nasca,19.27
+D,Myatt Snider (42329815),Myatt Snider,42329815,D,5000,Sport Clips Haircuts VFW Help a Hero 200,Nasca,0
+D,Joey Gase (42329816),Joey Gase,42329816,D,4900,Sport Clips Haircuts VFW Help a Hero 200,Nasca,16.33
+D,Nathan Byrd (42329817),Nathan Byrd,42329817,D,4700,Sport Clips Haircuts VFW Help a Hero 200,Nasca,11
+D,Garrett Smithley (42329818),Garrett Smithley,42329818,D,4600,Sport Clips Haircuts VFW Help a Hero 200,Nasca,25
+D,Dawson Cram (42329819),Dawson Cram,42329819,D,4500,Sport Clips Haircuts VFW Help a Hero 200,Nasca,5
