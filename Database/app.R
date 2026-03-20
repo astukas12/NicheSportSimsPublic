@@ -490,8 +490,8 @@ server <- function(input, output, session) {
           
           # Find next upcoming race and set as default
           upcoming_races <- all_race_data %>%
-            filter(Historical == "N") %>%
-            arrange(race_season, race_id)
+            filter(!is.na(date_scheduled), as.Date(substr(date_scheduled, 1, 10)) >= Sys.Date()) %>%
+            arrange(date_scheduled)
           
           if (nrow(upcoming_races) > 0) {
             next_race <- upcoming_races[1, ]
@@ -544,8 +544,9 @@ server <- function(input, output, session) {
     if (!is.null(all_races)) {
       available_races <- all_races %>%
         filter(series_id==as.numeric(input$analysis_series), track_name==input$analysis_primary_track,
-               race_season>=input$analysis_start_year, race_season<=input$analysis_end_year, Historical=="N") %>%
-        arrange(race_season, race_id) %>%  # Changed to chronological order to get next race first
+               race_season>=input$analysis_start_year, race_season<=input$analysis_end_year,
+               !is.na(date_scheduled), as.Date(substr(date_scheduled, 1, 10)) >= Sys.Date()) %>%
+        arrange(date_scheduled) %>%
         mutate(race_label=paste0(race_season," - ",race_name))
       race_choices <- setNames(available_races$race_id, available_races$race_label)
       updateSelectizeInput(session,"analysis_race_id",choices=race_choices,
