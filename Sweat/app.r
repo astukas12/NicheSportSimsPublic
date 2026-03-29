@@ -491,6 +491,7 @@ server <- function(input, output, session) {
   lineup_size <- reactive({
     switch(rv$sport,
            "CBB"    = 8L,
+           "CBB-SD" = 6L,
            "NASCAR" = 6L,
            "F1"     = 6L,
            "MMA"    = 6L,
@@ -547,6 +548,11 @@ server <- function(input, output, session) {
         parts <- unlist(strsplit(rest, " D ", fixed = TRUE))
         drivers <- trimws(parts)
         players <- c(cnstr, drivers)
+      } else if (grepl("^CPT ", lineup) && grepl(" UTIL ", lineup, fixed = TRUE)) {
+        # CBB Showdown: CPT <name> UTIL <name> UTIL <name> ...
+        rest <- sub("^CPT ", "", lineup)
+        parts <- unlist(strsplit(rest, " UTIL ", fixed = TRUE))
+        players <- trimws(parts)
       } else if (grepl(" UTIL ", lineup, fixed = TRUE) || grepl(" UTIL$", lineup)) {
         # CBB: F p F p F p G p G p G p UTIL p UTIL p
         # Replace all position separators with a pipe then split
@@ -613,12 +619,16 @@ server <- function(input, output, session) {
     })
   })
   
-  # For MMA-SD: extract captain name from lineup string (first player after CPT)
+  # Extract captain name from lineup string — handles MMA-SD (" F " delimiter) and CBB-SD (" UTIL " delimiter)
   extract_captain <- function(lineup) {
     if (!grepl("^CPT ", lineup)) return(NA_character_)
     rest <- sub("^CPT ", "", lineup)
-    # Captain is everything before the first " F "
-    trimws(sub(" F .*$", "", rest))
+    # CBB-SD uses " UTIL " as the next delimiter; MMA-SD uses " F "
+    if (grepl(" UTIL ", rest, fixed = TRUE)) {
+      trimws(sub(" UTIL .*$", "", rest))
+    } else {
+      trimws(sub(" F .*$", "", rest))
+    }
   }
   
   # Helper: get player column names from a data frame (handles classic and SD)
@@ -684,6 +694,9 @@ server <- function(input, output, session) {
           rv$sport <- "F1"
         } else if (grepl(" D ", sample_lineup, fixed = TRUE)) {
           rv$sport <- "NASCAR"
+        } else if (grepl("^CPT ", sample_lineup) && grepl(" UTIL ", sample_lineup, fixed = TRUE)) {
+          # CBB Showdown: CPT <name> UTIL <name> UTIL ... (distinct from MMA-SD which uses F)
+          rv$sport <- "CBB-SD"
         } else if (grepl("^CPT ", sample_lineup)) {
           rv$sport <- "MMA-SD"
         } else if (grepl(" UTIL ", sample_lineup, fixed = TRUE) || grepl(" UTIL$", sample_lineup)) {
@@ -803,6 +816,25 @@ server <- function(input, output, session) {
             } else {
               rv$player_scores <- util_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
             }
+            # For CBB-SD: CPT slot (1.5x, pre-multiplied by DK) + UTIL slots
+          } else if (rv$sport == "CBB-SD" && "RosterPosition" %in% names(player_data) &&
+                     any(player_data$RosterPosition == "CPT", na.rm = TRUE)) {
+            
+            cpt_data  <- player_data[RosterPosition == "CPT"]
+            util_data <- player_data[RosterPosition == "UTIL"]
+            
+            rv$cpt_score_lookup  <- setNames(cpt_data$FPTS,  cpt_data$Player)
+            rv$util_score_lookup <- setNames(util_data$FPTS, util_data$Player)
+            
+            # player_scores uses UTIL rows for display/exposure; sum FieldExp across CPT+UTIL
+            if ("FieldExp" %in% names(player_data)) {
+              rv$player_scores <- player_data[RosterPosition %in% c("CPT", "UTIL"), .(
+                FPTS     = max(FPTS,     na.rm = TRUE),
+                FieldExp = sum(FieldExp, na.rm = TRUE)
+              ), by = Player]
+            } else {
+              rv$player_scores <- util_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
+            }
             # For CBB: players appear under F, G, UTIL positions — sum %Drafted for total ownership
           } else if (rv$sport == "CBB" && "RosterPosition" %in% names(player_data)) {
             rv$cpt_score_lookup  <- NULL
@@ -863,7 +895,7 @@ server <- function(input, output, session) {
         
         # Simple filtering - much faster than multiple passes
         usernames <- usernames[
-          !grepl("^F |^D |^CNSTR |^G ", usernames) &  # Not lineup data
+          !grepl("^F |^D |^CNSTR |^G |^CPT |^P ", usernames) &  # Not lineup data
             !is.na(usernames) &              # Not NA
             nzchar(usernames)                # Not empty
         ]
@@ -917,7 +949,8 @@ server <- function(input, output, session) {
         }
         
         # MMA-SD: detect Captain + Util columns
-        is_showdown_sim <- "Captain" %in% names(sim_raw) && any(grepl("^Util[0-9]", names(sim_raw)))
+        is_showdown_sim <- ("Captain" %in% names(sim_raw) && any(grepl("^Util[0-9]", names(sim_raw)))) &&
+          rv$sport %in% c("MMA-SD", "CBB-SD")
         if (is_showdown_sim) {
           util_cols   <- grep("^Util[0-9]", names(sim_raw), value = TRUE)
           player_cols <- c("Captain", util_cols)
@@ -986,7 +1019,7 @@ server <- function(input, output, session) {
         score_lookup <- setNames(rv$player_scores$FPTS, rv$player_scores$Player)
         
         if (is_showdown_sim && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
-          # MMA-SD: Captain uses CPT score, utils use F score
+          # MMA-SD / CBB-SD: Captain uses CPT score, utils use UTIL/F score
           cpt_scores  <- rv$cpt_score_lookup[sim_clean[["Captain"]]]
           sim_clean[, CaptainScore := cpt_scores]
           
@@ -1036,7 +1069,22 @@ server <- function(input, output, session) {
               paste0("CNSTR=", cnstr, "|CPT=", capt, "|", paste(sort(drv_players), collapse = "|"))
             }, all_players, constrs, capts)
             # For MMA-SD: captain-aware scoring and key building
+            # For MMA-SD: captain-aware scoring and key building
           } else if (rv$sport == "MMA-SD" && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+            captains <- sapply(Lineup, extract_captain)
+            scores <- mapply(function(players, capt) {
+              cpt_s  <- rv$cpt_score_lookup[capt]
+              if (is.na(cpt_s)) cpt_s <- 0
+              util_players <- players[players != capt]
+              util_s <- sum(rv$util_score_lookup[util_players], na.rm = TRUE)
+              cpt_s + util_s
+            }, all_players, captains)
+            keys <- mapply(function(players, capt) {
+              util_players <- players[players != capt]
+              paste0("CPT=", capt, "|", paste(sort(util_players), collapse = "|"))
+            }, all_players, captains)
+          } else if (rv$sport == "CBB-SD" && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+            # CBB-SD: same captain-aware logic, UTIL positions
             captains <- sapply(Lineup, extract_captain)
             scores <- mapply(function(players, capt) {
               cpt_s  <- rv$cpt_score_lookup[capt]
@@ -1180,9 +1228,10 @@ server <- function(input, output, session) {
     tagList(
       h4(paste("Your", player_label, "Exposure vs Field")),
       if (rv$sport == "F1") p("CPT% and D% show exposure in each slot separately. Leverage = Your% - Field%.", style = "color: #CCCCCC; font-size: 13px;") else NULL,
+      if (rv$sport == "CBB-SD") p("CPT exposure counted separately. Field% sums CPT + UTIL rows from DK.", style = "color: #CCCCCC; font-size: 13px;") else NULL,
       DTOutput("exposure_table"),
       
-      if (isTRUE(rv$sport == "CBB")) {
+      if (isTRUE(rv$sport %in% c("CBB", "CBB-SD"))) {
         tagList(
           br(),
           h4("Team Exposure vs Field"),
@@ -1308,6 +1357,131 @@ server <- function(input, output, session) {
       return(dt_output)
     }
     
+    # ---- CBB-SD: captain/flex position-split exposure ----
+    if (isTRUE(rv$sport == "CBB-SD")) {
+      # Parse user lineups tagging CPT vs UTIL — all entries including dupes
+      user_pos_rows <- rbindlist(lapply(user_data$Lineup, function(lu) {
+        players <- extract_players(lu)
+        capt    <- extract_captain(lu)
+        data.table(
+          Player   = players,
+          Position = ifelse(players == capt, "CPT", "UTIL")
+        )
+      }))
+      
+      user_cpt_exp <- user_pos_rows[Position == "CPT",  .(UserCptExp  = .N / n_user_entries * 100), by = Player]
+      user_util_exp <- user_pos_rows[Position == "UTIL", .(UserUtilExp = .N / n_user_entries * 100), by = Player]
+      
+      # Field CPT% and UTIL% — parse all field entries (including dupes) for correct ownership
+      n_field_entries <- nrow(field_data)
+      field_pos_rows  <- rbindlist(lapply(field_data$Lineup, function(lu) {
+        players <- extract_players(lu)
+        capt    <- extract_captain(lu)
+        data.table(
+          Player   = players,
+          Position = ifelse(players == capt, "CPT", "UTIL")
+        )
+      }))
+      field_cpt_exp  <- field_pos_rows[Position == "CPT",  .(FieldCptExp  = .N / n_field_entries * 100), by = Player]
+      field_util_exp <- field_pos_rows[Position == "UTIL", .(FieldUtilExp = .N / n_field_entries * 100), by = Player]
+      
+      # Build combined table — all players that appear anywhere
+      all_players <- sort(unique(c(user_pos_rows$Player, field_pos_rows$Player)))
+      exposure_data <- data.table(Player = all_players)
+      exposure_data <- merge(exposure_data, user_cpt_exp,   by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, user_util_exp,  by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_cpt_exp,  by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_util_exp, by = "Player", all.x = TRUE)
+      for (col in c("UserCptExp","UserUtilExp","FieldCptExp","FieldUtilExp")) {
+        exposure_data[is.na(get(col)), (col) := 0]
+      }
+      exposure_data[, UserTotal  := UserCptExp  + UserUtilExp]
+      exposure_data[, FieldTotal := FieldCptExp + FieldUtilExp]
+      exposure_data[, CptLev     := UserCptExp  - FieldCptExp]
+      exposure_data[, UtilLev    := UserUtilExp - FieldUtilExp]
+      exposure_data[, TotalLev   := UserTotal   - FieldTotal]
+      
+      # Add FPTS
+      if (!is.null(rv$player_scores)) {
+        exposure_data <- merge(exposure_data, rv$player_scores[, .(Player, FPTS)], by = "Player", all.x = TRUE)
+      } else {
+        exposure_data[, FPTS := NA_real_]
+      }
+      
+      # Merge salary/team/game metadata if available
+      meta <- cbb_metadata()
+      if (!is.null(meta)) {
+        exposure_data <- merge(exposure_data, meta[, .(Player, Salary, Team, Game)], by = "Player", all.x = TRUE)
+      }
+      
+      exposure_data <- exposure_data[order(-UserTotal)]
+      
+      # Build display table
+      if (!is.null(meta) && "Salary" %in% names(exposure_data)) {
+        display_data <- exposure_data[, .(
+          Player,
+          Salary,
+          Team,
+          FPTS            = round(FPTS, 1),
+          `Your CPT%`     = round(UserCptExp,   1),
+          `Field CPT%`    = round(FieldCptExp,  1),
+          `CPT Lev`       = round(CptLev,        1),
+          `Your UTIL%`    = round(UserUtilExp,  1),
+          `Field UTIL%`   = round(FieldUtilExp, 1),
+          `UTIL Lev`      = round(UtilLev,       1),
+          `Your Total%`   = round(UserTotal,    1),
+          `Field Total%`  = round(FieldTotal,   1),
+          `Total Lev`     = round(TotalLev,      1)
+        )]
+      } else {
+        display_data <- exposure_data[, .(
+          Player,
+          FPTS            = round(FPTS, 1),
+          `Your CPT%`     = round(UserCptExp,   1),
+          `Field CPT%`    = round(FieldCptExp,  1),
+          `CPT Lev`       = round(CptLev,        1),
+          `Your UTIL%`    = round(UserUtilExp,  1),
+          `Field UTIL%`   = round(FieldUtilExp, 1),
+          `UTIL Lev`      = round(UtilLev,       1),
+          `Your Total%`   = round(UserTotal,    1),
+          `Field Total%`  = round(FieldTotal,   1),
+          `Total Lev`     = round(TotalLev,      1)
+        )]
+      }
+      
+      dt_output <- datatable(
+        display_data,
+        rownames = FALSE,
+        options = list(
+          pageLength = 20,
+          dom = 'frtip',
+          columnDefs = list(
+            list(className = 'dt-center', targets = 1:(ncol(display_data)-1))
+          )
+        )
+      ) %>%
+        formatStyle('CPT Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('UTIL Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('Total Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('Your CPT%',
+                    background = styleColorBar(c(0, 100), '#e74c3c'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatStyle('Your UTIL%',
+                    background = styleColorBar(c(0, 100), '#3498db'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatStyle('Your Total%',
+                    background = styleColorBar(c(0, 100), '#FFE500'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatCurrency('CPT Lev',   currency = "", digits = 1, before = FALSE) %>%
+        formatCurrency('UTIL Lev',  currency = "", digits = 1, before = FALSE) %>%
+        formatCurrency('Total Lev', currency = "", digits = 1, before = FALSE)
+      
+      return(dt_output)
+    }
+    
     # ---- Non-F1: original logic ----
     user_player_counts <- data.table()
     for (lineup in user_lineups) {
@@ -1378,8 +1552,8 @@ server <- function(input, output, session) {
     
     exposure_data <- exposure_data[order(-UserExp)]
     
-    # CBB: enrich with metadata if sim input file was uploaded
-    if (isTRUE(rv$sport == "CBB")) {
+    # CBB / CBB-SD: enrich with metadata if sim input file was uploaded
+    if (isTRUE(rv$sport %in% c("CBB", "CBB-SD"))) {
       meta <- cbb_metadata()
       if (!is.null(meta)) {
         exposure_data <- merge(exposure_data,
@@ -1398,7 +1572,7 @@ server <- function(input, output, session) {
         `Field Live Exp` = round(FieldLiveExp, 1),
         LiveLeverage     = round(LiveLeverage, 1)
       )]
-    } else if (isTRUE(rv$sport == "CBB") && "Salary" %in% names(exposure_data)) {
+    } else if (isTRUE(rv$sport %in% c("CBB", "CBB-SD")) && "Salary" %in% names(exposure_data)) {
       display_data <- exposure_data[, .(
         Player,
         Salary,
@@ -1450,7 +1624,7 @@ server <- function(input, output, session) {
   
   # CBB Team Exposure Table
   output$cbb_team_exposure_table <- renderDT({
-    req(rv$data, input$username, isTRUE(rv$sport == "CBB"))
+    req(rv$data, input$username, isTRUE(rv$sport %in% c("CBB", "CBB-SD")))
     meta <- cbb_metadata()
     if (is.null(meta)) {
       return(datatable(data.table(Message = "Upload Sim Input File to see team breakdowns"),
@@ -1489,7 +1663,7 @@ server <- function(input, output, session) {
   
   # CBB Game Exposure Table
   output$cbb_game_exposure_table <- renderDT({
-    req(rv$data, input$username, isTRUE(rv$sport == "CBB"))
+    req(rv$data, input$username, isTRUE(rv$sport %in% c("CBB", "CBB-SD")))
     meta <- cbb_metadata()
     if (is.null(meta)) {
       return(datatable(data.table(Message = "Upload Sim Input File to see game breakdowns"),
@@ -1587,7 +1761,7 @@ server <- function(input, output, session) {
     data <- get_leverage_data()
     positive_data <- data[Leverage > 0][order(-Leverage)]
     
-    if (isTRUE(rv$sport == "CBB")) positive_data <- head(positive_data, 25)
+    if (isTRUE(rv$sport %in% c("CBB", "CBB-SD"))) positive_data <- head(positive_data, 25)
     
     if (nrow(positive_data) == 0) return(plotly_empty())
     
@@ -1614,7 +1788,7 @@ server <- function(input, output, session) {
     data <- get_leverage_data()
     negative_data <- data[Leverage < 0][order(Leverage)]
     
-    if (isTRUE(rv$sport == "CBB")) negative_data <- head(negative_data, 25)
+    if (isTRUE(rv$sport %in% c("CBB", "CBB-SD"))) negative_data <- head(negative_data, 25)
     
     if (nrow(negative_data) == 0) return(plotly_empty())
     
@@ -2324,7 +2498,7 @@ server <- function(input, output, session) {
         players <- extract_players(lineup)
         drvs <- players[players != cnstr & players != capt]
         paste0("CNSTR=", cnstr, "|CPT=", capt, "|", paste(sort(drvs), collapse = "|"))
-      } else if (rv$sport == "MMA-SD") {
+      } else if (rv$sport %in% c("MMA-SD", "CBB-SD")) {
         capt <- extract_captain(lineup)
         players <- extract_players(lineup)
         utils  <- players[players != capt]
@@ -2346,7 +2520,7 @@ server <- function(input, output, session) {
         cpt_s   <- ifelse(is.na(rv$cpt_score_lookup[capt]),    0, rv$cpt_score_lookup[capt])
         drv_s   <- sum(rv$util_score_lookup[drvs], na.rm = TRUE)
         cnstr_s + cpt_s + drv_s
-      } else if (rv$sport == "MMA-SD" && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
+      } else if (rv$sport %in% c("MMA-SD", "CBB-SD") && !is.null(rv$cpt_score_lookup) && !is.null(rv$util_score_lookup)) {
         capt <- extract_captain(lineup)
         players <- extract_players(lineup)
         utils <- players[players != capt]
