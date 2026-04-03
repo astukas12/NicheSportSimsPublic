@@ -1,6 +1,7 @@
-# NASCAR Race Analysis App - UPDATED VERSION
-# Changes: compact nav, removed search boxes on Performance/Fantasy,
-# added Finish Rates tab, salary upload on Entry List, team tiers, Create Input File button
+# =============================================================================
+# app.R
+# Golden Ticket Research Center — NASCAR Research App
+# =============================================================================
 
 library(shiny)
 library(shinydashboard)
@@ -8,7 +9,7 @@ library(DT)
 library(dplyr)
 library(readr)
 library(readxl)
-library(openxlsx)  # Added for Excel writing
+library(openxlsx)
 library(shinycssloaders)
 library(shinyWidgets)
 library(shinyjs)
@@ -16,217 +17,244 @@ library(plotly)
 library(ggplot2)
 library(jsonlite)
 library(tidyr)
+library(stringr)
 
-#--------------------- Helper Functions ---------------------#
+# =============================================================================
+# CONSTANTS — computed once at startup, used throughout
+# =============================================================================
+CURRENT_YEAR <- as.integer(format(Sys.Date(), "%Y"))
+DATA_FILE    <- "NascarData.xlsx"
 
-# Safe trimws that handles encoding issues
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
 safe_trimws <- function(x) {
   tryCatch({
-    # First try to fix encoding
     x_clean <- iconv(x, from = "UTF-8", to = "UTF-8", sub = "")
-    # Then trim whitespace
     trimws(x_clean)
+  }, error = function(e) x)
+}
+
+# Load the Results sheet from NascarData.xlsx
+load_nascar_database <- function() {
+  if (!file.exists(DATA_FILE)) return(NULL)
+  tryCatch({
+    read_xlsx(DATA_FILE, sheet = "Results")
   }, error = function(e) {
-    # If that fails, just return the original (might have some whitespace)
-    x
+    message("Error loading Results sheet: ", e$message)
+    NULL
   })
 }
 
-load_nascar_database <- function() {
-  if (file.exists("NascarDatabase.csv")) {
-    data <- read_csv("NascarDatabase.csv", show_col_types = FALSE)
-    if (file.exists("RaceIDs.xlsx")) {
-      race_ids <- read_excel("RaceIDs.xlsx")
-      if ("race_type_id" %in% names(race_ids)) {
-        regular_race_ids <- race_ids %>% pull(race_id)
-        data <- data %>% filter(race_id %in% regular_race_ids)
-      }
-    }
-    return(data)
-  } else {
-    return(NULL)
-  }
+# Load the Races sheet from NascarData.xlsx
+load_races_sheet <- function() {
+  if (!file.exists(DATA_FILE)) return(NULL)
+  tryCatch({
+    read_xlsx(DATA_FILE, sheet = "Races")
+  }, error = function(e) {
+    message("Error loading Races sheet: ", e$message)
+    NULL
+  })
 }
 
-load_race_list <- function() {
-  if (file.exists("RaceIDs.xlsx")) {
-    race_data <- read_excel("RaceIDs.xlsx")
-    filtered_data <- race_data %>% filter(Historical == "N")
-  } else {
-    return(NULL)
-  }
-}
-
+# Load live entry list from NASCAR API for the upcoming race
 load_entry_list <- function(race_season, series_id, race_id) {
   tryCatch({
-    url <- paste0('https://cf.nascar.com/cacher/', race_season, '/', series_id, '/', race_id, '/weekend-feed.json')
+    url <- sprintf("https://cf.nascar.com/cacher/%d/%d/%d/weekend-feed.json",
+                   race_season, series_id, race_id)
     json_data <- fromJSON(url)
-    entry_list <- json_data$weekend_race %>%
+    json_data$weekend_race %>%
       unnest(results, names_sep = "_") %>%
       select(
-        results_starting_position, results_driver_fullname, results_car_number,
-        results_team_name, results_crew_chief_fullname, results_car_make, results_sponsor
-      ) %>%
-      rename(
-        Start = results_starting_position, Name = results_driver_fullname,
-        Car = results_car_number, Team = results_team_name,
-        Make = results_car_make, CC = results_crew_chief_fullname, Sponsor = results_sponsor
+        Start   = results_starting_position,
+        Name    = results_driver_fullname,
+        Car     = results_car_number,
+        Team    = results_team_name,
+        CC      = results_crew_chief_fullname,
+        Make    = results_car_make,
+        Sponsor = results_sponsor
       ) %>%
       mutate(
-        Car = as.integer(Car), 
-        Start = as.integer(Start),
-        # Clean special characters and fix encoding issues
-        Name = iconv(Name, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
-        Team = iconv(Team, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
-        CC = iconv(CC, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
-        Sponsor = iconv(Sponsor, from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""),
-        Make = iconv(Make, from = "UTF-8", to = "ASCII//TRANSLIT", sub = "")
+        Car     = as.integer(Car),
+        Start   = as.integer(Start),
+        across(c(Name, Team, CC, Sponsor, Make),
+               ~iconv(., from = "UTF-8", to = "ASCII//TRANSLIT", sub = ""))
       ) %>%
       arrange(Start)
-    return(entry_list)
   }, error = function(e) {
-    return(data.frame(Start = integer(), Name = character(), Car = integer(),
-                      Team = character(), CC = character(), Make = character(), Sponsor = character()))
+    data.frame(Start = integer(), Name = character(), Car = integer(),
+               Team = character(), CC = character(),
+               Make = character(), Sponsor = character())
   })
 }
 
 calc_dom_points <- function(total_laps, green_laps) {
-  dk_points <- (0.45 * green_laps) + (0.25 * total_laps)
-  fd_points <- 0.1 * total_laps
-  return(list(dk = round(dk_points, 1), fd = round(fd_points, 1)))
+  list(
+    dk = round((0.45 * green_laps) + (0.25 * total_laps), 1),
+    fd = round(0.1 * total_laps, 1)
+  )
 }
 
-# Calculate finish rates for a dataset
 calc_finish_rates <- function(data, group_col, group_label) {
   data %>%
     group_by(!!sym(group_col)) %>%
     summarize(
-      Races     = n(),
-      Win       = round(mean(ps == 1,  na.rm = TRUE) * 100, 1),
-      `Top 3`   = round(mean(ps <= 3,  na.rm = TRUE) * 100, 1),
-      `Top 5`   = round(mean(ps <= 5,  na.rm = TRUE) * 100, 1),
-      `Top 10`  = round(mean(ps <= 10, na.rm = TRUE) * 100, 1),
-      `Top 15`  = round(mean(ps <= 15, na.rm = TRUE) * 100, 1),
-      `Top 20`  = round(mean(ps <= 20, na.rm = TRUE) * 100, 1),
-      `Top 25`  = round(mean(ps <= 25, na.rm = TRUE) * 100, 1),
-      `Top 30`  = round(mean(ps <= 30, na.rm = TRUE) * 100, 1),
-      `Avg Finish` = round(mean(ps, na.rm = TRUE), 1),
-      .groups = 'drop'
+      Races       = n(),
+      Win         = round(mean(ps == 1,  na.rm = TRUE) * 100, 1),
+      `Top 3`     = round(mean(ps <= 3,  na.rm = TRUE) * 100, 1),
+      `Top 5`     = round(mean(ps <= 5,  na.rm = TRUE) * 100, 1),
+      `Top 10`    = round(mean(ps <= 10, na.rm = TRUE) * 100, 1),
+      `Top 15`    = round(mean(ps <= 15, na.rm = TRUE) * 100, 1),
+      `Top 20`    = round(mean(ps <= 20, na.rm = TRUE) * 100, 1),
+      `Top 25`    = round(mean(ps <= 25, na.rm = TRUE) * 100, 1),
+      `Top 30`    = round(mean(ps <= 30, na.rm = TRUE) * 100, 1),
+      `Avg Finish`= round(mean(ps,       na.rm = TRUE), 1),
+      .groups = "drop"
     ) %>%
     rename(!!group_label := !!sym(group_col))
 }
 
-#--------------------- UI Definition ---------------------#
+# Series id -> display label
+series_label <- function(id) {
+  switch(as.character(id),
+         "1" = "Cup Series",
+         "2" = "OReilly Series",
+         "3" = "Truck Series",
+         "Cup Series"
+  )
+}
+
+# Series id -> salary file prefix  (DKCup.csv, DKOReilly.csv, DKTrucks.csv)
+series_salary_prefix <- function(id) {
+  switch(as.character(id),
+         "1" = "Cup",
+         "2" = "OReilly",
+         "3" = "Trucks",
+         "Cup"
+  )
+}
+
+# =============================================================================
+# UI
+# =============================================================================
+
+# Shared empty-state panel shown on tabs before races are loaded
+no_races_panel <- function() {
+  fluidRow(column(12,
+                  div(class = "box",
+                      div(class = "box-header", h3("No Races Loaded", class = "box-title")),
+                      div(class = "box-body",
+                          div(class = "empty-state",
+                              div(class = "empty-state-icon", "🏁"),
+                              p(class = "empty-state-text",
+                                "Races will load automatically — or use Race Selection to change filters.")
+                          )
+                      )
+                  )
+  ))
+}
 
 ui <- fluidPage(
   useShinyjs(),
   
   tags$head(
-    tags$style(HTML("
-      body { background-color: #1a1a1a !important; color: #ffffff !important; font-family: 'Helvetica Neue', Arial, sans-serif; }
-
-      .app-header { background-color: #000000; padding: 10px 30px; border-bottom: 3px solid #FFD700; display: flex; align-items: center; margin-bottom: 0; }
-      .app-logo { height: 35px; margin-right: 15px; }
-      .app-title { color: #FFD700; font-size: 20px; font-weight: bold; margin: 0; }
-
-      /* Compact navbar */
-      .navbar-default { background-color: #000000 !important; border: none !important; border-bottom: 3px solid #FFD700 !important; border-radius: 0 !important; margin-bottom: 0 !important; min-height: 46px !important; }
-      .navbar-default .navbar-nav > li > a { color: #FFD700 !important; background-color: #000000 !important; padding: 13px 22px !important; font-weight: 700 !important; font-size: 13px !important; letter-spacing: 0.5px !important; text-transform: uppercase !important; transition: all 0.3s ease !important; border-right: 1px solid #333333 !important; }
-      .navbar-default .navbar-nav > li:last-child > a { border-right: none !important; }
-      .navbar-default .navbar-nav > li > a:hover, .navbar-default .navbar-nav > li > a:focus { background-color: #1a1a1a !important; color: #FFD700 !important; }
-      .navbar-default .navbar-nav > .active > a, .navbar-default .navbar-nav > .active > a:hover, .navbar-default .navbar-nav > .active > a:focus { background-color: #FFD700 !important; color: #000000 !important; font-weight: 900 !important; }
-      .navbar-nav { margin: 0 !important; }
-
-      .container-fluid { padding: 15px 25px; }
-
-      .box { background-color: #2d2d2d !important; border: 1px solid #444444 !important; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,.3); margin-bottom: 15px; color: #ffffff !important; }
-      .box-header { background-color: #333333 !important; color: #FFD700 !important; border-bottom: 2px solid #FFD700 !important; padding: 10px 15px; border-radius: 5px 5px 0 0; }
-      .box-title { color: #FFD700 !important; font-size: 16px; font-weight: bold; margin: 0; }
-      .box-body { padding: 15px; }
-
-      .btn-primary { background-color: #FFD700 !important; border-color: #DAA520 !important; color: #000000 !important; font-weight: bold; }
-      .btn-primary:hover { background-color: #DAA520 !important; color: #000000 !important; }
-      .btn-success { background-color: #FFD700 !important; border-color: #DAA520 !important; color: #000000 !important; font-weight: bold; }
-      .btn-success:hover { background-color: #DAA520 !important; }
-      .btn-warning { background-color: #DAA520 !important; border-color: #B8860B !important; color: #000000 !important; font-weight: bold; }
-      .btn-info { background-color: #555555 !important; border-color: #666666 !important; color: #FFD700 !important; font-weight: bold; }
-      .btn-danger { background-color: #cc3300 !important; border-color: #aa2200 !important; color: #ffffff !important; font-weight: bold; }
-
-      .form-control, .selectize-input { background-color: #404040 !important; border: 1px solid #666666 !important; color: #ffffff !important; }
-      .form-control:focus { border-color: #FFD700 !important; box-shadow: 0 0 0 0.2rem rgba(255,215,0,0.25) !important; }
-      .selectize-dropdown { background-color: #333333 !important; border: 1px solid #666666 !important; color: #ffffff !important; }
-      .selectize-dropdown-content .option { color: #ffffff !important; background-color: #333333 !important; }
-      .selectize-dropdown-content .option:hover, .selectize-dropdown-content .option.active { background-color: #FFD700 !important; color: #000000 !important; }
-      label { color: #ffffff !important; font-weight: 500; }
-
-      .dataTables_wrapper { color: #ffffff !important; }
-      .dataTable thead th { background-color: #333333 !important; color: #FFD700 !important; border-bottom: 2px solid #FFD700 !important; font-weight: bold; padding: 10px 8px; }
-      .dataTable tbody td { background-color: #2d2d2d !important; color: #ffffff !important; border-bottom: 1px solid #444444 !important; padding: 8px; }
-      .dataTable tbody tr:hover { background-color: #404040 !important; }
-      .dataTables_info, .dataTables_length label, .dataTables_filter label { color: #ffffff !important; }
-      .dataTables_paginate .paginate_button { background-color: #333333 !important; color: #FFD700 !important; border: 1px solid #555555 !important; margin: 0 2px; }
-      .dataTables_paginate .paginate_button:hover { background-color: #FFD700 !important; color: #000000 !important; }
-      .dataTables_paginate .paginate_button.current { background-color: #FFD700 !important; color: #000000 !important; font-weight: bold; }
-      .dataTables_wrapper input[type=search], .dataTables_wrapper input[type=text] { background-color: #404040 !important; border: 1px solid #FFD700 !important; color: #ffffff !important; padding: 4px 8px !important; border-radius: 3px !important; }
-      .dataTables_wrapper select { background-color: #404040 !important; border: 1px solid #FFD700 !important; color: #ffffff !important; padding: 4px !important; border-radius: 3px !important; }
-
-      .info-box { background-color: #333333; border-left: 4px solid #FFD700; padding: 12px; margin-bottom: 12px; border-radius: 3px; }
-
-      .irs--shiny .irs-bar { background: #FFD700 !important; border-top: 1px solid #FFD700 !important; border-bottom: 1px solid #FFD700 !important; }
-      .irs--shiny .irs-from, .irs--shiny .irs-to, .irs--shiny .irs-single { background: #FFD700 !important; color: #000000 !important; }
-      .irs--shiny .irs-handle { background: #FFD700 !important; border: 2px solid #DAA520 !important; }
-      .irs--shiny .irs-min, .irs--shiny .irs-max { color: #FFD700 !important; background: #333333 !important; }
-      .irs--shiny .irs-line { background: #555555 !important; }
-
-      .tier-box { background-color: #2a2a2a; border: 1px solid #555; border-radius: 4px; padding: 10px; margin-bottom: 8px; }
-      .tier-label { color: #FFD700; font-weight: bold; margin-bottom: 5px; }
-
-      /* File input styling */
-      .shiny-input-container input[type=file] { color: #ffffff; }
-      .btn-file { background-color: #555555 !important; border-color: #666666 !important; color: #FFD700 !important; }
-    "))
+    # External CSS — all styles live in gts_theme.css
+    tags$link(rel = "stylesheet", type = "text/css", href = "gts_theme.css"),
+    
+    # Page title
+    tags$title("Golden Ticket Research Center")
   ),
   
+  # ---- HEADER ----
   div(class = "app-header",
-      img(src = "logo.jpg", class = "app-logo"),
-      h1("Golden Ticket Research Center", class = "app-title")
+      div(class = "app-header-left",
+          img(src = "logo.jpg", class = "app-logo"),
+          h1("Golden Ticket Research Center", class = "app-title")
+      )
   ),
   
   navbarPage(
-    title = NULL,
-    id = "main_tabs",
+    title       = NULL,
+    id          = "main_tabs",
     windowTitle = "Golden Ticket Research Center",
     
-    #----- RACE SELECTION TAB -----#
+    # =========================================================================
+    # RACE SELECTION TAB
+    # =========================================================================
     tabPanel("Race Selection", value = "race_selection",
+             
              fluidRow(column(12,
                              div(class = "box",
-                                 div(class = "box-header", h3("Race Selection Configuration", class = "box-title")),
+                                 div(class = "box-header", h3("Race Selection", class = "box-title")),
                                  div(class = "box-body",
                                      fluidRow(
-                                       column(3, selectizeInput("analysis_series", "Series:", choices = c("Cup Series"=1,"OReilly Series"=2,"Truck Series"=3), selected=1)),
-                                       column(3, selectizeInput("analysis_primary_track", "Primary Track:", choices=NULL, options=list(placeholder="Select Track"))),
-                                       column(3, selectizeInput("analysis_similar_tracks", "Similar Tracks (Optional):", choices=NULL, multiple=TRUE, options=list(placeholder="Select Track(s)"))),
-                                       column(3, selectizeInput("analysis_race_id", "Upcoming Race:", choices=NULL, options=list(placeholder="Select Race")))
-                                     ),
-                                     fluidRow(
-                                       column(3, numericInput("analysis_start_year", "Start Year:", value=2022, min=2022, max=2026, step=1)),
-                                       column(3, numericInput("analysis_end_year", "End Year:", value=2026, min=2022, max=2026, step=1)),
-                                       column(6, div(style="margin-top:25px;",
-                                                     actionButton("confirm_analysis_filters", "Load Races", class="btn-primary", style="width:100%;padding:10px;font-size:16px;")))
+                                       column(4, selectizeInput("analysis_series", "Series:",
+                                                                choices  = c("Cup Series" = 1, "OReilly Series" = 2, "Truck Series" = 3),
+                                                                selected = 1)),
+                                       column(4, selectizeInput("analysis_primary_track", "Track:",
+                                                                choices = NULL,
+                                                                options = list(placeholder = "Select Track"))),
+                                       column(4, selectizeInput("analysis_race_id", "Race:",
+                                                                choices = NULL,
+                                                                options = list(placeholder = "Select Race")))
                                      )
                                  )
                              )
              )),
+             
              conditionalPanel(condition = "output.filters_confirmed",
                               fluidRow(column(12,
                                               div(class = "box",
-                                                  div(class = "box-header", h3("Filtered Races", class = "box-title")),
+                                                  div(class = "box-header",
+                                                      div(style = "display:flex;justify-content:space-between;align-items:center;",
+                                                          h3("Race Pools", class = "box-title"),
+                                                          uiOutput("races_loaded_badge", inline = TRUE)
+                                                      )
+                                                  ),
                                                   div(class = "box-body",
+                                                      
+                                                      # Row 1: Dom slider + counts
                                                       fluidRow(
-                                                        column(8, sliderInput("lap_range_dominator","Lap Range for Dominator Analysis:", min=0, max=600, value=c(0,600), step=10)),
-                                                        column(4, uiOutput("lap_filter_summary"))
+                                                        column(8, uiOutput("dom_points_slider_ui")),
+                                                        column(4, uiOutput("dom_points_summary"))
                                                       ),
+                                                      
+                                                      hr(style = "border-color:#444444;margin:8px 0 12px;"),
+                                                      
+                                                      # Row 2: Perf pool bulk controls
+                                                      fluidRow(
+                                                        column(12,
+                                                               div(style = "display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;",
+                                                                   
+                                                                   # Same-track toggle
+                                                                   div(
+                                                                     p(style = "color:#aaaaaa;font-size:12px;font-weight:600;margin:0 0 6px;text-transform:uppercase;letter-spacing:0.5px;",
+                                                                       "Perf Pool"),
+                                                                     uiOutput("same_track_toggle_ui")
+                                                                   ),
+                                                                   
+                                                                   # Track type pills
+                                                                   div(style = "flex:1;",
+                                                                       p(style = "color:#aaaaaa;font-size:12px;font-weight:600;margin:0 0 6px;text-transform:uppercase;letter-spacing:0.5px;",
+                                                                         "Track Types"),
+                                                                       uiOutput("track_type_pills_ui")
+                                                                   ),
+                                                                   
+                                                                   # Season from
+                                                                   div(style = "min-width:130px;",
+                                                                       uiOutput("perf_season_from_ui")
+                                                                   )
+                                                               )
+                                                        )
+                                                      ),
+                                                      
+                                                      div(style = "margin:10px 0 6px;color:#666666;font-size:11px;",
+                                                          HTML("<b style='color:#FFE500;'>Dom</b> — sim inputs &nbsp;|&nbsp;
+                      <b style='color:#FFE500;'>Perf</b> — finish rates &amp; performance &nbsp;|&nbsp;
+                      Checkboxes override individual rows. Reload resets all.")
+                                                      ),
+                                                      
                                                       fluidRow(column(12, withSpinner(DT::dataTableOutput("races_selection_table"))))
                                                   )
                                               )
@@ -234,17 +262,21 @@ ui <- fluidPage(
              )
     ),
     
-    #----- ENTRY LIST TAB -----#
+    # =========================================================================
+    # ENTRY LIST TAB
+    # =========================================================================
     tabPanel("Entry List", value = "entry_list",
+             
              conditionalPanel(condition = "output.filters_confirmed",
                               fluidRow(column(12,
                                               div(class = "box",
-                                                  div(class = "box-header", style="display:flex;justify-content:space-between;align-items:center;",
-                                                      uiOutput("entry_list_title", inline=TRUE),
-                                                      div(style="display:flex;gap:8px;align-items:center;",
-                                                          downloadButton("download_entry_list_csv", "CSV", class="btn-success", style="margin:0;"),
-                                                          downloadButton("download_entry_list_excel", "Excel", class="btn-success", style="margin:0;"),
-                                                          downloadButton("download_input_file","Create Input File",class="btn-warning",style="margin:0;")
+                                                  div(class = "box-header",
+                                                      style = "display:flex;justify-content:space-between;align-items:center;",
+                                                      uiOutput("entry_list_title", inline = TRUE),
+                                                      div(style = "display:flex;gap:8px;align-items:center;",
+                                                          downloadButton("download_entry_list_csv",   "CSV",              class = "btn-success", style = "margin:0;"),
+                                                          downloadButton("download_entry_list_excel", "Excel",            class = "btn-success", style = "margin:0;"),
+                                                          downloadButton("download_input_file",       "Create Input File",class = "btn-warning", style = "margin:0;")
                                                       )
                                                   ),
                                                   div(class = "box-body",
@@ -253,1269 +285,1931 @@ ui <- fluidPage(
                                               )
                               ))
              ),
-             conditionalPanel(condition = "!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded", class="box-title")),
-                                                      div(class="box-body", p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     ),
     
-    #----- FINISH RATES TAB -----#
+    # =========================================================================
+    # FINISH RATES TAB
+    # =========================================================================
     tabPanel("Finish Rates", value = "finish_rates",
+             
              conditionalPanel(condition = "output.filters_confirmed",
                               
-                              # Controls row
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", style="display:flex;justify-content:space-between;align-items:center;",
-                                                      h3("Finish Rate Controls", class="box-title"),
-                                                      downloadButton("download_finish_rates", "Download All", class="btn-success", style="margin:0;")
+                                              div(class = "box",
+                                                  div(class = "box-header",
+                                                      style = "display:flex;justify-content:space-between;align-items:center;",
+                                                      h3("Finish Rate Controls", class = "box-title"),
+                                                      downloadButton("download_finish_rates", "Download", class = "btn-success", style = "margin:0;")
                                                   ),
-                                                  div(class="box-body",
-                                                      fluidRow(
-                                                        column(3,
-                                                               radioButtons("fr_view", "View By:",
-                                                                            choices=c("Driver"="driver","Car"="car","Team"="team","Tier"="tier"),
-                                                                            selected="driver", inline=TRUE)
-                                                        ),
-                                                        column(3,
-                                                               radioButtons("fr_time", "Time Period:",
-                                                                            choices=c("Full History"="all","2025 Only"="2025"),
-                                                                            selected="2025", inline=TRUE)
-                                                        ),
-                                                        column(6,
-                                                               conditionalPanel(condition="input.fr_view == 'tier'",
-                                                                                div(style="background:#222;border:1px solid #555;border-radius:4px;padding:10px;",
-                                                                                    p(style="color:#FFD700;font-weight:bold;margin-bottom:8px;", "Team Tier Configuration"),
-                                                                                    uiOutput("tier_config_ui"),
-                                                                                    div(style="margin-top:8px;display:flex;gap:8px;",
-                                                                                        actionButton("add_tier", "+ Add Tier", class="btn-info", style="font-size:12px;padding:4px 10px;"),
-                                                                                        actionButton("remove_tier", "- Remove Tier", class="btn-danger", style="font-size:12px;padding:4px 10px;")
-                                                                                    )
-                                                                                )
-                                                               )
-                                                        )
+                                                  div(class = "box-body",
+                                                      
+                                                      # View pills
+                                                      fluidRow(column(12,
+                                                                      div(style = "display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;",
+                                                                          span(style = "color:#aaa;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;",
+                                                                               "View By:"),
+                                                                          uiOutput("fr_view_pills_ui")
+                                                                      )
+                                                      )),
+                                                      
+                                                      # Time period pills
+                                                      fluidRow(column(12,
+                                                                      div(style = "display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;",
+                                                                          span(style = "color:#aaa;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;",
+                                                                               "Seasons:"),
+                                                                          uiOutput("fr_time_pills_ui")
+                                                                      )
+                                                      )),
+                                                      
+                                                      # Tier config (only when tier view active)
+                                                      conditionalPanel(condition = "output.fr_view_is_tier",
+                                                                       div(style = "background:#222;border:1px solid #555;border-radius:4px;padding:10px;margin-top:4px;",
+                                                                           p(style = "color:#FFE500;font-weight:bold;margin-bottom:8px;",
+                                                                             "Team Tier Configuration"),
+                                                                           uiOutput("tier_config_ui"),
+                                                                           div(style = "margin-top:8px;display:flex;gap:8px;",
+                                                                               actionButton("add_tier",    "+ Add Tier",    class = "btn-info",   style = "font-size:12px;padding:4px 10px;"),
+                                                                               actionButton("remove_tier", "- Remove Tier", class = "btn-danger", style = "font-size:12px;padding:4px 10px;")
+                                                                           )
+                                                                       )
                                                       )
                                                   )
                                               )
                               )),
                               
-                              # Finish Rates Table
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Finish Rates (%)", class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Finish Rates (%)", class = "box-title")),
+                                                  div(class = "box-body",
                                                       withSpinner(DT::dataTableOutput("finish_rates_table"))
                                                   )
                                               )
                               ))
              ),
-             conditionalPanel(condition="!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded", class="box-title")),
-                                                      div(class="box-body", p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     ),
     
-    #----- DOMINATOR TAB -----#
+    # =========================================================================
+    # DOMINATOR TAB
+    # =========================================================================
     tabPanel("Dominator", value = "dominator",
+             
              conditionalPanel(condition = "output.filters_confirmed",
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", style="display:flex;justify-content:space-between;align-items:center;",
-                                                      h3("Dominator Data", class="box-title", style="margin:0;"),
-                                                      div(style="display:flex;gap:8px;",
-                                                          downloadButton("download_dominator_csv","CSV",class="btn-success",style="margin:0;"),
-                                                          downloadButton("download_dominator_profile","Download Profile",class="btn-success",style="margin:0;")
+                                              div(class = "box",
+                                                  div(class = "box-header",
+                                                      style = "display:flex;justify-content:space-between;align-items:center;",
+                                                      h3("Dominator Data", class = "box-title", style = "margin:0;"),
+                                                      div(style = "display:flex;gap:8px;",
+                                                          downloadButton("download_dominator_csv",     "CSV",              class = "btn-success", style = "margin:0;"),
+                                                          downloadButton("download_dominator_profile", "Download Profile", class = "btn-success", style = "margin:0;")
                                                       )
                                                   ),
-                                                  div(class="box-body", withSpinner(DT::dataTableOutput("dominator_data_table")))
+                                                  div(class = "box-body",
+                                                      withSpinner(DT::dataTableOutput("dominator_data_table"))
+                                                  )
                                               )
                               )),
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Dominator Visualizations", class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Dominator Visualizations", class = "box-title")),
+                                                  div(class = "box-body",
                                                       fluidRow(
-                                                        column(6, selectInput("dom_visual_type","Select Visualization:",
-                                                                              choices=c("Score Distribution by Dom Rank"="score_dist","Dom Rank Finish Ranges"="rank_finish",
-                                                                                        "Dom Pts by Finish Position"="pts_by_finish","Dom Pts by Starting Position"="dom_pts_start",
-                                                                                        "Dom Rank by Starting Position"="dom_rank_start","Laps Led by Finish Position"="laps_led",
-                                                                                        "Laps Led by Starting Position"="laps_led_start","Fast Laps by Finish Position"="fast_laps",
-                                                                                        "Fast Laps by Starting Position"="fast_laps_start","Driver Dominator Boxplots"="driver_boxplot",
-                                                                                        "Team Dominator Boxplots"="team_boxplot","Entry Boxplots"="entry_boxplot"), selected="score_dist")),
-                                                        column(6, radioButtons("dom_platform","Platform:",choices=c("DraftKings"="DK","FanDuel"="FD"),selected="DK",inline=TRUE))
+                                                        column(6, selectInput("dom_visual_type", "Select Visualization:",
+                                                                              choices = c(
+                                                                                "Score Distribution by Dom Rank"  = "score_dist",
+                                                                                "Dom Rank Finish Ranges"           = "rank_finish",
+                                                                                "Dom Pts by Finish Position"       = "pts_by_finish",
+                                                                                "Dom Pts by Starting Position"     = "dom_pts_start",
+                                                                                "Dom Rank by Starting Position"    = "dom_rank_start",
+                                                                                "Laps Led by Finish Position"      = "laps_led",
+                                                                                "Laps Led by Starting Position"    = "laps_led_start",
+                                                                                "Fast Laps by Finish Position"     = "fast_laps",
+                                                                                "Fast Laps by Starting Position"   = "fast_laps_start",
+                                                                                "Driver Dominator Boxplots"        = "driver_boxplot",
+                                                                                "Team Dominator Boxplots"          = "team_boxplot"
+                                                                              ),
+                                                                              selected = "score_dist"
+                                                        )),
+                                                        column(6, radioButtons("dom_platform", "Platform:",
+                                                                               choices = c("DraftKings" = "DK", "FanDuel" = "FD"),
+                                                                               selected = "DK", inline = TRUE))
                                                       ),
-                                                      fluidRow(column(12, withSpinner(plotlyOutput("dominator_plot", height="700px"))))
+                                                      fluidRow(
+                                                        column(4, selectInput("dom_color_by", "Color By:", choices = c("None" = "none", "Track Type" = "track_type", "Season" = "race_season", "Track" = "track_name"), selected = "none"))
+                                                      ),
+                                                      fluidRow(column(12, withSpinner(plotlyOutput("dominator_plot", height = "700px"))))
                                                   )
                                               )
                               ))
              ),
-             conditionalPanel(condition="!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded",class="box-title")),
-                                                      div(class="box-body",p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     ),
     
-    #----- PLACE DIFFERENTIAL TAB -----#
+    # =========================================================================
+    # PLACE DIFFERENTIAL TAB
+    # =========================================================================
     tabPanel("Place Differential", value = "place_differential",
-             conditionalPanel(condition="output.filters_confirmed",
+             
+             conditionalPanel(condition = "output.filters_confirmed",
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", style="display:flex;justify-content:space-between;align-items:center;",
-                                                      h3("Place Differential Data",class="box-title",style="margin:0;"),
-                                                      downloadButton("download_pd_csv","CSV",class="btn-success",style="margin:0;")
+                                              div(class = "box",
+                                                  div(class = "box-header",
+                                                      style = "display:flex;justify-content:space-between;align-items:center;",
+                                                      h3("Place Differential Data", class = "box-title", style = "margin:0;"),
+                                                      downloadButton("download_pd_csv", "CSV", class = "btn-success", style = "margin:0;")
                                                   ),
-                                                  div(class="box-body", withSpinner(DT::dataTableOutput("pd_data_table")))
+                                                  div(class = "box-body",
+                                                      withSpinner(DT::dataTableOutput("pd_data_table"))
+                                                  )
                                               )
                               )),
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Place Differential Visualizations",class="box-title")),
-                                                  div(class="box-body",
-                                                      fluidRow(column(4, selectInput("pd_visual_type","Visualization Type:",
-                                                                                     choices=c("Start vs Finish Scatter"="scatter","Position Change Distribution"="histogram",
-                                                                                               "PD by Start Position"="boxplot_start","PD by Finish Position"="boxplot_finish")))),
-                                                      fluidRow(column(12, withSpinner(plotlyOutput("pd_plot",height="700px"))))
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Place Differential Visualizations", class = "box-title")),
+                                                  div(class = "box-body",
+                                                      fluidRow(
+                                                        column(4, selectInput("pd_visual_type", "Visualization Type:",
+                                                                              choices = c(
+                                                                                "Start vs Finish Scatter"    = "scatter",
+                                                                                "Position Change Distribution" = "histogram",
+                                                                                "PD by Start Position"        = "boxplot_start",
+                                                                                "PD by Finish Position"       = "boxplot_finish"
+                                                                              )
+                                                        ))
+                                                      ),
+                                                      fluidRow(
+                                                        column(4, selectInput("pd_color_by", "Color By:", choices = c("None" = "none", "Track Type" = "track_type", "Season" = "race_season", "Track" = "track_name"), selected = "none"))
+                                                      ),
+                                                      fluidRow(column(12, withSpinner(plotlyOutput("pd_plot", height = "700px"))))
                                                   )
                                               )
                               ))
              ),
-             conditionalPanel(condition="!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded",class="box-title")),
-                                                      div(class="box-body",p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     ),
     
-    #----- PERFORMANCE TAB -----#
+    # =========================================================================
+    # PERFORMANCE TAB
+    # =========================================================================
     tabPanel("Performance", value = "performance",
-             conditionalPanel(condition="output.filters_confirmed",
+             
+             conditionalPanel(condition = "output.filters_confirmed",
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Performance Data",class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Performance Data", class = "box-title")),
+                                                  div(class = "box-body",
                                                       fluidRow(
-                                                        column(6, radioButtons("perf_time_filter","Time Period:",choices=c("Full History"="all","2025 Only"="2025"),selected="all",inline=TRUE)),
-                                                        column(6, downloadButton("download_performance_csv","Download CSV",class="btn-success",style="margin-top:0px;"))
+                                                        column(6, uiOutput("perf_time_ui")),
+                                                        column(6, downloadButton("download_performance_csv", "Download CSV",
+                                                                                 class = "btn-success", style = "margin-top:0px;"))
                                                       ),
                                                       fluidRow(column(12, withSpinner(DT::dataTableOutput("performance_data_table"))))
                                                   )
                                               )
                               )),
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Performance Visualizations",class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Performance Visualizations", class = "box-title")),
+                                                  div(class = "box-body",
                                                       fluidRow(
-                                                        column(6, selectInput("perf_visual_type","Select Visualization:",
-                                                                              choices=c("Driver Speed Rank Distribution"="driver_speed","Team Speed Rank Distribution"="team_speed",
-                                                                                        "Driver Finish Distribution"="driver_finish","Team Finish Distribution"="team_finish",
-                                                                                        "Driver ARP Distribution"="driver_arp","Team ARP Distribution"="team_arp"), selected="driver_speed")),
-                                                        column(6, radioButtons("perf_visual_time","Time Period:",choices=c("Full History"="all","2025 Only"="2025"),selected="all",inline=TRUE))
+                                                        column(6, selectInput("perf_visual_type", "Select Visualization:",
+                                                                              choices = c(
+                                                                                "Driver Speed Rank Distribution" = "driver_speed",
+                                                                                "Team Speed Rank Distribution"   = "team_speed",
+                                                                                "Driver Finish Distribution"     = "driver_finish",
+                                                                                "Team Finish Distribution"       = "team_finish",
+                                                                                "Driver ARP Distribution"        = "driver_arp",
+                                                                                "Team ARP Distribution"          = "team_arp"
+                                                                              ),
+                                                                              selected = "driver_speed"
+                                                        )),
+                                                        column(6, uiOutput("perf_visual_time_ui"))
                                                       ),
-                                                      fluidRow(column(12, withSpinner(plotlyOutput("performance_plot",height="800px"))))
+                                                      fluidRow(
+                                                        column(4, selectInput("perf_color_by", "Color By:", choices = c("None" = "none", "Track Type" = "track_type", "Season" = "race_season", "Track" = "track_name"), selected = "none"))
+                                                      ),
+                                                      fluidRow(column(12, withSpinner(plotlyOutput("performance_plot", height = "800px"))))
                                                   )
                                               )
                               ))
              ),
-             conditionalPanel(condition="!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded",class="box-title")),
-                                                      div(class="box-body",p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     ),
     
-    #----- FANTASY SCORING TAB -----#
+    # =========================================================================
+    # FANTASY SCORING TAB
+    # =========================================================================
     tabPanel("Fantasy Scoring", value = "fantasy_scoring",
-             conditionalPanel(condition="output.filters_confirmed",
+             
+             conditionalPanel(condition = "output.filters_confirmed",
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Fantasy Scoring Data",class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Fantasy Scoring Data", class = "box-title")),
+                                                  div(class = "box-body",
                                                       fluidRow(
-                                                        column(6, radioButtons("fs_platform","Platform:",choices=c("DraftKings"="DK","FanDuel"="FD"),selected="DK",inline=TRUE)),
-                                                        column(6, downloadButton("download_fantasy_csv","Download CSV",class="btn-success",style="margin-top:0px;"))
+                                                        column(6, radioButtons("fs_platform", "Platform:",
+                                                                               choices = c("DraftKings" = "DK", "FanDuel" = "FD"),
+                                                                               selected = "DK", inline = TRUE)),
+                                                        column(6, downloadButton("download_fantasy_csv", "Download CSV",
+                                                                                 class = "btn-success", style = "margin-top:0px;"))
                                                       ),
                                                       fluidRow(column(12, withSpinner(DT::dataTableOutput("fantasy_data_table"))))
                                                   )
                                               )
                               )),
+                              
                               fluidRow(column(12,
-                                              div(class="box",
-                                                  div(class="box-header", h3("Fantasy Scoring Visualizations",class="box-title")),
-                                                  div(class="box-body",
+                                              div(class = "box",
+                                                  div(class = "box-header", h3("Fantasy Scoring Visualizations", class = "box-title")),
+                                                  div(class = "box-body",
                                                       fluidRow(
-                                                        column(6, selectInput("fs_visual_type","Select Visualization:",
-                                                                              choices=c("Score Distribution by Rank"="score_dist","Scoring Components Breakdown"="components",
-                                                                                        "Score Distribution by Start Position"="score_by_start","Score Distribution by Finish Position"="score_by_finish",
-                                                                                        "Components by Start Position"="components_start","Components by Finish Position"="components_finish"), selected="score_dist")),
-                                                        column(6, radioButtons("fs_visual_platform","Platform:",choices=c("DraftKings"="DK","FanDuel"="FD"),selected="DK",inline=TRUE))
+                                                        column(6, selectInput("fs_visual_type", "Select Visualization:",
+                                                                              choices = c(
+                                                                                "Score Distribution by Rank"        = "score_dist",
+                                                                                "Scoring Components Breakdown"      = "components",
+                                                                                "Score Distribution by Start"       = "score_by_start",
+                                                                                "Score Distribution by Finish"      = "score_by_finish"
+                                                                              ),
+                                                                              selected = "score_dist"
+                                                        )),
+                                                        column(6, radioButtons("fs_visual_platform", "Platform:",
+                                                                               choices = c("DraftKings" = "DK", "FanDuel" = "FD"),
+                                                                               selected = "DK", inline = TRUE))
                                                       ),
-                                                      fluidRow(column(12, withSpinner(plotlyOutput("fantasy_plot",height="700px"))))
+                                                      fluidRow(
+                                                        column(4, selectInput("fs_color_by", "Color By:", choices = c("None" = "none", "Track Type" = "track_type", "Season" = "race_season", "Track" = "track_name"), selected = "none"))
+                                                      ),
+                                                      fluidRow(column(12, withSpinner(plotlyOutput("fantasy_plot", height = "700px"))))
                                                   )
                                               )
                               ))
              ),
-             conditionalPanel(condition="!output.filters_confirmed",
-                              fluidRow(column(12, div(class="box", div(class="box-header", h3("No Races Loaded",class="box-title")),
-                                                      div(class="box-body",p(style="color:#ffffff;text-align:center;padding:40px;font-size:16px;","Please go to the Race Selection tab and load races first.")))))
-             )
+             
+             conditionalPanel(condition = "!output.filters_confirmed", no_races_panel())
     )
-  )
-)
+    
+  ) # end navbarPage
+) # end fluidPage
 
-#--------------------- Server Function ---------------------#
+# =============================================================================
+# SERVER
+# =============================================================================
 
 server <- function(input, output, session) {
   
+  # Null-coalescing operator
+  `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
+  
+  # ---------------------------------------------------------------------------
+  # REACTIVE VALUES
+  # ---------------------------------------------------------------------------
   values <- reactiveValues(
-    nascar_data = NULL,
-    race_list = NULL,
-    analysis_filtered_data = NULL,
-    analysis_entry_list = NULL,
+    nascar_data              = NULL,
+    races_sheet              = NULL,
+    analysis_filtered_data   = NULL,
+    analysis_entry_list      = NULL,
     analysis_races_available = NULL,
-    filters_confirmed = FALSE,
-    pd_race_ids = NULL,
-    performance_race_ids = NULL,
-    num_tiers = 3
+    filters_confirmed        = FALSE,
+    pool_state               = NULL,   # race_id, dom, perf, dom_manual, perf_manual
+    # Perf pool bulk controls
+    perf_same_track_only     = FALSE,
+    perf_track_types         = character(0),  # track types currently included
+    perf_season_from         = 2022L,
+    perf_same_track_toggle   = 0L,            # toggle counter for button
+    num_tiers                = 3,
+    fr_view_sel              = "driver",    # active view pill
+    fr_seasons_sel           = "all"        # active season pills ("all" or char vec of years)
   )
   
-  # Load initial data and set defaults
+  # ---------------------------------------------------------------------------
+  # STARTUP: load data, populate dropdowns, auto-trigger filter load
+  # ---------------------------------------------------------------------------
   observe({
-    withProgress(message='Loading Golden Ticket Database...', {
+    withProgress(message = "Loading Golden Ticket Database...", {
+      
+      incProgress(0.1, detail = "Reading database...")
       values$nascar_data <- load_nascar_database()
-      values$race_list <- load_race_list()
-      if (!is.null(values$nascar_data)) {
-        incProgress(0.3, detail="Processing tracks...")
-        all_race_data <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else NULL
-        if (!is.null(all_race_data)) {
-          all_tracks <- sort(unique(all_race_data$track_name[!is.na(all_race_data$track_name)]))
-          
-          # Find next upcoming race and set as default
-          upcoming_races <- all_race_data %>%
-            filter(!is.na(date_scheduled), as.Date(substr(date_scheduled, 1, 10)) >= Sys.Date()) %>%
-            arrange(date_scheduled)
-          
-          if (nrow(upcoming_races) > 0) {
-            next_race <- upcoming_races[1, ]
-            updateSelectizeInput(session, "analysis_series", selected = next_race$series_id)
-            updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks, selected = next_race$track_name)
-          } else {
-            updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
-          }
-        } else {
-          all_tracks <- sort(unique(values$nascar_data$track_name[!is.na(values$nascar_data$track_name)]))
-          updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
-        }
-        updateSelectizeInput(session, "analysis_similar_tracks", choices = all_tracks)
-        incProgress(1.0)
+      values$races_sheet <- load_races_sheet()
+      
+      req(values$races_sheet)
+      incProgress(0.3, detail = "Processing tracks...")
+      
+      # Only show tracks that have data in the Results sheet
+      tracks_with_data <- unique(values$nascar_data$track_name[!is.na(values$nascar_data$track_name)])
+      all_tracks <- sort(unique(values$races_sheet$track_name[
+        values$races_sheet$track_name %in% tracks_with_data &
+          !is.na(values$races_sheet$track_name)]))
+      
+      # Find next upcoming race for Cup Series (series 1) and pre-select
+      upcoming <- values$races_sheet %>%
+        filter(!is.na(race_date),
+               as.Date(substr(race_date, 1, 10)) >= Sys.Date(),
+               series_id == 1) %>%
+        arrange(race_date)
+      
+      if (nrow(upcoming) > 0) {
+        next_race <- upcoming[1, ]
+        # Pre-select series, track — the series observer will fire and
+        # populate the race dropdown, which triggers the pool load
+        updateSelectizeInput(session, "analysis_series",
+                             selected = as.character(next_race$series_id))
+        updateSelectizeInput(session, "analysis_primary_track",
+                             choices = all_tracks, selected = next_race$track_name)
+      } else {
+        updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
       }
+      
+      incProgress(0.8, detail = "Auto-loading races...")
     })
+    
   })
   
-  # Auto-populate similar tracks when primary track changes
-  observeEvent(input$analysis_primary_track, {
-    req(input$analysis_primary_track)
-    all_race_data <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else NULL
+  # ---------------------------------------------------------------------------
+  # DYNAMIC YEAR RADIO BUTTONS
+  # Replaces all hardcoded "2025 Only" labels throughout the app
+  # ---------------------------------------------------------------------------
+  year_radio_choices <- reactive({
+    c("Full History" = "all", setNames(as.character(CURRENT_YEAR), paste(CURRENT_YEAR, "Only")))
+  })
+  
+  output$fr_time_ui <- renderUI({
+    radioButtons("fr_time", "Time Period:",
+                 choices = year_radio_choices(), selected = as.character(CURRENT_YEAR), inline = TRUE)
+  })
+  
+  # FR view pills
+  output$fr_view_pills_ui <- renderUI({
+    req(values$analysis_races_available)
+    views <- c("Driver" = "driver", "Car" = "car", "Team" = "team",
+               "Start Pos" = "start_pos", "Tier" = "tier")
+    cur <- if (!is.null(values$fr_view_sel)) values$fr_view_sel else "driver"
+    pill_btn <- function(lbl, val) {
+      actionButton(paste0("frview_", val), lbl,
+                   style = paste0(
+                     "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
+                     if (cur == val)
+                       "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
+                     else
+                       "background:#2a2a2a!important;color:#888!important;border:2px solid #444!important;"))
+    }
+    div(style = "display:flex;flex-wrap:wrap;gap:4px;",
+        mapply(pill_btn, names(views), views, SIMPLIFY = FALSE))
+  })
+  
+  # FR time pills — multi-select seasons + "All"
+  output$fr_time_pills_ui <- renderUI({
+    req(values$analysis_races_available)
+    seasons <- sort(unique(values$analysis_races_available$race_season))
+    cur     <- if (!is.null(values$fr_seasons_sel)) values$fr_seasons_sel else "all"
+    make_pill <- function(lbl, val) {
+      is_active <- val %in% cur
+      actionButton(paste0("frtime_", val), lbl,
+                   style = paste0(
+                     "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
+                     if (is_active)
+                       "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
+                     else
+                       "background:#2a2a2a!important;color:#888!important;border:2px solid #444!important;"))
+    }
+    all_pills <- c(
+      list(make_pill("All", "all")),
+      lapply(seasons, function(s) make_pill(as.character(s), as.character(s)))
+    )
+    div(style = "display:flex;flex-wrap:wrap;gap:4px;", tagList(all_pills))
+  })
+  
+  # Expose fr_view for conditionalPanel
+  output$fr_view_is_tier <- reactive({
+    isTRUE(values$fr_view_sel == "tier")
+  })
+  outputOptions(output, "fr_view_is_tier", suspendWhenHidden = FALSE)
+  
+  output$perf_time_ui <- renderUI({
+    radioButtons("perf_time_filter", "Time Period:",
+                 choices = year_radio_choices(), selected = "all", inline = TRUE)
+  })
+  
+  output$perf_visual_time_ui <- renderUI({
+    radioButtons("perf_visual_time", "Time Period:",
+                 choices = year_radio_choices(), selected = "all", inline = TRUE)
+  })
+  
+  # ---------------------------------------------------------------------------
+  # SERIES CHANGE: update track list AND pre-select next race for that series
+  # ---------------------------------------------------------------------------
+  observeEvent(input$analysis_series, {
+    req(input$analysis_series, values$races_sheet, values$nascar_data)
+    sid <- as.numeric(input$analysis_series)
     
-    if (!is.null(all_race_data)) {
-      # Get track type of primary track
-      primary_track_type <- all_race_data %>%
-        filter(track_name == input$analysis_primary_track) %>%
+    tracks_with_data <- values$nascar_data %>%
+      filter(series_id == sid) %>%
+      pull(track_name) %>%
+      unique()
+    all_tracks <- sort(unique(values$races_sheet$track_name[
+      values$races_sheet$track_name %in% tracks_with_data]))
+    
+    # Find next upcoming race for this series and pre-select its track
+    next_up <- values$races_sheet %>%
+      filter(series_id == sid,
+             !is.na(race_date),
+             as.Date(substr(race_date, 1, 10)) >= Sys.Date()) %>%
+      arrange(race_date) %>%
+      slice(1)
+    
+    if (nrow(next_up) > 0) {
+      updateSelectizeInput(session, "analysis_primary_track",
+                           choices = all_tracks, selected = next_up$track_name)
+    } else {
+      updateSelectizeInput(session, "analysis_primary_track", choices = all_tracks)
+    }
+  }, ignoreInit = TRUE)
+  
+  # ---------------------------------------------------------------------------
+  # RACE DROPDOWN: upcoming races at selected series + track
+  # ---------------------------------------------------------------------------
+  observe({
+    req(input$analysis_series, input$analysis_primary_track, values$races_sheet)
+    
+    available <- values$races_sheet %>%
+      filter(
+        series_id  == as.numeric(input$analysis_series),
+        track_name == input$analysis_primary_track,
+        !is.na(race_date),
+        as.Date(substr(race_date, 1, 10)) >= Sys.Date()
+      ) %>%
+      arrange(race_date) %>%
+      mutate(race_label = paste0(race_season, " — ", race_name))
+    
+    choices <- setNames(available$race_id, available$race_label)
+    updateSelectizeInput(session, "analysis_race_id",
+                         choices  = choices,
+                         selected = if (length(choices) > 0) choices[1] else NULL)
+  })
+  
+  # ---------------------------------------------------------------------------
+  # LOAD RACES: main filter handler (also triggered automatically on startup)
+  # ---------------------------------------------------------------------------
+  # Fires on series or track change (no button needed)
+  observeEvent(list(input$analysis_series, input$analysis_primary_track), {
+    req(input$analysis_series, input$analysis_primary_track,
+        values$races_sheet, values$nascar_data)
+    
+    withProgress(message = "Loading races...", {
+      incProgress(0.2)
+      
+      selected_series <- as.numeric(input$analysis_series)
+      selected_track  <- input$analysis_primary_track
+      
+      # Get selected track type for perf pool pre-population
+      selected_track_type <- values$races_sheet %>%
+        filter(track_name == selected_track) %>%
         pull(track_type) %>%
-        unique() %>%
         first()
       
-      if (!is.na(primary_track_type) && length(primary_track_type) > 0) {
-        # Find all tracks with same track type (excluding primary track)
-        similar_tracks <- all_race_data %>%
-          filter(track_type == primary_track_type, track_name != input$analysis_primary_track) %>%
-          pull(track_name) %>%
-          unique() %>%
-          sort()
-        
-        # Update similar tracks dropdown with these tracks pre-selected
-        all_tracks <- sort(unique(all_race_data$track_name[!is.na(all_race_data$track_name)]))
-        updateSelectizeInput(session, "analysis_similar_tracks", choices = all_tracks, selected = similar_tracks)
-      }
-    }
-  })
-  
-  observe({
-    req(input$analysis_series, input$analysis_primary_track, input$analysis_start_year, input$analysis_end_year)
-    all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else NULL
-    if (!is.null(all_races)) {
-      available_races <- all_races %>%
-        filter(series_id==as.numeric(input$analysis_series), track_name==input$analysis_primary_track,
-               race_season>=input$analysis_start_year, race_season<=input$analysis_end_year,
-               !is.na(date_scheduled), as.Date(substr(date_scheduled, 1, 10)) >= Sys.Date()) %>%
-        arrange(date_scheduled) %>%
-        mutate(race_label=paste0(race_season," - ",race_name))
-      race_choices <- setNames(available_races$race_id, available_races$race_label)
-      updateSelectizeInput(session,"analysis_race_id",choices=race_choices,
-                           selected=if(length(race_choices)>0) race_choices[1] else NULL)
-    }
-  })
-  
-  observeEvent(input$confirm_analysis_filters, {
-    req(input$analysis_series, input$analysis_primary_track, input$analysis_start_year, input$analysis_end_year, input$analysis_race_id)
-    withProgress(message='Loading races...', {
-      incProgress(0.2)
-      all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
-      tracks_to_include <- input$analysis_primary_track
-      if (!is.null(input$analysis_similar_tracks) && length(input$analysis_similar_tracks)>0)
-        tracks_to_include <- c(tracks_to_include, input$analysis_similar_tracks)
-      
-      filtered_race_list <- all_races %>%
-        filter(series_id==as.numeric(input$analysis_series), track_name %in% tracks_to_include,
-               race_season>=input$analysis_start_year, race_season<=input$analysis_end_year, Historical=="Y")
+      # All historical races across the series — every series/track combo
+      # that has data is eligible; filter to Historical only
+      all_historical <- values$races_sheet %>%
+        filter(Historical == "Y",
+               series_id  == selected_series)
       
       incProgress(0.4)
-      filtered_nascar <- values$nascar_data %>% filter(race_id %in% filtered_race_list$race_id)
+      
+      # Join race aggregates from Results sheet
+      race_aggs <- values$nascar_data %>%
+        filter(series_id == selected_series) %>%
+        group_by(race_id) %>%
+        summarise(
+          total_laps   = first(act_laps),
+          lead_lap     = sum(LapsDown == 0, na.rm = TRUE),
+          crash_dnfs   = sum(finishing_status %in%
+                               c("Accident", "DVP", "Damage"), na.rm = TRUE),
+          mech_dnfs    = sum(!finishing_status %in%
+                               c("Running", "Accident", "DVP", "Damage") &
+                               !is.na(finishing_status), na.rm = TRUE),
+          DK_Dom_Total = round(sum(DKSP, na.rm = TRUE), 1),
+          FD_Dom_Total = round(sum(FDSP, na.rm = TRUE), 1),
+          .groups = "drop"
+        )
+      
+      races_available <- all_historical %>%
+        inner_join(race_aggs, by = "race_id") %>%
+        mutate(
+          total_laps    = if_else(is.na(total_laps), scheduled_laps, total_laps),
+          is_same_track = track_name == selected_track,
+          is_same_type  = !is.na(track_type) & !is.na(selected_track_type) &
+            track_type == selected_track_type
+        ) %>%
+        arrange(desc(is_same_track), desc(race_season))
+      
       incProgress(0.6)
       
-      race_info <- all_races %>% filter(race_id==as.numeric(input$analysis_race_id)) %>% slice(1)
-      entry_list <- load_entry_list(race_info$race_season, as.numeric(input$analysis_series), as.numeric(input$analysis_race_id))
+      # Auto dom pool: ±25% of median DK dom total at this track+series
+      # If no same-track history, use full series median
+      same_track_dom <- races_available %>%
+        filter(is_same_track, DK_Dom_Total > 0) %>%
+        pull(DK_Dom_Total)
+      # Default range: ±25% of median, but always wide enough to include
+      # all same-track races so the selected track's history is in Dom pool
+      ref_median <- if (length(same_track_dom) >= 2) {
+        median(same_track_dom, na.rm = TRUE)
+      } else {
+        median(races_available$DK_Dom_Total[races_available$DK_Dom_Total > 0],
+               na.rm = TRUE)
+      }
+      dom_lo <- if (length(same_track_dom) > 0) {
+        min(floor(ref_median * 0.75), floor(min(same_track_dom) * 0.95))
+      } else {
+        floor(ref_median * 0.75)
+      }
+      dom_hi <- if (length(same_track_dom) > 0) {
+        max(ceiling(ref_median * 1.25), ceiling(max(same_track_dom) * 1.05))
+      } else {
+        ceiling(ref_median * 1.25)
+      }
+      
+      # Default perf pill state: tracks of same type as selected track
+      default_perf_tracks <- if (!is.na(selected_track_type)) {
+        unique(races_available$track_name[
+          races_available$track_type == selected_track_type &
+            !is.na(races_available$track_name)])
+      } else {
+        unique(races_available$track_name[!is.na(races_available$track_name)])
+      }
+      
+      # Build initial pool_state: auto-assign dom and perf flags
+      pool_state <- races_available %>%
+        transmute(
+          race_id,
+          dom        = DK_Dom_Total >= dom_lo & DK_Dom_Total <= dom_hi,
+          perf       = track_name %in% default_perf_tracks,
+          dom_manual = FALSE,
+          perf_manual= FALSE
+        )
+      
+      # Store perf control state
+      values$perf_same_track_only   <- FALSE
+      values$perf_track_types       <- default_perf_tracks
+      values$perf_season_from       <- min(races_available$race_season, na.rm = TRUE)
+      values$perf_same_track_toggle <- 0L
       
       incProgress(0.8)
-      races_available <- filtered_race_list %>%
-        left_join(
-          filtered_nascar %>%
-            group_by(race_id) %>%
-            summarize(
-              total_laps = if("act_laps" %in% names(cur_data())) first(act_laps) else if("actual_laps" %in% names(cur_data())) first(actual_laps) else if("TotalLaps" %in% names(cur_data())) first(TotalLaps) else NA_real_,
-              caution_laps = if("number_of_caution_laps" %in% names(cur_data())) first(number_of_caution_laps) else if("CautionLaps" %in% names(cur_data())) first(CautionLaps) else 0,
-              lead_lap = sum(LapsDown==0, na.rm=TRUE),
-              crash_dnfs = sum(finishing_status %in% c("Accident","DVP","Damage"), na.rm=TRUE),
-              mech_dnfs = sum(!finishing_status %in% c("Running","Accident","DVP","Damage"), na.rm=TRUE),
-              # Calculate TOTAL dominator points scored by ALL drivers in this race
-              DK_Dom_Total = if("DKSP" %in% names(cur_data()) && any(!is.na(DKSP))) {
-                sum(DKSP, na.rm=TRUE)
-              } else if(all(c("fast_laps","lead_laps") %in% names(cur_data()))) {
-                sum((fast_laps * 0.45) + (lead_laps * 0.25), na.rm=TRUE)
-              } else NA_real_,
-              FD_Dom_Total = if("FDSP" %in% names(cur_data()) && any(!is.na(FDSP))) {
-                sum(FDSP, na.rm=TRUE)
-              } else if("lead_laps" %in% names(cur_data())) {
-                sum(lead_laps * 0.1, na.rm=TRUE)
-              } else NA_real_,
-              .groups='drop'
-            ), by="race_id"
-        ) %>%
-        mutate(
-          total_laps = if_else(is.na(total_laps), scheduled_laps, total_laps),
-          DK_Dom_Total = round(DK_Dom_Total, 1),
-          FD_Dom_Total = round(FD_Dom_Total, 1)
-        ) %>%
-        ungroup()
       
-      values$analysis_filtered_data <- filtered_nascar
-      values$analysis_entry_list <- entry_list
+      filtered_nascar <- values$nascar_data %>%
+        filter(race_id %in% races_available$race_id)
+      
+      values$analysis_filtered_data   <- filtered_nascar
+      values$analysis_entry_list      <- NULL   # reset; entry list observer reloads it
       values$analysis_races_available <- races_available
-      values$pd_race_ids <- races_available$race_id
-      values$performance_race_ids <- races_available$race_id
-      values$filters_confirmed <- TRUE
+      values$pool_state               <- pool_state
+      values$filters_confirmed        <- TRUE
+      
+      # Store auto-range for slider
+      values$dom_lo <- dom_lo
+      values$dom_hi <- dom_hi
+      
       incProgress(1.0)
-      showNotification(paste("Loaded", nrow(filtered_race_list), "historical races."), type="message", duration=5)
+      n_dom  <- sum(pool_state$dom)
+      n_perf <- sum(pool_state$perf)
+      showNotification(
+        sprintf("Loaded %d races. Dom pool: %d | Perf pool: %d",
+                nrow(races_available), n_dom, n_perf),
+        type = "message", duration = 5)
     })
   })
   
-  output$filters_confirmed <- reactive({ return(values$filters_confirmed) })
-  outputOptions(output, "filters_confirmed", suspendWhenHidden=FALSE)
+  # ---------------------------------------------------------------------------
+  # PERF POOL BULK CONTROLS — pills, toggle, season
+  # ---------------------------------------------------------------------------
   
-  output$races_selection_table <- DT::renderDataTable({
+  # Same-track-only toggle button
+  output$same_track_toggle_ui <- renderUI({
     req(values$analysis_races_available)
-    race_selection_data <- values$analysis_races_available %>%
-      select(Season=race_season, Track=track_name, Race=race_name, Cars=number_of_cars_in_field,
-             Qualifying, Leaders=number_of_leaders, Cautions=number_of_cautions,
-             `Scheduled Laps`=scheduled_laps, `Actual Laps`=total_laps,
-             `DK Dom`=DK_Dom_Total, `FD Dom`=FD_Dom_Total,
-             `Lead Lap`=lead_lap, `Crash DNFs`=crash_dnfs, `Mech DNFs`=mech_dnfs) %>%
-      arrange(desc(Season))
-    DT::datatable(race_selection_data, selection='none',
-                  options=list(pageLength=20,scrollX=TRUE,dom='tip',columnDefs=list(list(className="dt-center",targets="_all"))),
-                  rownames=FALSE, class="display nowrap compact")
+    is_on <- isTRUE(values$perf_same_track_only)
+    actionButton("perf_same_track_btn",
+                 label  = if (is_on) "★ Same Track Only" else "★ Same Track Only",
+                 class  = if (is_on) "btn-primary" else "btn-default",
+                 style  = paste0(
+                   "font-size:12px;padding:5px 12px;font-weight:600;",
+                   if (is_on) "background:#FFE500!important;color:#000!important;border-color:#FFE500!important;"
+                   else "background:#333!important;color:#aaa!important;border-color:#555!important;"
+                 )
+    )
   })
   
-  output$lap_filter_summary <- renderUI({
-    req(values$analysis_races_available, input$lap_range_dominator)
-    filtered_count <- values$analysis_races_available %>%
-      filter(total_laps>=input$lap_range_dominator[1], total_laps<=input$lap_range_dominator[2]) %>% nrow()
-    total_count <- nrow(values$analysis_races_available)
-    tagList(h4(style="color:#FFD700;margin-top:30px;", paste(filtered_count,"of",total_count,"races meet lap requirements")))
+  observeEvent(input$perf_same_track_btn, {
+    values$perf_same_track_only <- !isTRUE(values$perf_same_track_only)
   })
   
-  dominator_filtered_races <- reactive({
-    req(values$analysis_races_available, input$lap_range_dominator)
-    values$analysis_races_available %>%
-      filter(total_laps>=input$lap_range_dominator[1], total_laps<=input$lap_range_dominator[2]) %>%
-      pull(race_id)
-  })
-  
-  #----- SALARY AUTO-LOADING -----#
-  # Automatically load salaries based on series selection
-  entry_list_with_salaries <- reactive({
-    req(values$analysis_entry_list, input$analysis_series)
+  # Track pills — grouped by type. Clicking a type header toggles all tracks
+  # in that type; clicking an individual track pill toggles just that track.
+  # values$perf_track_types stores individual track_names (not types).
+  output$track_type_pills_ui <- renderUI({
+    req(values$analysis_races_available)
+    ra    <- values$analysis_races_available
+    active_tracks <- values$perf_track_types   # now stores track names
     
-    entry_list <- values$analysis_entry_list
+    type_labels <- c(
+      short_track   = "Short Track",
+      intermediate  = "Intermediate",
+      superspeedway = "Superspeedway",
+      road_course   = "Road Course",
+      atlanta       = "Atlanta",
+      dirt          = "Dirt",
+      other         = "Other"
+    )
     
-    # Determine series name for file lookup
-    series_name <- switch(as.character(input$analysis_series),
-                          "1" = "Cup",
-                          "2" = "OReilly", 
-                          "3" = "Trucks",
-                          "Cup")  # default
+    types <- sort(unique(ra$track_type[!is.na(ra$track_type)]))
     
-    # Try to load DraftKings salary file (try multiple naming patterns)
-    dk_file <- NULL
-    for (pattern in c(paste0("DK", series_name, ".csv"),
-                      paste0("DKSalaries", series_name, ".csv"),
-                      paste0("dk", tolower(series_name), ".csv"))) {
-      if (file.exists(pattern)) {
-        dk_file <- pattern
-        break
-      }
-    }
-    
-    dk_salaries <- NULL
-    if (!is.null(dk_file)) {
-      tryCatch({
-        dk_salaries <- read_csv(dk_file, show_col_types = FALSE, locale = locale(encoding = "UTF-8"))
-        # DK format: Position, Name + ID, Name, ID, Roster Position, Salary, ...
-        if ("Name" %in% names(dk_salaries) && "Salary" %in% names(dk_salaries)) {
-          if ("ID" %in% names(dk_salaries)) {
-            dk_salaries <- dk_salaries %>% 
-              select(Name, DK_Salary = Salary, DKID = ID) %>%
-              mutate(Name = safe_trimws(Name))
-          } else {
-            dk_salaries <- dk_salaries %>% 
-              select(Name, DK_Salary = Salary) %>%
-              mutate(Name = safe_trimws(Name))
-          }
-        }
-      }, error = function(e) {
-        message("Could not load ", dk_file, ": ", e$message)
+    groups <- lapply(types, function(tt) {
+      tracks_in_type <- sort(unique(ra$track_name[ra$track_type == tt & !is.na(ra$track_name)]))
+      all_active  <- all(tracks_in_type %in% active_tracks)
+      type_label  <- if (tt %in% names(type_labels)) type_labels[[tt]] else tt
+      
+      # Type header pill
+      type_pill <- actionButton(
+        inputId = paste0("typepill_", gsub("[^a-z]", "_", tt)),
+        label   = type_label,
+        style   = paste0(
+          "margin:2px;padding:4px 14px;font-size:12px;font-weight:700;border-radius:20px;",
+          if (all_active)
+            "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
+          else
+            "background:#2a2a2a!important;color:#888!important;border:2px solid #555!important;"
+        )
+      )
+      
+      # Individual track pills
+      track_pills <- lapply(tracks_in_type, function(tn) {
+        is_active <- tn %in% active_tracks
+        actionButton(
+          inputId = paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn)),
+          label   = tn,
+          style   = paste0(
+            "margin:2px;padding:3px 10px;font-size:11px;font-weight:500;border-radius:20px;",
+            if (is_active)
+              "background:rgba(255,229,0,0.2)!important;color:#FFE500!important;border:1px solid #FFE500!important;"
+            else
+              "background:#1e1e1e!important;color:#666!important;border:1px solid #3a3a3a!important;"
+          )
+        )
       })
-    }
-    
-    # Try to load FanDuel salary file (try multiple naming patterns)
-    fd_file <- NULL
-    for (pattern in c(paste0("FD", series_name, ".csv"),
-                      paste0("FDSalaries", series_name, ".csv"),
-                      paste0("fd", tolower(series_name), ".csv"))) {
-      if (file.exists(pattern)) {
-        fd_file <- pattern
-        break
-      }
-    }
-    
-    fd_salaries <- NULL
-    if (!is.null(fd_file)) {
-      tryCatch({
-        fd_salaries <- read_csv(fd_file, show_col_types = FALSE, locale = locale(encoding = "UTF-8"))
-        # Standardize column names - adjust based on actual FD CSV format
-        if ("Nickname" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
-          if ("Id" %in% names(fd_salaries)) {
-            fd_salaries <- fd_salaries %>% 
-              select(Name = Nickname, FD_Salary = Salary, FDID = Id) %>%
-              mutate(Name = safe_trimws(Name))
-          } else {
-            fd_salaries <- fd_salaries %>% 
-              select(Name = Nickname, FD_Salary = Salary) %>%
-              mutate(Name = safe_trimws(Name))
-          }
-        } else if ("Name" %in% names(fd_salaries) && "Salary" %in% names(fd_salaries)) {
-          if ("Id" %in% names(fd_salaries)) {
-            fd_salaries <- fd_salaries %>% 
-              select(Name, FD_Salary = Salary, FDID = Id) %>%
-              mutate(Name = safe_trimws(Name))
-          } else {
-            fd_salaries <- fd_salaries %>% 
-              select(Name, FD_Salary = Salary) %>%
-              mutate(Name = safe_trimws(Name))
-          }
-        }
-      }, error = function(e) {
-        message("Could not load ", fd_file, ": ", e$message)
-      })
-    }
-    
-    # Clean entry list names for matching
-    entry_list <- entry_list %>%
-      mutate(Name_Clean = safe_trimws(Name))
-    
-    # Merge salaries if available
-    if (!is.null(dk_salaries)) {
-      dk_salaries <- dk_salaries %>% mutate(Name_Clean = safe_trimws(Name))
-      merge_cols <- intersect(c("DK_Salary", "DKID"), names(dk_salaries))
-      if (length(merge_cols) > 0) {
-        entry_list <- entry_list %>%
-          left_join(dk_salaries %>% select(Name_Clean, all_of(merge_cols)), by = "Name_Clean")
-      }
-    }
-    
-    if (!is.null(fd_salaries)) {
-      fd_salaries <- fd_salaries %>% mutate(Name_Clean = safe_trimws(Name))
-      merge_cols <- intersect(c("FD_Salary", "FDID"), names(fd_salaries))
-      if (length(merge_cols) > 0) {
-        entry_list <- entry_list %>%
-          left_join(fd_salaries %>% select(Name_Clean, all_of(merge_cols)), by = "Name_Clean")
-      }
-    }
-    
-    # Remove the cleaning column
-    entry_list <- entry_list %>% select(-Name_Clean)
-    
-    # Reorder columns to put salaries after basic info
-    if (any(c("DK_Salary", "FD_Salary", "DKID", "FDID") %in% names(entry_list))) {
-      base_cols <- c("Start", "Name", "Car", "Team", "Make", "CC", "Sponsor")
-      salary_cols <- intersect(c("DK_Salary", "FD_Salary", "DKID", "FDID"), names(entry_list))
-      other_cols <- setdiff(names(entry_list), c(base_cols, salary_cols))
-      entry_list <- entry_list %>% select(all_of(c(base_cols, salary_cols, other_cols)))
-    }
-    
-    return(entry_list)
-  })
-  
-  #----- ENTRY LIST OUTPUT -----#
-  output$entry_list_table <- DT::renderDataTable({
-    req(entry_list_with_salaries())
-    DT::datatable(entry_list_with_salaries(),
-                  options=list(pageLength=40,scrollX=TRUE,dom='tip',columnDefs=list(list(className="dt-center",targets="_all"))),
-                  rownames=FALSE, class="display nowrap compact")
-  })
-  
-  output$entry_list_title <- renderUI({
-    req(values$analysis_races_available, input$analysis_race_id, input$analysis_series)
-    race_info <- values$analysis_races_available %>% filter(race_id==as.numeric(input$analysis_race_id)) %>% slice(1)
-    if (nrow(race_info)==0) {
-      all_races <- if(file.exists("RaceIDs.xlsx")) read_excel("RaceIDs.xlsx") else values$race_list
-      race_info <- all_races %>% filter(race_id==as.numeric(input$analysis_race_id)) %>% slice(1)
-    }
-    race_name <- if(nrow(race_info)>0) race_info$race_name else "Entry List"
-    
-    # Check if salaries were loaded
-    series_name <- switch(as.character(input$analysis_series), "1" = "Cup", "2" = "OReilly", "3" = "Trucks", "Cup")
-    dk_exists <- file.exists(paste0("DK", series_name, ".csv"))
-    fd_exists <- file.exists(paste0("FD", series_name, ".csv"))
-    
-    salary_status <- ""
-    if (dk_exists && fd_exists) {
-      salary_status <- " (DK + FD Salaries Loaded)"
-    } else if (dk_exists) {
-      salary_status <- " (DK Salaries Loaded)"
-    } else if (fd_exists) {
-      salary_status <- " (FD Salaries Loaded)"
-    }
-    
-    h3(paste0(race_name, " Entry List", salary_status), class="box-title")
-  })
-  
-  output$download_entry_list_csv <- downloadHandler(
-    filename=function() paste0("Entry_List_",Sys.Date(),".csv"),
-    content=function(file) { req(entry_list_with_salaries()); write.csv(entry_list_with_salaries(),file,row.names=FALSE) }
-  )
-  
-  output$download_entry_list_excel <- downloadHandler(
-    filename=function() paste0("Starting_Grid_",Sys.Date(),".xlsx"),
-    content=function(file) {
-      req(entry_list_with_salaries())
-      wb <- createWorkbook(); addWorksheet(wb,"Starting Grid")
-      writeData(wb,"Starting Grid",entry_list_with_salaries(),startRow=1,startCol=1,rowNames=FALSE)
-      headerStyle <- createStyle(fontSize=12,fontColour="#000000",fgFill="#FFD700",halign="center",valign="center",
-                                 textDecoration="bold",border="TopBottomLeftRight",borderColour="#000000")
-      addStyle(wb,"Starting Grid",headerStyle,rows=1,cols=1:ncol(entry_list_with_salaries()),gridExpand=TRUE)
-      saveWorkbook(wb,file,overwrite=TRUE)
-    },
-    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  )
-  
-  #----- FINISH RATES -----#
-  
-  # Tier configuration UI
-  output$tier_config_ui <- renderUI({
-    req(values$analysis_filtered_data)
-    n <- values$num_tiers
-    all_teams <- if(!is.null(values$analysis_filtered_data)) {
-      sort(unique(values$analysis_filtered_data$team_name))
-    } else character(0)
-    
-    # Render all dropdowns with full choices - filtering handled by observer below
-    tier_inputs <- lapply(1:n, function(i) {
-      div(class="tier-box",
-          div(class="tier-label", paste("Tier", i)),
-          fluidRow(
-            column(5, textInput(paste0("tier_name_",i), NULL, value=paste0("Tier ",i), placeholder="Tier name")),
-            column(7, selectizeInput(paste0("tier_teams_",i), NULL, choices=all_teams, multiple=TRUE,
-                                     options=list(placeholder=paste("Assign teams to Tier",i))))
+      
+      div(style = "margin-bottom:8px;",
+          div(style = "display:flex;flex-wrap:wrap;gap:3px;align-items:center;",
+              type_pill,
+              span(style = "color:#444;margin:0 4px;font-size:14px;", "▸"),
+              tagList(track_pills)
           )
       )
     })
-    tagList(tier_inputs)
+    
+    tagList(groups)
   })
   
-  # Whenever any tier selection changes, update all other tiers to exclude already-selected teams
+  # Observer: type header pill toggles all tracks in that type
+  observe({
+    req(values$analysis_races_available)
+    types <- unique(values$analysis_races_available$track_type[
+      !is.na(values$analysis_races_available$track_type)])
+    lapply(types, function(tt) {
+      btn_id <- paste0("typepill_", gsub("[^a-z]", "_", tt))
+      observeEvent(input[[btn_id]], {
+        tracks_in_type <- unique(values$analysis_races_available$track_name[
+          values$analysis_races_available$track_type == tt])
+        current <- values$perf_track_types
+        if (all(tracks_in_type %in% current)) {
+          values$perf_track_types <- setdiff(current, tracks_in_type)
+        } else {
+          values$perf_track_types <- union(current, tracks_in_type)
+        }
+      }, ignoreInit = TRUE)
+    })
+  })
+  
+  # Observer: individual track pill toggles one track
+  observe({
+    req(values$analysis_races_available)
+    tracks <- unique(values$analysis_races_available$track_name[
+      !is.na(values$analysis_races_available$track_name)])
+    lapply(tracks, function(tn) {
+      btn_id <- paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn))
+      observeEvent(input[[btn_id]], {
+        current <- values$perf_track_types
+        if (tn %in% current) {
+          values$perf_track_types <- setdiff(current, tn)
+        } else {
+          values$perf_track_types <- c(current, tn)
+        }
+      }, ignoreInit = TRUE)
+    })
+  })
+  
+  # Season from selector
+  output$perf_season_from_ui <- renderUI({
+    req(values$analysis_races_available)
+    seasons <- sort(unique(values$analysis_races_available$race_season))
+    selectInput("perf_season_from", "Perf From Season:",
+                choices  = seasons,
+                selected = values$perf_season_from,
+                width    = "130px")
+  })
+  
+  observeEvent(input$perf_season_from, {
+    req(input$perf_season_from)
+    values$perf_season_from <- as.integer(input$perf_season_from)
+  }, ignoreInit = TRUE)
+  
+  # Recompute pool_state$perf whenever any bulk control changes
+  # Respects perf_manual overrides — those rows are immune
+  observe({
+    req(values$pool_state, values$analysis_races_available)
+    same_only   <- isTRUE(values$perf_same_track_only)
+    incl_types  <- values$perf_track_types
+    season_from <- values$perf_season_from %||% 2022L
+    
+    ra <- values$analysis_races_available %>%
+      select(race_id, track_type, track_name, race_season, is_same_track)
+    
+    ps <- values$pool_state %>%
+      left_join(ra, by = "race_id") %>%
+      mutate(
+        auto_perf = if (same_only) {
+          is_same_track & race_season >= season_from
+        } else {
+          track_name %in% incl_types & race_season >= season_from
+        },
+        perf = if_else(!perf_manual, auto_perf, perf)
+      ) %>%
+      select(-track_type, -track_name, -race_season, -is_same_track, -auto_perf)
+    
+    values$pool_state <- ps
+  })
+  
+  # ---------------------------------------------------------------------------
+  # DOM POINTS SLIDER — rendered after load so range reflects actual data
+  # ---------------------------------------------------------------------------
+  output$dom_points_slider_ui <- renderUI({
+    req(values$analysis_races_available, values$dom_lo, values$dom_hi)
+    dom_vals <- values$analysis_races_available$DK_Dom_Total
+    dom_vals <- dom_vals[!is.na(dom_vals) & dom_vals > 0]
+    sliderInput("dom_points_range",
+                "Dom Points Range (DK) — races within this range auto-assigned to Dom pool:",
+                min   = floor(min(dom_vals)),
+                max   = ceiling(max(dom_vals)),
+                value = c(values$dom_lo, values$dom_hi),
+                step  = 5)
+  })
+  
+  output$dom_points_summary <- renderUI({
+    req(values$pool_state)
+    n_dom  <- sum(values$pool_state$dom,  na.rm = TRUE)
+    n_perf <- sum(values$pool_state$perf, na.rm = TRUE)
+    tagList(
+      h4(style = "color:#FFE500;margin-top:30px;",
+         sprintf("Dom: %d race%s", n_dom,  if (n_dom  == 1) "" else "s")),
+      h4(style = "color:#aaaaaa;margin-top:5px;",
+         sprintf("Perf: %d race%s", n_perf, if (n_perf == 1) "" else "s"))
+    )
+  })
+  
+  # When slider moves: update dom flags for NON-manually-overridden rows only
+  observeEvent(input$dom_points_range, {
+    req(values$pool_state, values$analysis_races_available)
+    lo <- input$dom_points_range[1]
+    hi <- input$dom_points_range[2]
+    ra <- values$analysis_races_available %>% select(race_id, DK_Dom_Total)
+    ps <- values$pool_state
+    ps <- ps %>%
+      left_join(ra, by = "race_id") %>%
+      mutate(
+        dom = if_else(!dom_manual,
+                      DK_Dom_Total >= lo & DK_Dom_Total <= hi,
+                      dom)
+      ) %>%
+      select(-DK_Dom_Total)
+    values$pool_state <- ps
+  }, ignoreInit = TRUE)
+  
+  # Handle individual checkbox toggles from JS
+  observeEvent(input$race_pool_toggle, {
+    req(values$pool_state)
+    toggle  <- input$race_pool_toggle
+    rid     <- as.integer(toggle$race_id)
+    pool    <- toggle$pool
+    checked <- toggle$checked
+    ps      <- values$pool_state
+    if (pool == "dom") {
+      ps$dom[ps$race_id == rid]        <- checked
+      ps$dom_manual[ps$race_id == rid] <- TRUE
+    } else {
+      ps$perf[ps$race_id == rid]         <- checked
+      ps$perf_manual[ps$race_id == rid]  <- TRUE
+    }
+    values$pool_state <- ps
+  })
+  
+  # ---------------------------------------------------------------------------
+  # FILTER STATE
+  # ---------------------------------------------------------------------------
+  output$filters_confirmed <- reactive({ values$filters_confirmed })
+  outputOptions(output, "filters_confirmed", suspendWhenHidden = FALSE)
+  
+  output$races_loaded_badge <- renderUI({
+    req(values$analysis_races_available)
+    n <- nrow(values$analysis_races_available)
+    span(class = "status-badge status-badge-ok",
+         sprintf("%d race%s", n, if (n == 1) "" else "s"))
+  })
+  
+  # ---------------------------------------------------------------------------
+  # RACE SELECTION TABLE — with inline Dom/Perf checkboxes
+  # ---------------------------------------------------------------------------
+  output$races_selection_table <- DT::renderDataTable({
+    req(values$analysis_races_available, values$pool_state)
+    
+    ra <- values$analysis_races_available %>%
+      left_join(values$pool_state %>% select(race_id, dom, perf), by = "race_id")
+    
+    # Build checkbox HTML for each row
+    make_cb <- function(pool, race_ids, checked_vec) {
+      mapply(function(rid, chk) {
+        sprintf(
+          "<input type='checkbox' id='%s_%s' onclick='Shiny.setInputValue(%s, {pool:%s, race_id:%s, checked:this.checked}, {priority:%s})' %s>",
+          pool, rid,
+          '"race_pool_toggle"', paste0('"', pool, '"'), paste0('"', rid, '"'), '"event"',
+          if (isTRUE(chk)) "checked" else "")
+      }, race_ids, checked_vec, SIMPLIFY = TRUE)
+    }
+    
+    display <- ra %>%
+      transmute(
+        `Same Track` = if_else(is_same_track, "★", ""),
+        Season       = race_season,
+        Track        = track_name,
+        `Track Type` = track_type,
+        Race         = race_name,
+        `Sched Laps` = scheduled_laps,
+        `DK Dom`     = DK_Dom_Total,
+        `FD Dom`     = FD_Dom_Total,
+        `Lead Lap`   = lead_lap,
+        `Crash DNFs` = crash_dnfs,
+        `Mech DNFs`  = mech_dnfs,
+        Dom          = make_cb("dom",  race_id, dom),
+        Perf         = make_cb("perf", race_id, perf)
+      )
+    
+    DT::datatable(display,
+                  escape    = FALSE,       # render checkbox HTML
+                  selection = "none",
+                  rownames  = FALSE,
+                  filter    = "top",       # per-column filters
+                  class     = "display nowrap compact",
+                  options   = list(
+                    pageLength = 25, scrollX = TRUE, dom = "ltp",
+                    columnDefs = list(
+                      list(className = "dt-center", targets = "_all"),
+                      list(orderable = FALSE, searchable = FALSE, targets = c(11, 12))
+                    )
+                  )
+    )
+  })
+  
+  # ---------------------------------------------------------------------------
+  # ENTRY LIST: fires when race dropdown changes — separate from pool load
+  # This ensures race_id is settled before we call the API
+  # ---------------------------------------------------------------------------
+  observeEvent(input$analysis_race_id, {
+    req(input$analysis_race_id, input$analysis_series, values$races_sheet)
+    upcoming_race_id <- as.numeric(input$analysis_race_id)
+    if (is.na(upcoming_race_id) || length(upcoming_race_id) == 0) {
+      values$analysis_entry_list <- data.frame(
+        Start = integer(), Name = character(), Car = integer(),
+        Team = character(), CC = character(),
+        Make = character(), Sponsor = character())
+      return()
+    }
+    race_info <- values$races_sheet %>%
+      filter(race_id == upcoming_race_id) %>%
+      slice(1)
+    if (nrow(race_info) == 0) {
+      values$analysis_entry_list <- data.frame(
+        Start = integer(), Name = character(), Car = integer(),
+        Team = character(), CC = character(),
+        Make = character(), Sponsor = character())
+      return()
+    }
+    withProgress(message = "Loading entry list...", {
+      values$analysis_entry_list <- load_entry_list(
+        race_info$race_season,
+        as.numeric(input$analysis_series),
+        upcoming_race_id)
+    })
+  }, ignoreNULL = TRUE, ignoreInit = FALSE)
+  
+  # ---------------------------------------------------------------------------
+  # POOL REACTIVES — downstream tabs read from these
+  # ---------------------------------------------------------------------------
+  dominator_filtered_races <- reactive({
+    req(values$pool_state)
+    values$pool_state %>% filter(dom == TRUE) %>% pull(race_id)
+  })
+  
+  performance_race_ids_reactive <- reactive({
+    req(values$pool_state)
+    values$pool_state %>% filter(perf == TRUE) %>% pull(race_id)
+  })
+  
+  # ---------------------------------------------------------------------------
+  # SALARY AUTO-LOADING
+  # ---------------------------------------------------------------------------
+  entry_list_with_salaries <- reactive({
+    req(values$analysis_entry_list, input$analysis_series)
+    entry_list  <- values$analysis_entry_list
+    prefix      <- series_salary_prefix(input$analysis_series)
+    
+    load_salary <- function(platforms, col_name, id_name) {
+      for (pat in c(paste0(platforms, prefix, ".csv"),
+                    paste0(platforms, "Salaries", prefix, ".csv"),
+                    paste0(tolower(platforms), tolower(prefix), ".csv"))) {
+        if (file.exists(pat)) {
+          tryCatch({
+            sal <- read_csv(pat, show_col_types = FALSE,
+                            locale = locale(encoding = "UTF-8"))
+            name_col <- if ("Nickname" %in% names(sal)) "Nickname" else "Name"
+            id_col   <- if (platforms == "DK") "ID" else "Id"
+            out <- sal %>% select(Name = all_of(name_col),
+                                  !!col_name := Salary) %>%
+              mutate(Name = safe_trimws(Name))
+            if (id_col %in% names(sal))
+              out[[id_name]] <- sal[[id_col]]
+            return(out)
+          }, error = function(e) NULL)
+        }
+      }
+      NULL
+    }
+    
+    dk_sal <- load_salary("DK", "DK_Salary", "DKID")
+    fd_sal <- load_salary("FD", "FD_Salary", "FDID")
+    
+    entry_list <- entry_list %>% mutate(Name_Clean = safe_trimws(Name))
+    
+    if (!is.null(dk_sal)) {
+      dk_sal <- dk_sal %>% mutate(Name_Clean = safe_trimws(Name))
+      entry_list <- left_join(entry_list,
+                              dk_sal %>% select(-Name),
+                              by = "Name_Clean")
+    }
+    
+    if (!is.null(fd_sal)) {
+      fd_sal <- fd_sal %>% mutate(Name_Clean = safe_trimws(Name))
+      entry_list <- left_join(entry_list,
+                              fd_sal %>% select(-Name),
+                              by = "Name_Clean")
+    }
+    
+    entry_list <- entry_list %>% select(-Name_Clean)
+    
+    # Column order: base info, then salaries
+    base_cols   <- c("Start", "Name", "Car", "Team", "Make", "CC", "Sponsor")
+    salary_cols <- intersect(c("DK_Salary", "FD_Salary", "DKID", "FDID"), names(entry_list))
+    entry_list %>% select(all_of(c(base_cols, salary_cols)))
+  })
+  
+  # ---------------------------------------------------------------------------
+  # ENTRY LIST OUTPUTS
+  # ---------------------------------------------------------------------------
+  output$entry_list_title <- renderUI({
+    req(values$races_sheet, input$analysis_race_id, input$analysis_series)
+    race_info <- values$races_sheet %>%
+      filter(race_id == as.numeric(input$analysis_race_id)) %>%
+      slice(1)
+    race_name <- if (nrow(race_info) > 0) race_info$race_name else "Entry List"
+    prefix    <- series_salary_prefix(input$analysis_series)
+    dk_loaded <- file.exists(paste0("DK", prefix, ".csv"))
+    fd_loaded <- file.exists(paste0("FD", prefix, ".csv"))
+    suffix <- case_when(
+      dk_loaded & fd_loaded ~ " — DK + FD Salaries Loaded",
+      dk_loaded             ~ " — DK Salaries Loaded",
+      fd_loaded             ~ " — FD Salaries Loaded",
+      TRUE                  ~ ""
+    )
+    h3(paste0(race_name, " Entry List", suffix), class = "box-title")
+  })
+  
+  output$entry_list_table <- DT::renderDataTable({
+    req(entry_list_with_salaries())
+    DT::datatable(entry_list_with_salaries(),
+                  rownames = FALSE, class = "display nowrap compact",
+                  options  = list(
+                    pageLength = 40, scrollX = TRUE, dom = "tip",
+                    columnDefs = list(list(className = "dt-center", targets = "_all"))
+                  )
+    )
+  })
+  
+  output$download_entry_list_csv <- downloadHandler(
+    filename = function() paste0("Entry_List_", Sys.Date(), ".csv"),
+    content  = function(file) {
+      req(entry_list_with_salaries())
+      write.csv(entry_list_with_salaries(), file, row.names = FALSE)
+    }
+  )
+  
+  output$download_entry_list_excel <- downloadHandler(
+    filename    = function() paste0("Starting_Grid_", Sys.Date(), ".xlsx"),
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    content     = function(file) {
+      req(entry_list_with_salaries())
+      el <- entry_list_with_salaries()
+      wb <- createWorkbook()
+      addWorksheet(wb, "Starting Grid")
+      writeData(wb, "Starting Grid", el, rowNames = FALSE)
+      addStyle(wb, "Starting Grid",
+               createStyle(fontSize = 12, fontColour = "#000000", fgFill = "#FFE500",
+                           halign = "center", valign = "center", textDecoration = "bold",
+                           border = "TopBottomLeftRight", borderColour = "#000000"),
+               rows = 1, cols = 1:ncol(el), gridExpand = TRUE)
+      saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
+  
+  # ---------------------------------------------------------------------------
+  # FINISH RATES
+  # ---------------------------------------------------------------------------
+  output$tier_config_ui <- renderUI({
+    req(values$analysis_filtered_data)
+    n         <- values$num_tiers
+    all_teams <- sort(unique(values$analysis_filtered_data$team_name[
+      !is.na(values$analysis_filtered_data$team_name)]))
+    tagList(lapply(seq_len(n), function(i) {
+      div(class = "tier-box",
+          div(class = "tier-label", paste("Tier", i)),
+          fluidRow(
+            column(5, textInput(paste0("tier_name_", i), NULL,
+                                value = paste0("Tier ", i), placeholder = "Tier name")),
+            column(7, selectizeInput(paste0("tier_teams_", i), NULL,
+                                     choices  = all_teams, multiple = TRUE,
+                                     options  = list(placeholder = paste("Assign teams to Tier", i))))
+          )
+      )
+    }))
+  })
+  
   observe({
     req(values$analysis_filtered_data, values$num_tiers)
-    n <- values$num_tiers
-    all_teams <- if(!is.null(values$analysis_filtered_data)) {
-      sort(unique(values$analysis_filtered_data$team_name))
-    } else character(0)
-    
-    # Collect current selections for each tier
-    selections <- lapply(1:n, function(i) input[[paste0("tier_teams_",i)]])
-    
-    # For each tier, available choices = all teams minus teams selected in OTHER tiers
-    for (i in 1:n) {
+    n         <- values$num_tiers
+    all_teams <- sort(unique(values$analysis_filtered_data$team_name[
+      !is.na(values$analysis_filtered_data$team_name)]))
+    selections <- lapply(seq_len(n), function(i) input[[paste0("tier_teams_", i)]])
+    for (i in seq_len(n)) {
       other_selected <- unlist(selections[-i])
-      available <- setdiff(all_teams, other_selected)
-      # Keep current selection even if it would otherwise be excluded (already in this tier)
-      current <- selections[[i]]
-      updateSelectizeInput(session, paste0("tier_teams_",i),
-                           choices = available,
-                           selected = current)
+      updateSelectizeInput(session, paste0("tier_teams_", i),
+                           choices  = setdiff(all_teams, other_selected),
+                           selected = selections[[i]])
     }
   })
   
-  observeEvent(input$add_tier, {
-    values$num_tiers <- min(values$num_tiers + 1, 8)
-  })
-  observeEvent(input$remove_tier, {
-    values$num_tiers <- max(values$num_tiers - 1, 1)
+  # FR view pill observers
+  observe({
+    for (val in c("driver", "car", "team", "start_pos", "tier")) {
+      local({
+        v <- val
+        observeEvent(input[[paste0("frview_", v)]], {
+          values$fr_view_sel <- v
+        }, ignoreInit = TRUE)
+      })
+    }
   })
   
-  # Build finish rates data
+  # FR time pill observers — "all" clears multi-select; years toggle
+  observe({
+    req(values$analysis_races_available)
+    seasons <- as.character(sort(unique(values$analysis_races_available$race_season)))
+    observeEvent(input[["frtime_all"]], {
+      values$fr_seasons_sel <- "all"
+    }, ignoreInit = TRUE)
+    lapply(seasons, function(s) {
+      observeEvent(input[[paste0("frtime_", s)]], {
+        cur <- values$fr_seasons_sel
+        if (identical(cur, "all")) {
+          values$fr_seasons_sel <- s
+        } else if (s %in% cur) {
+          remaining <- setdiff(cur, s)
+          values$fr_seasons_sel <- if (length(remaining) == 0) "all" else remaining
+        } else {
+          values$fr_seasons_sel <- c(cur, s)
+        }
+      }, ignoreInit = TRUE)
+    })
+  })
+  
+  observeEvent(input$add_tier,    { values$num_tiers <- min(values$num_tiers + 1, 8) })
+  observeEvent(input$remove_tier, { values$num_tiers <- max(values$num_tiers - 1, 1) })
+  
   finish_rates_data <- reactive({
-    req(values$analysis_filtered_data, input$fr_view, input$fr_time)
-    data <- values$analysis_filtered_data
+    req(values$analysis_filtered_data, performance_race_ids_reactive())
+    view_sel    <- values$fr_view_sel    %||% "driver"
+    seasons_sel <- values$fr_seasons_sel %||% "all"
     
-    if (input$fr_time == "2025") data <- data %>% filter(race_season == 2025)
+    # Finish rates always uses the Perf pool
+    data <- values$analysis_filtered_data %>%
+      filter(race_id %in% performance_race_ids_reactive())
     
-    # Filter to entry list if available
-    has_entry <- !is.null(values$analysis_entry_list) && nrow(values$analysis_entry_list) > 0
-    if (has_entry && input$fr_view == "driver") {
-      data <- data %>% filter(Full_Name %in% values$analysis_entry_list$Name)
-    }
+    # Season pills narrow further within Perf pool
+    if (!identical(seasons_sel, "all"))
+      data <- data %>% filter(race_season %in% as.integer(seasons_sel))
     
     if (nrow(data) == 0) return(NULL)
     
-    if (input$fr_view == "driver") {
-      result <- calc_finish_rates(data, "Full_Name", "Driver")
-      result <- result %>% arrange(`Avg Finish`)
-    } else if (input$fr_view == "car") {
-      result <- data %>%
-        mutate(car_entry = paste0("#", car_number, " (", team_name, ")"))
-      result <- calc_finish_rates(result, "car_entry", "Car")
-      result <- result %>% arrange(`Avg Finish`)
-    } else if (input$fr_view == "team") {
-      result <- calc_finish_rates(data, "team_name", "Team")
-      result <- result %>% arrange(`Avg Finish`)
-    } else if (input$fr_view == "tier") {
-      n <- values$num_tiers
-      tier_assignments <- lapply(1:n, function(i) {
-        teams <- input[[paste0("tier_teams_",i)]]
-        name  <- input[[paste0("tier_name_",i)]]
-        if (is.null(teams) || length(teams)==0) return(NULL)
-        data.frame(team_name=teams, Tier=name, stringsAsFactors=FALSE)
-      })
-      tier_df <- bind_rows(tier_assignments)
-      if (is.null(tier_df) || nrow(tier_df)==0) return(NULL)
-      data_tiered <- data %>% inner_join(tier_df, by="team_name")
-      result <- calc_finish_rates(data_tiered, "Tier", "Tier")
-      result <- result %>% arrange(`Avg Finish`)
+    has_entry <- !is.null(values$analysis_entry_list) &&
+      nrow(values$analysis_entry_list) > 0
+    
+    if (view_sel == "driver") {
+      if (has_entry)
+        data <- data %>% filter(Full_Name %in% values$analysis_entry_list$Name)
+      calc_finish_rates(data, "Full_Name", "Driver") %>% arrange(`Avg Finish`)
+      
+    } else if (view_sel == "car") {
+      data %>%
+        mutate(car_entry = paste0("#", car_number, " (", team_name, ")")) %>%
+        calc_finish_rates("car_entry", "Car") %>%
+        arrange(`Avg Finish`)
+      
+    } else if (view_sel == "team") {
+      calc_finish_rates(data, "team_name", "Team") %>% arrange(`Avg Finish`)
+      
+    } else if (view_sel == "start_pos") {
+      # Group starting positions in buckets of 5
+      data %>%
+        filter(!is.na(start_ps)) %>%
+        mutate(
+          start_group = case_when(
+            start_ps <=  5 ~ "P1-5",
+            start_ps <= 10 ~ "P6-10",
+            start_ps <= 15 ~ "P11-15",
+            start_ps <= 20 ~ "P16-20",
+            start_ps <= 25 ~ "P21-25",
+            start_ps <= 30 ~ "P26-30",
+            start_ps <= 35 ~ "P31-35",
+            TRUE           ~ "P36+"
+          )
+        ) %>%
+        calc_finish_rates("start_group", "Starting Position") %>%
+        arrange(factor(`Starting Position`,
+                       levels = c("P1-5","P6-10","P11-15","P16-20",
+                                  "P21-25","P26-30","P31-35","P36+")))
+      
+    } else if (view_sel == "tier") {
+      n   <- values$num_tiers
+      tier_df <- bind_rows(lapply(seq_len(n), function(i) {
+        teams <- input[[paste0("tier_teams_", i)]]
+        name  <- input[[paste0("tier_name_",  i)]]
+        if (is.null(teams) || length(teams) == 0) return(NULL)
+        data.frame(team_name = teams, Tier = name, stringsAsFactors = FALSE)
+      }))
+      if (is.null(tier_df) || nrow(tier_df) == 0) return(NULL)
+      data %>%
+        inner_join(tier_df, by = "team_name") %>%
+        calc_finish_rates("Tier", "Tier") %>%
+        arrange(`Avg Finish`)
     }
-    result
   })
   
   output$finish_rates_table <- DT::renderDataTable({
     req(finish_rates_data())
-    dt <- DT::datatable(finish_rates_data(),
-                        options=list(pageLength=50, scrollX=TRUE, dom='ti',
-                                     columnDefs=list(list(className="dt-center",targets="_all"))),
-                        rownames=FALSE, class="display nowrap compact")
-    
-    # Color the percentage columns black-to-gold gradient
-    pct_cols <- c("Win","Top 3","Top 5","Top 10","Top 15","Top 20","Top 25","Top 30")
-    pct_cols_present <- intersect(pct_cols, names(finish_rates_data()))
-    for (col in pct_cols_present) {
-      dt <- dt %>% formatStyle(col,
-                               backgroundColor = styleInterval(c(0,5,10,20,40,60),
-                                                               c('#2d2d2d','#1a1a1a','#333333','#555555','#DAA520','#FFD700','#FFD700')),
-                               color = styleInterval(c(40), c('#ffffff','#000000')))
-    }
-    dt
+    DT::datatable(finish_rates_data(),
+                  rownames = FALSE,
+                  filter   = "top",
+                  class    = "display nowrap compact",
+                  options  = list(
+                    pageLength = 50, scrollX = TRUE, dom = "ltp",
+                    columnDefs = list(list(className = "dt-center", targets = "_all"))
+                  )
+    )
   })
   
   output$download_finish_rates <- downloadHandler(
-    filename=function() paste0("finish_rates_",input$fr_view,"_",Sys.Date(),".csv"),
-    content=function(file) {
+    filename = function() paste0("finish_rates_", values$fr_view_sel %||% "driver", "_", Sys.Date(), ".csv"),
+    content  = function(file) {
       req(finish_rates_data())
-      write.csv(finish_rates_data(), file, row.names=FALSE)
+      write.csv(finish_rates_data(), file, row.names = FALSE)
     }
   )
   
-  #----- DOMINATOR SECTION -----#
+  # ---------------------------------------------------------------------------
+  # DOMINATOR
+  # ---------------------------------------------------------------------------
   dominator_data <- reactive({
     req(values$analysis_filtered_data, dominator_filtered_races())
-    data <- values$analysis_filtered_data %>% filter(race_id %in% dominator_filtered_races())
+    data <- values$analysis_filtered_data %>%
+      filter(race_id %in% dominator_filtered_races())
+    # Fall back to computing from raw laps if DKSP/FDSP missing
     if (!"DKSP" %in% names(data) || all(is.na(data$DKSP))) {
       data <- data %>% group_by(race_id) %>%
-        mutate(DKSP=fast_laps*0.45+lead_laps*0.25, DKDomRank=dense_rank(desc(DKSP))) %>% ungroup()
+        mutate(DKSP = fast_laps * 0.45 + lead_laps * 0.25,
+               DKDomRank = dense_rank(desc(DKSP))) %>% ungroup()
     }
     if (!"FDSP" %in% names(data) || all(is.na(data$FDSP))) {
       data <- data %>% group_by(race_id) %>%
-        mutate(FDSP=lead_laps*0.1, FDDomRank=dense_rank(desc(FDSP))) %>% ungroup()
+        mutate(FDSP = lead_laps * 0.1,
+               FDDomRank = dense_rank(desc(FDSP))) %>% ungroup()
     }
     data
   })
   
   output$dominator_data_table <- DT::renderDataTable({
     req(dominator_data())
-    display_data <- dominator_data() %>%
-      filter(DKSP>0|FDSP>0) %>%
-      select(Driver=Full_Name,Start=start_ps,Finish=ps,Team=team_name,
-             `Laps Led`=lead_laps,`Fast Laps`=fast_laps,`DK Dom Pts`=DKSP,`DK Dom Rank`=DKDomRank,
-             `FD Dom Pts`=FDSP,`FD Dom Rank`=FDDomRank,Season=race_season,Race=race_name,Track=track_name) %>%
-      mutate(`DK Dom Pts`=round(`DK Dom Pts`,1),`FD Dom Pts`=round(`FD Dom Pts`,1)) %>%
-      arrange(desc(`DK Dom Pts`))
-    DT::datatable(display_data,
-                  options=list(pageLength=25,scrollX=TRUE,dom='tip',columnDefs=list(list(className="dt-center",targets="_all"))),
-                  rownames=FALSE,filter="top",class="display nowrap compact")
+    dominator_data() %>%
+      filter(DKSP > 0 | FDSP > 0) %>%
+      transmute(
+        Driver       = Full_Name,
+        Start        = start_ps,
+        Finish       = ps,
+        Team         = team_name,
+        `Laps Led`   = lead_laps,
+        `Fast Laps`  = fast_laps,
+        `DK Dom Pts` = round(DKSP, 1),
+        `DK Dom Rank`= DKDomRank,
+        `FD Dom Pts` = round(FDSP, 1),
+        `FD Dom Rank`= FDDomRank,
+        Season       = race_season,
+        Race         = race_name,
+        Track        = track_name
+      ) %>%
+      arrange(desc(`DK Dom Pts`)) %>%
+      DT::datatable(
+        rownames = FALSE, filter = "top",
+        class    = "display nowrap compact",
+        options  = list(
+          pageLength = 25, scrollX = TRUE, dom = "tip",
+          columnDefs = list(list(className = "dt-center", targets = "_all"))
+        )
+      )
   })
   
   output$download_dominator_csv <- downloadHandler(
-    filename=function() paste0("dominator_data_",Sys.Date(),".csv"),
-    content=function(file) {
+    filename = function() paste0("dominator_", Sys.Date(), ".csv"),
+    content  = function(file) {
       req(dominator_data())
-      export_data <- dominator_data() %>% filter(DKSP>0|FDSP>0) %>%
-        select(Driver=Full_Name,Start=start_ps,Finish=ps,Team=team_name,
-               `Laps Led`=lead_laps,`Fast Laps`=fast_laps,`DK Dom Pts`=DKSP,`DK Dom Rank`=DKDomRank,
-               `FD Dom Pts`=FDSP,`FD Dom Rank`=FDDomRank,Season=race_season,Race=race_name,Track=track_name) %>%
-        mutate(`DK Dom Pts`=round(`DK Dom Pts`,1),`FD Dom Pts`=round(`FD Dom Pts`,1))
-      write.csv(export_data,file,row.names=FALSE)
+      dominator_data() %>%
+        filter(DKSP > 0 | FDSP > 0) %>%
+        transmute(Driver = Full_Name, Start = start_ps, Finish = ps,
+                  Team = team_name, `Laps Led` = lead_laps,
+                  `Fast Laps` = fast_laps,
+                  `DK Dom Pts` = round(DKSP, 1), `DK Dom Rank` = DKDomRank,
+                  `FD Dom Pts` = round(FDSP, 1), `FD Dom Rank` = FDDomRank,
+                  Season = race_season, Race = race_name, Track = track_name) %>%
+        write.csv(file, row.names = FALSE)
     }
   )
   
   output$download_dominator_profile <- downloadHandler(
-    filename=function() paste0("dominator_profile_",Sys.Date(),".xlsx"),
-    content=function(file) {
+    filename    = function() paste0("dominator_profile_", Sys.Date(), ".xlsx"),
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    content     = function(file) {
       req(dominator_data(), values$analysis_races_available)
-      fd_laps <- dominator_data() %>% filter(!is.na(ps),!is.na(FDLP)) %>%
-        group_by(ps) %>% summarize(Pt=round(mean(FDLP,na.rm=TRUE),1),.groups='drop') %>%
-        arrange(ps) %>% rename(PS=ps)
+      n_races <- length(dominator_filtered_races())
+      fd_laps <- dominator_data() %>%
+        filter(!is.na(ps), !is.na(FDLP)) %>%
+        group_by(ps) %>%
+        summarise(Pt = round(mean(FDLP, na.rm = TRUE), 1), .groups = "drop") %>%
+        arrange(ps) %>% rename(PS = ps)
       race_weights <- values$analysis_races_available %>%
         filter(race_id %in% dominator_filtered_races()) %>%
-        select(RaceID=race_id,RaceName=race_name,Season=race_season,Track=track_name) %>%
-        mutate(Weight=round(1/n(),4)) %>% arrange(Season,Track)
+        transmute(RaceID = race_id, RaceName = race_name,
+                  Season = race_season, Track = track_name,
+                  Weight = round(1 / n_races, 4)) %>%
+        arrange(Season, Track)
       race_profiles <- dominator_data() %>%
-        select(RaceID=race_id,StartPos=start_ps,FinPos=ps,LeadLaps=lead_laps,FastLaps=fast_laps,
-               DKDomPoints=DKSP,FDDomPoints=FDSP,TrackName=track_name,Driver=Full_Name,Team=team_name) %>%
-        mutate(DKDomPoints=round(DKDomPoints,1),FDDomPoints=round(FDDomPoints,1)) %>%
-        filter(DKDomPoints>0) %>% arrange(desc(FDDomPoints))
+        filter(DKSP > 0) %>%
+        transmute(RaceID = race_id, StartPos = start_ps, FinPos = ps,
+                  LeadLaps = lead_laps, FastLaps = fast_laps,
+                  DKDomPoints = round(DKSP, 1), FDDomPoints = round(FDSP, 1),
+                  TrackName = track_name, Driver = Full_Name, Team = team_name) %>%
+        arrange(desc(DKDomPoints))
       wb <- createWorkbook()
-      addWorksheet(wb,"FDLaps"); writeData(wb,"FDLaps",fd_laps)
-      addWorksheet(wb,"Race_Weights"); writeData(wb,"Race_Weights",race_weights)
-      addWorksheet(wb,"Race_Profiles"); writeData(wb,"Race_Profiles",race_profiles)
-      saveWorkbook(wb,file,overwrite=TRUE)
-    },
-    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      gold_hdr <- createStyle(fontSize = 11, fontColour = "#000000",
+                              fgFill = "#FFE500", halign = "center", valign = "center",
+                              textDecoration = "bold", border = "TopBottomLeftRight",
+                              borderColour = "#000000")
+      for (sname in c("FDLaps", "Race_Weights", "Race_Profiles")) {
+        df <- list(FDLaps = fd_laps, Race_Weights = race_weights,
+                   Race_Profiles = race_profiles)[[sname]]
+        addWorksheet(wb, sname)
+        writeData(wb, sname, df)
+        addStyle(wb, sname, gold_hdr, rows = 1, cols = 1:ncol(df), gridExpand = TRUE)
+        setColWidths(wb, sname, cols = 1:ncol(df), widths = "auto")
+      }
+      saveWorkbook(wb, file, overwrite = TRUE)
+    }
   )
   
-  # ---- CREATE INPUT FILE ----#
-  # Creates simulation input file with:
-  # - Driver sheet: Only includes drivers with DK/FD salaries (if files loaded)
-  # - Race_Profiles sheet: Historical dominator data
-  # - Race_Weights sheet: Race weights for simulation
-  # - FDLaps sheet: FD lap points by finish position
   output$download_input_file <- downloadHandler(
-    filename=function() paste0("NASCAR_Sim_Input_",Sys.Date(),".xlsx"),
-    content=function(file) {
-      req(dominator_data(), values$analysis_races_available, values$analysis_entry_list)
-      
-      # --- Build Driver sheet ---
-      # Start with entry list (already has salaries merged if files exist)
+    filename    = function() paste0("NASCAR_Sim_Input_", Sys.Date(), ".xlsx"),
+    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    content     = function(file) {
+      req(dominator_data(), values$analysis_races_available,
+          values$analysis_entry_list)
       el <- entry_list_with_salaries()
+      # Filter to drivers with at least one salary
+      sal_cols <- intersect(c("DK_Salary", "FD_Salary"), names(el))
+      if (length(sal_cols) > 0)
+        el <- el %>% filter(if_any(all_of(sal_cols), ~!is.na(.)))
       
-      # Only include drivers that have salary data (at least one platform)
-      if ("DK_Salary" %in% names(el) || "FD_Salary" %in% names(el)) {
-        # Filter to only drivers with at least one salary
-        if ("DK_Salary" %in% names(el) && "FD_Salary" %in% names(el)) {
-          el <- el %>% filter(!is.na(DK_Salary) | !is.na(FD_Salary))
-        } else if ("DK_Salary" %in% names(el)) {
-          el <- el %>% filter(!is.na(DK_Salary))
-        } else if ("FD_Salary" %in% names(el)) {
-          el <- el %>% filter(!is.na(FD_Salary))
-        }
-      }
-      
-      
-      # Build the Driver sheet
       driver_sheet <- el %>%
-        mutate(
-          FDName   = Name,
-          DKName   = Name
-        )
-      
-      # Add DKID and FDID if they exist from salary files, otherwise create empty
-      if (!"DKID" %in% names(driver_sheet)) driver_sheet$DKID <- NA_character_
-      if (!"FDID" %in% names(driver_sheet)) driver_sheet$FDID <- NA_character_
-      
-      # Add DK/FD Salary columns if they exist, otherwise create empty ones
-      if (!"DK_Salary" %in% names(driver_sheet)) driver_sheet$DKSalary <- NA_real_
-      else driver_sheet <- driver_sheet %>% rename(DKSalary = DK_Salary)
-      
-      if (!"FD_Salary" %in% names(driver_sheet)) driver_sheet$FDSalary <- NA_real_
-      else driver_sheet <- driver_sheet %>% rename(FDSalary = FD_Salary)
-      
-      # Add ownership placeholders
+        mutate(FDName = Name, DKName = Name)
+      if (!"DKID"      %in% names(driver_sheet)) driver_sheet$DKID      <- NA_character_
+      if (!"FDID"      %in% names(driver_sheet)) driver_sheet$FDID      <- NA_character_
+      if (!"DK_Salary" %in% names(driver_sheet)) driver_sheet$DKSalary  <- NA_real_ else
+        driver_sheet <- driver_sheet %>% rename(DKSalary = DK_Salary)
+      if (!"FD_Salary" %in% names(driver_sheet)) driver_sheet$FDSalary  <- NA_real_ else
+        driver_sheet <- driver_sheet %>% rename(FDSalary = FD_Salary)
       driver_sheet <- driver_sheet %>%
-        mutate(
-          DKOP = NA_real_,
-          FDOP = NA_real_
-        )
-      
-      # Final column order - just basic info + salaries + ownership
-      driver_sheet <- driver_sheet %>%
+        mutate(DKOP = NA_real_, FDOP = NA_real_) %>%
         select(FDName, DKName, Name, DKID, FDID, Car, Team,
                DKSalary, FDSalary, Start, DKOP, FDOP)
       
-      # Clean all character columns for Excel export (fix encoding issues)
-      char_cols <- sapply(driver_sheet, is.character)
-      for (col in names(driver_sheet)[char_cols]) {
-        driver_sheet[[col]] <- iconv(driver_sheet[[col]], from = "UTF-8", to = "UTF-8", sub = "")
-      }
-      
-      # --- Sheet 2: Race_Profiles ---
+      n_races      <- length(dominator_filtered_races())
       race_profiles <- dominator_data() %>%
-        select(RaceID=race_id, StartPos=start_ps, FinPos=ps, LeadLaps=lead_laps, FastLaps=fast_laps,
-               DKDomPoints=DKSP, FDDomPoints=FDSP, TrackName=track_name, Driver=Full_Name, Team=team_name) %>%
-        mutate(DKDomPoints=round(DKDomPoints,1), FDDomPoints=round(FDDomPoints,1)) %>%
-        filter(DKDomPoints > 0) %>% arrange(desc(DKDomPoints))
-      
-      # Clean character columns
-      char_cols <- sapply(race_profiles, is.character)
-      for (col in names(race_profiles)[char_cols]) {
-        race_profiles[[col]] <- iconv(race_profiles[[col]], from = "UTF-8", to = "UTF-8", sub = "")
-      }
-      
-      # --- Sheet 3: Race_Weights ---
+        filter(DKSP > 0) %>%
+        transmute(RaceID = race_id, StartPos = start_ps, FinPos = ps,
+                  LeadLaps = lead_laps, FastLaps = fast_laps,
+                  DKDomPoints = round(DKSP, 1), FDDomPoints = round(FDSP, 1),
+                  TrackName = track_name, Driver = Full_Name, Team = team_name) %>%
+        arrange(desc(DKDomPoints))
       race_weights <- values$analysis_races_available %>%
         filter(race_id %in% dominator_filtered_races()) %>%
-        select(RaceID=race_id, RaceName=race_name, Season=race_season, Track=track_name) %>%
-        mutate(Weight=round(1/n(),4)) %>% arrange(Season, Track)
-      
-      # Clean character columns
-      char_cols <- sapply(race_weights, is.character)
-      for (col in names(race_weights)[char_cols]) {
-        race_weights[[col]] <- iconv(race_weights[[col]], from = "UTF-8", to = "UTF-8", sub = "")
-      }
-      
-      # --- Sheet 4: FDLaps ---
+        transmute(RaceID = race_id, RaceName = race_name,
+                  Season = race_season, Track = track_name,
+                  Weight = round(1 / n_races, 4)) %>%
+        arrange(Season, Track)
       fd_laps <- dominator_data() %>%
         filter(!is.na(ps), !is.na(FDLP)) %>%
-        group_by(ps) %>% summarize(Pt=round(mean(FDLP,na.rm=TRUE),1),.groups='drop') %>%
-        arrange(ps) %>% rename(PS=ps)
+        group_by(ps) %>%
+        summarise(Pt = round(mean(FDLP, na.rm = TRUE), 1), .groups = "drop") %>%
+        arrange(ps) %>% rename(PS = ps)
       
-      # --- Write workbook ---
-      wb <- createWorkbook()
-      gold_header <- createStyle(fontSize=11, fontColour="#000000", fgFill="#FFD700",
-                                 halign="center", valign="center", textDecoration="bold",
-                                 border="TopBottomLeftRight", borderColour="#000000")
-      
-      sheets <- list(Driver=driver_sheet, Race_Profiles=race_profiles,
-                     Race_Weights=race_weights, FDLaps=fd_laps)
-      
+      wb      <- createWorkbook()
+      gold_hdr <- createStyle(fontSize = 11, fontColour = "#000000",
+                              fgFill = "#FFE500", halign = "center", valign = "center",
+                              textDecoration = "bold", border = "TopBottomLeftRight",
+                              borderColour = "#000000")
+      sheets <- list(Driver = driver_sheet, Race_Profiles = race_profiles,
+                     Race_Weights = race_weights, FDLaps = fd_laps)
       for (sname in names(sheets)) {
+        df <- sheets[[sname]]
         addWorksheet(wb, sname)
-        writeData(wb, sname, sheets[[sname]])
-        addStyle(wb, sname, gold_header, rows=1, cols=1:ncol(sheets[[sname]]), gridExpand=TRUE)
-        setColWidths(wb, sname, cols=1:ncol(sheets[[sname]]), widths="auto")
+        writeData(wb, sname, df)
+        addStyle(wb, sname, gold_hdr, rows = 1, cols = 1:ncol(df), gridExpand = TRUE)
+        setColWidths(wb, sname, cols = 1:ncol(df), widths = "auto")
       }
-      
-      saveWorkbook(wb, file, overwrite=TRUE)
-    },
-    contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      saveWorkbook(wb, file, overwrite = TRUE)
+    }
   )
   
-  #----- DOMINATOR VISUALIZATIONS -----#
+  # ---------------------------------------------------------------------------
+  # DOMINATOR VISUALIZATIONS
+  # ---------------------------------------------------------------------------
+  # Shared color grouping helpers for all charts
+  group_palette <- c(
+    "#FFE500", "#4caf50", "#2196f3", "#f44336",
+    "#ff9800", "#9c27b0", "#00bcd4", "#e91e63",
+    "#8bc34a", "#ff5722", "#607d8b", "#795548"
+  )
+  
+  # Helper: apply color grouping to a plotly horizontal box chart
+  # data must have a Grp factor column and the x value column
+  # color_by: "none" | "track_type" | "race_season" | "track_name"
+  make_colored_box <- function(data, x_col, title_txt, x_label,
+                               color_by = "none", margin_l = 150,
+                               grp_order = NULL) {
+    if (is.null(grp_order))
+      grp_order <- levels(data$Grp)
+    
+    # Build x and y formulas dynamically — ~get() doesn't work in plotly
+    x_fml <- as.formula(paste0("~", x_col))
+    
+    hex_to_rgba <- function(hex, alpha = 0.25) {
+      r <- strtoi(substr(hex, 2, 3), 16)
+      g <- strtoi(substr(hex, 4, 5), 16)
+      b <- strtoi(substr(hex, 6, 7), 16)
+      sprintf("rgba(%d,%d,%d,%.2f)", r, g, b, alpha)
+    }
+    
+    if (color_by == "none") {
+      p <- plot_ly(data = data, type = "box",
+                   y = ~Grp, x = x_fml, orientation = "h",
+                   marker    = list(color = "#FFE500", opacity = 0.6),
+                   line      = list(color = "#D4B000"),
+                   fillcolor = "rgba(255,229,0,0.20)",
+                   showlegend = FALSE)
+    } else {
+      grp_vals <- sort(unique(as.character(data[[color_by]])))
+      # Cycle through palette — first entry stays gold
+      pal <- group_palette
+      color_map <- setNames(
+        pal[((seq_along(grp_vals) - 1) %% length(pal)) + 1],
+        grp_vals)
+      
+      p <- plot_ly()
+      for (gv in grp_vals) {
+        sub <- data[as.character(data[[color_by]]) == gv, , drop = FALSE]
+        if (nrow(sub) == 0) next
+        hex <- color_map[[gv]]
+        p <- p %>% add_trace(
+          data      = sub,
+          type      = "box",
+          y         = ~Grp,
+          x         = x_fml,
+          orientation = "h",
+          name      = as.character(gv),
+          marker    = list(color = hex, opacity = 0.8),
+          line      = list(color = hex, width = 1.5),
+          fillcolor = hex_to_rgba(hex, 0.20),
+          boxmean   = FALSE)
+      }
+    }
+    
+    col_label <- switch(color_by,
+                        track_type   = "Track Type",
+                        race_season  = "Season",
+                        track_name   = "Track",
+                        "")
+    
+    p %>% layout(
+      title     = list(text = title_txt, font = list(size = 18, color = "#FFE500")),
+      boxmode   = "group",
+      xaxis     = list(title = x_label, color = "#ffffff",
+                       gridcolor = "#404040", zerolinecolor = "#555555"),
+      yaxis     = list(title = "", color = "#ffffff",
+                       categoryorder = "array",
+                       categoryarray = rev(grp_order)),
+      legend    = list(title = list(text = col_label, font = list(color = "#FFE500")),
+                       font  = list(color = "#ffffff"),
+                       bgcolor = "rgba(30,30,30,0.8)",
+                       bordercolor = "#444", borderwidth = 1),
+      paper_bgcolor = "#1e1e1e", plot_bgcolor  = "#1e1e1e",
+      font      = list(color = "#ffffff"),
+      height    = 900,
+      margin    = list(l = margin_l, r = 20, t = 50, b = 40))
+  }
+  
   output$dominator_plot <- renderPlotly({
     req(dominator_data(), input$dom_visual_type, input$dom_platform)
-    plot_data <- dominator_data()
-    platform <- input$dom_platform
-    dom_pts_col <- if(platform=="DK") "DKSP" else "FDSP"
-    dom_rank_col <- if(platform=="DK") "DKDomRank" else "FDDomRank"
-    platform_name <- if(platform=="DK") "DraftKings" else "FanDuel"
+    plot_data     <- dominator_data()
+    platform      <- input$dom_platform
+    dom_pts_col   <- if (platform == "DK") "DKSP"      else "FDSP"
+    dom_rank_col  <- if (platform == "DK") "DKDomRank" else "FDDomRank"
+    platform_name <- if (platform == "DK") "DraftKings" else "FanDuel"
     
     dark_theme <- theme_minimal() + theme(
-      plot.title=element_text(size=18,face="bold",color="#FFD700"),
-      axis.title=element_text(size=16,color="#ffffff"), axis.text=element_text(size=14,color="#ffffff"),
-      panel.background=element_rect(fill="#2d2d2d"), plot.background=element_rect(fill="#2d2d2d"),
-      panel.grid.major=element_line(color="#404040"), panel.grid.minor=element_line(color="#333333"))
+      plot.title       = element_text(size = 18, face = "bold", color = "#FFE500"),
+      axis.title       = element_text(size = 16, color = "#ffffff"),
+      axis.text        = element_text(size = 14, color = "#ffffff"),
+      panel.background = element_rect(fill = "#1e1e1e"),
+      plot.background  = element_rect(fill = "#1e1e1e"),
+      panel.grid.major = element_line(color = "#404040"),
+      panel.grid.minor = element_line(color = "#333333"))
     
-    # dark_layout inlined below
+    dark_layout <- function(p) {
+      p %>% layout(paper_bgcolor = "#2d2d2d", plot_bgcolor = "#2d2d2d",
+                   font   = list(color = "#ffffff"),
+                   xaxis  = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+                   yaxis  = list(gridcolor = "#404040", zerolinecolor = "#666666"))
+    }
     
-    if (input$dom_visual_type == "score_dist") {
-      viz_data <- plot_data %>% filter(!!sym(dom_rank_col)<=10, !!sym(dom_pts_col)>0)
-      p <- ggplot(viz_data,aes(x=factor(!!sym(dom_rank_col)),y=!!sym(dom_pts_col))) +
-        geom_boxplot(aes(text=sprintf("Dom Rank: %d
-Dom Pts: %.1f
-Driver: %s
-Track: %s",
-                                      !!sym(dom_rank_col),!!sym(dom_pts_col),Full_Name,track_name)),fill="#FFD700",alpha=0.7) +
-        labs(title=paste(platform_name,"Dom Points by Dom Rank (Top 10)"),x="Dom Rank",y="Dom Points") +
-        coord_flip() + scale_x_discrete(limits=factor(10:1)) + dark_theme
-      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+    vt <- input$dom_visual_type
+    
+    if (vt == "score_dist") {
+      viz <- plot_data %>% filter(!!sym(dom_rank_col) <= 10, !!sym(dom_pts_col) > 0)
+      p <- ggplot(viz, aes(x = factor(!!sym(dom_rank_col)), y = !!sym(dom_pts_col))) +
+        geom_boxplot(aes(text = sprintf("Dom Rank: %d\nDom Pts: %.1f\nDriver: %s\nTrack: %s",
+                                        !!sym(dom_rank_col), !!sym(dom_pts_col), Full_Name, track_name)),
+                     fill = "#FFE500", alpha = 0.7) +
+        labs(title = paste(platform_name, "Dom Points by Dom Rank (Top 10)"),
+             x = "Dom Rank", y = "Dom Points") +
+        coord_flip() + scale_x_discrete(limits = factor(10:1)) + dark_theme
+      ggplotly(p, tooltip = "text", height = 700) %>% dark_layout()
       
-    } else if (input$dom_visual_type == "rank_finish") {
-      viz_data <- plot_data %>% filter(!!sym(dom_rank_col)<=10, !!sym(dom_pts_col)>0)
-      p <- ggplot(viz_data,aes(x=factor(!!sym(dom_rank_col)),y=ps)) +
-        geom_boxplot(aes(text=sprintf("Dom Rank: %d
-Finish: %d
-Driver: %s
-Track: %s",
-                                      !!sym(dom_rank_col),ps,Full_Name,track_name)),fill="#FFD700",alpha=0.7) +
-        geom_smooth(aes(x=as.numeric(!!sym(dom_rank_col)),y=ps),method="loess",se=FALSE,color="#FFD700",linewidth=1.5) +
-        labs(title=paste("Where Have Top",platform_name,"Dominators Finished"),x="Dom Rank",y="Finish Position") +
-        scale_x_discrete(limits=factor(1:10)) + scale_y_continuous(breaks=seq(0,40,5)) + dark_theme
-      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+    } else if (vt == "rank_finish") {
+      viz <- plot_data %>% filter(!!sym(dom_rank_col) <= 10, !!sym(dom_pts_col) > 0)
+      p <- ggplot(viz, aes(x = factor(!!sym(dom_rank_col)), y = ps)) +
+        geom_boxplot(aes(text = sprintf("Dom Rank: %d\nFinish: %d\nDriver: %s\nTrack: %s",
+                                        !!sym(dom_rank_col), ps, Full_Name, track_name)),
+                     fill = "#FFE500", alpha = 0.7) +
+        geom_smooth(aes(x = as.numeric(!!sym(dom_rank_col)), y = ps, group = 1),
+                    method = "loess", se = FALSE, color = "#FFE500", linewidth = 1.5) +
+        labs(title = paste("Where Have Top", platform_name, "Dominators Finished"),
+             x = "Dom Rank", y = "Finish Position") +
+        scale_x_discrete(limits = factor(1:10)) +
+        scale_y_continuous(breaks = seq(0, 40, 5)) + dark_theme
+      ggplotly(p, tooltip = "text", height = 700) %>% dark_layout()
       
-    } else if (input$dom_visual_type %in% c("pts_by_finish","dom_pts_start","dom_rank_start","laps_led","laps_led_start","fast_laps","fast_laps_start")) {
-      # Generic horizontal boxplot handler
+    } else if (vt %in% c("pts_by_finish", "dom_pts_start", "dom_rank_start",
+                         "laps_led", "laps_led_start", "fast_laps", "fast_laps_start")) {
       cfg <- list(
-        pts_by_finish  = list(x="ps",       y=dom_pts_col,  fill="#FFD700",  xt="Finish Position",    yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Finish")),
-        dom_pts_start  = list(x="start_ps", y=dom_pts_col,  fill="#FFD700",  xt="Starting Position",  yt="Dom Points",    ti=paste(platform_name,"Dom Pts by Start")),
-        dom_rank_start = list(x="start_ps", y=dom_rank_col, fill="#FFD700",xt="Starting Position",  yt="Dom Rank",      ti=paste(platform_name,"Dom Rank by Start")),
-        laps_led       = list(x="ps",       y="lead_laps",  fill="#DAA520", xt="Finish Position",    yt="Laps Led",      ti="Laps Led by Finish"),
-        laps_led_start = list(x="start_ps", y="lead_laps",  fill="#DAA520", xt="Starting Position",  yt="Laps Led",      ti="Laps Led by Start"),
-        fast_laps      = list(x="ps",       y="fast_laps",  fill="#FFD700",      xt="Finish Position",    yt="Fast Laps",     ti="Fast Laps by Finish"),
-        fast_laps_start= list(x="start_ps", y="fast_laps",  fill="#FFD700",      xt="Starting Position",  yt="Fast Laps",     ti="Fast Laps by Start")
+        pts_by_finish   = list(x = "ps",       y = dom_pts_col,  fill = "#FFE500", xt = "Finish Position",   yt = "Dom Points",  ti = paste(platform_name, "Dom Pts by Finish")),
+        dom_pts_start   = list(x = "start_ps", y = dom_pts_col,  fill = "#FFE500", xt = "Starting Position", yt = "Dom Points",  ti = paste(platform_name, "Dom Pts by Start")),
+        dom_rank_start  = list(x = "start_ps", y = dom_rank_col, fill = "#FFE500", xt = "Starting Position", yt = "Dom Rank",    ti = paste(platform_name, "Dom Rank by Start")),
+        laps_led        = list(x = "ps",       y = "lead_laps",  fill = "#DAA520", xt = "Finish Position",   yt = "Laps Led",    ti = "Laps Led by Finish"),
+        laps_led_start  = list(x = "start_ps", y = "lead_laps",  fill = "#DAA520", xt = "Starting Position", yt = "Laps Led",    ti = "Laps Led by Start"),
+        fast_laps       = list(x = "ps",       y = "fast_laps",  fill = "#FFE500", xt = "Finish Position",   yt = "Fast Laps",   ti = "Fast Laps by Finish"),
+        fast_laps_start = list(x = "start_ps", y = "fast_laps",  fill = "#FFE500", xt = "Starting Position", yt = "Fast Laps",   ti = "Fast Laps by Start")
       )
-      cc <- cfg[[input$dom_visual_type]]
-      filt_col <- if(cc$x=="ps") "ps" else "start_ps"
-      viz_data <- plot_data %>% filter(!!sym(filt_col)<=40, !is.na(!!sym(filt_col)), !is.na(!!sym(cc$y)))
-      p <- ggplot(viz_data,aes(x=factor(!!sym(cc$x)),y=!!sym(cc$y))) +
-        geom_boxplot(aes(text=sprintf("%s: %%d
-%s: %s
-Driver: %%s
-Track: %%s" |>
-                                        sprintf(cc$xt,cc$yt,if(grepl("laps|pts|points",tolower(cc$yt)))"%.1f" else "%d") |>
-                                        identity(), !!sym(cc$x), !!sym(cc$y), Full_Name, track_name)), fill=cc$fill, alpha=0.7) +
-        labs(title=cc$ti, x=cc$xt, y=cc$yt) +
-        coord_flip() + scale_x_discrete(limits=factor(40:1)) + dark_theme
-      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+      cc  <- cfg[[vt]]
+      viz <- plot_data %>%
+        filter(!!sym(cc$x) <= 40, !is.na(!!sym(cc$x)), !is.na(!!sym(cc$y)))
+      p <- ggplot(viz, aes(x = factor(!!sym(cc$x)), y = !!sym(cc$y))) +
+        geom_boxplot(fill = cc$fill, alpha = 0.7) +
+        labs(title = cc$ti, x = cc$xt, y = cc$yt) +
+        coord_flip() + scale_x_discrete(limits = factor(40:1)) + dark_theme
+      ggplotly(p, height = 900) %>% dark_layout()
       
-    } else if (input$dom_visual_type %in% c("driver_boxplot","team_boxplot","entry_boxplot")) {
+    } else if (vt %in% c("driver_boxplot", "team_boxplot")) {
       req(values$analysis_entry_list)
-      if (input$dom_visual_type == "driver_boxplot") {
-        entry_drivers <- values$analysis_entry_list$Name
-        grp_data <- plot_data %>% filter(Full_Name %in% entry_drivers) %>%
-          group_by(Full_Name) %>% summarize(avg=mean(.data[[dom_pts_col]],na.rm=TRUE),.groups='drop') %>%
-          filter(avg>0) %>% arrange(avg)
-        grp_order <- grp_data$Full_Name
-        viz_data <- plot_data %>% filter(Full_Name %in% grp_order) %>% mutate(Grp=factor(Full_Name,levels=grp_order))
-        plot_ly(data=viz_data,type="box",y=~Grp,x=~get(dom_pts_col),orientation="h",
-                marker=list(color="#FFD700",opacity=0.6),line=list(color="#DAA520"),
-                fillcolor="rgba(255,215,0,0.3)",showlegend=FALSE) %>%
-          layout(title=list(text=paste(platform_name,"Dom Points by Driver"),font=list(size=18,color="#FFD700")),
-                 xaxis=list(title="Dom Points",color="#ffffff",gridcolor="#404040"),
-                 yaxis=list(title="",color="#ffffff",gridcolor="#404040",categoryorder="array",categoryarray=grp_order),
-                 paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),height=900,margin=list(l=150))
-        
-      } else if (input$dom_visual_type == "team_boxplot") {
-        entry_teams <- unique(values$analysis_entry_list$Team)
-        grp_data <- plot_data %>% filter(team_name %in% entry_teams) %>%
-          group_by(team_name) %>% summarize(med=median(.data[[dom_pts_col]],na.rm=TRUE),.groups='drop') %>%
-          arrange(med)
-        grp_order <- grp_data$team_name
-        viz_data <- plot_data %>% filter(team_name %in% grp_order) %>% mutate(Grp=factor(team_name,levels=grp_order))
-        plot_ly(data=viz_data,type="box",y=~Grp,x=~get(dom_pts_col),orientation="h",
-                marker=list(color="#FFD700",opacity=0.6),line=list(color="#DAA520"),
-                fillcolor="rgba(255,215,0,0.3)",showlegend=FALSE) %>%
-          layout(title=list(text=paste("Team",platform_name,"Dom Points"),font=list(size=18,color="#FFD700")),
-                 xaxis=list(title="Dom Points",color="#ffffff",gridcolor="#404040"),
-                 yaxis=list(title="",color="#ffffff",categoryorder="array",categoryarray=grp_order),
-                 paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),height=900,margin=list(l=150))
-        
+      entry_drivers <- values$analysis_entry_list$Name
+      entry_teams   <- unique(values$analysis_entry_list$Team)
+      
+      color_by_dom <- input$dom_color_by %||% "none"
+      
+      make_dom_box <- function(data, grp_col, title_txt, margin_l = 150) {
+        grp_order <- data %>%
+          filter(!is.na(!!sym(dom_pts_col))) %>%
+          group_by(!!sym(grp_col)) %>%
+          summarise(med = median(!!sym(dom_pts_col), na.rm = TRUE), .groups = "drop") %>%
+          arrange(desc(med)) %>% pull(!!sym(grp_col))
+        data %>%
+          filter(!!sym(grp_col) %in% grp_order, !is.na(!!sym(dom_pts_col))) %>%
+          mutate(Grp = factor(!!sym(grp_col), levels = grp_order)) %>%
+          make_colored_box(dom_pts_col, title_txt, "Dom Points",
+                           color_by = color_by_dom, margin_l = margin_l,
+                           grp_order = grp_order)
+      }
+      
+      if (vt == "driver_boxplot") {
+        make_dom_box(plot_data %>% filter(Full_Name %in% entry_drivers),
+                     "Full_Name", paste(platform_name, "Dom Points by Driver"))
       } else {
-        entry_labels <- values$analysis_entry_list %>%
-          mutate(Entry_Label=paste0(Team," #",Car," (",Name,")")) %>% select(Name,Entry_Label)
-        grp_data <- plot_data %>% inner_join(entry_labels,by=c("Full_Name"="Name")) %>%
-          group_by(Entry_Label) %>% summarize(avg=mean(.data[[dom_pts_col]],na.rm=TRUE),.groups='drop') %>%
-          filter(avg>0) %>% arrange(avg)
-        grp_order <- grp_data$Entry_Label
-        viz_data <- plot_data %>% inner_join(entry_labels,by=c("Full_Name"="Name")) %>%
-          filter(Entry_Label %in% grp_order) %>% mutate(Grp=factor(Entry_Label,levels=grp_order))
-        plot_ly(data=viz_data,type="box",y=~Grp,x=~get(dom_pts_col),orientation="h",
-                marker=list(color="#FFD700",opacity=0.6),line=list(color="#DAA520"),
-                fillcolor="rgba(255,215,0,0.3)",showlegend=FALSE) %>%
-          layout(title=list(text=paste(platform_name,"Dom Points by Entry"),font=list(size=18,color="#FFD700")),
-                 xaxis=list(title="Dom Points",color="#ffffff",gridcolor="#404040"),
-                 yaxis=list(title="",color="#ffffff",categoryorder="array",categoryarray=grp_order),
-                 paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),height=900,margin=list(l=200))
+        make_dom_box(plot_data %>% filter(team_name %in% entry_teams),
+                     "team_name", paste("Team", platform_name, "Dom Points"), margin_l = 180)
       }
     }
   })
   
-  #----- PLACE DIFFERENTIAL SECTION -----#
+  # ---------------------------------------------------------------------------
+  # PLACE DIFFERENTIAL
+  # ---------------------------------------------------------------------------
   pd_data <- reactive({
-    req(values$analysis_filtered_data, values$pd_race_ids)
+    req(values$analysis_filtered_data, performance_race_ids_reactive())
     values$analysis_filtered_data %>%
-      filter(race_id %in% values$pd_race_ids, !is.na(start_ps), !is.na(ps)) %>%
-      mutate(PD=start_ps-ps)
+      filter(race_id %in% performance_race_ids_reactive(),
+             !is.na(start_ps), !is.na(ps)) %>%
+      mutate(PD = start_ps - ps)
   })
   
   output$pd_data_table <- DT::renderDataTable({
     req(pd_data())
-    display_data <- pd_data() %>%
-      select(Driver=Full_Name,Start=start_ps,Finish=ps,PD,Qualifying,Team=team_name,ARP,
-             Season=race_season,Race=race_name,Track=track_name) %>%
-      mutate(ARP=round(ARP,1)) %>% arrange(desc(PD))
-    DT::datatable(display_data,
-                  options=list(pageLength=25,scrollX=TRUE,dom='tip',columnDefs=list(list(className="dt-center",targets="_all"))),
-                  rownames=FALSE,filter="top",class="display nowrap compact")
+    pd_data() %>%
+      transmute(Driver = Full_Name, Start = start_ps, Finish = ps, PD,
+                Team = team_name, ARP = round(ARP, 1),
+                Season = race_season, Race = race_name, Track = track_name) %>%
+      arrange(desc(PD)) %>%
+      DT::datatable(
+        rownames = FALSE, filter = "top",
+        class    = "display nowrap compact",
+        options  = list(
+          pageLength = 25, scrollX = TRUE, dom = "tip",
+          columnDefs = list(list(className = "dt-center", targets = "_all"))
+        )
+      )
   })
   
   output$download_pd_csv <- downloadHandler(
-    filename=function() paste0("place_differential_",Sys.Date(),".csv"),
-    content=function(file) {
+    filename = function() paste0("place_differential_", Sys.Date(), ".csv"),
+    content  = function(file) {
       req(pd_data())
-      write.csv(pd_data() %>% select(Driver=Full_Name,Start=start_ps,Finish=ps,PD,Qualifying,
-                                     Team=team_name,ARP,Season=race_season,Race=race_name,Track=track_name) %>% mutate(ARP=round(ARP,1)), file, row.names=FALSE)
+      pd_data() %>%
+        transmute(Driver = Full_Name, Start = start_ps, Finish = ps, PD,
+                  Team = team_name, ARP = round(ARP, 1),
+                  Season = race_season, Race = race_name, Track = track_name) %>%
+        write.csv(file, row.names = FALSE)
     }
   )
   
   output$pd_plot <- renderPlotly({
     req(pd_data(), input$pd_visual_type)
-    plot_data <- pd_data()
-    # dark_layout inlined below
-    dark_theme <- theme_minimal()+theme(plot.title=element_text(size=20,face="bold",color="#FFD700"),
-                                        plot.subtitle=element_text(size=14,color="#ffffff"),axis.title=element_text(size=16,color="#ffffff"),
-                                        axis.text=element_text(size=14,color="#ffffff"),panel.background=element_rect(fill="#2d2d2d"),
-                                        plot.background=element_rect(fill="#2d2d2d"),panel.grid.major=element_line(color="#404040"),
-                                        panel.grid.minor=element_line(color="#333333"))
+    plot_data    <- pd_data()
+    color_by_pd  <- input$pd_color_by %||% "none"
+    dark_theme <- theme_minimal() + theme(
+      plot.title       = element_text(size = 20, face = "bold", color = "#FFE500"),
+      axis.title       = element_text(size = 16, color = "#ffffff"),
+      axis.text        = element_text(size = 14, color = "#ffffff"),
+      panel.background = element_rect(fill = "#1e1e1e"),
+      plot.background  = element_rect(fill = "#1e1e1e"),
+      panel.grid.major = element_line(color = "#404040"),
+      panel.grid.minor = element_line(color = "#333333"))
+    dark_layout <- function(p) p %>% layout(
+      paper_bgcolor = "#2d2d2d", plot_bgcolor = "#2d2d2d",
+      font  = list(color = "#ffffff"),
+      xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+      yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"))
     
-    if (input$pd_visual_type=="scatter") {
-      viz_data <- plot_data %>% filter(start_ps<=40,ps<=40)
-      p <- ggplot(viz_data,aes(x=start_ps,y=ps,size=abs(PD),color=PD,
-                               text=sprintf("Driver: %s
-Start: %d
-Finish: %d
-PD: %d
-Track: %s",Full_Name,start_ps,ps,PD,track_name)))+
-        geom_point(alpha=0.6)+geom_abline(linetype="dashed",color="#FFD700",linewidth=1.2)+
-        scale_color_gradient2(low="#DC143C",mid="#cccccc",high="#FFD700",midpoint=0,name="PD")+
-        scale_size_continuous(range=c(2,12))+
-        scale_x_continuous(limits=c(0,40),breaks=seq(0,40,5))+scale_y_continuous(limits=c(0,40),breaks=seq(0,40,5))+
-        labs(title="Starting vs Finishing Position",x="Starting Position",y="Finishing Position")+dark_theme
-      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
-    } else if (input$pd_visual_type=="histogram") {
-      p <- ggplot(plot_data,aes(x=PD))+geom_histogram(binwidth=1,fill="#FFD700",color="#000000",alpha=0.8)+
-        geom_vline(xintercept=0,linetype="dashed",color="#FF0000",linewidth=1.5)+
-        labs(title="Position Change Distribution",x="Place Differential",y="Count")+dark_theme
-      ggplotly(p,height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
-    } else if (input$pd_visual_type=="boxplot_start") {
-      viz_data <- plot_data %>% filter(start_ps<=40)
-      p <- ggplot(viz_data,aes(x=factor(start_ps),y=PD,
-                               text=sprintf("Start: %d
-PD: %d
-Driver: %s
-Track: %s",start_ps,PD,Full_Name,track_name)))+
-        geom_boxplot(fill="#FFD700",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
-        labs(title="Place Differential by Starting Position",x="Starting Position",y="Place Differential")+
-        coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
-      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+    if (input$pd_visual_type == "scatter") {
+      viz <- plot_data %>% filter(start_ps <= 40, ps <= 40)
+      p <- ggplot(viz, aes(x = start_ps, y = ps, size = abs(PD), color = PD,
+                           text = sprintf("Driver: %s\nStart: %d\nFinish: %d\nPD: %d\nTrack: %s",
+                                          Full_Name, start_ps, ps, PD, track_name))) +
+        geom_point(alpha = 0.6) +
+        geom_abline(linetype = "dashed", color = "#FFE500", linewidth = 1.2) +
+        scale_color_gradient2(low = "#DC143C", mid = "#cccccc", high = "#FFE500",
+                              midpoint = 0, name = "PD") +
+        scale_size_continuous(range = c(2, 12)) +
+        scale_x_continuous(limits = c(0, 40), breaks = seq(0, 40, 5)) +
+        scale_y_continuous(limits = c(0, 40), breaks = seq(0, 40, 5)) +
+        labs(title = "Starting vs Finishing Position",
+             x = "Starting Position", y = "Finishing Position") + dark_theme
+      ggplotly(p, tooltip = "text", height = 700) %>% dark_layout()
+      
+    } else if (input$pd_visual_type == "histogram") {
+      p <- ggplot(plot_data, aes(x = PD)) +
+        geom_histogram(binwidth = 1, fill = "#FFE500", color = "#000000", alpha = 0.8) +
+        geom_vline(xintercept = 0, linetype = "dashed", color = "#FF0000", linewidth = 1.5) +
+        labs(title = "Position Change Distribution",
+             x = "Place Differential", y = "Count") + dark_theme
+      ggplotly(p, height = 700) %>% dark_layout()
+      
     } else {
-      viz_data <- plot_data %>% filter(ps<=40)
-      p <- ggplot(viz_data,aes(x=factor(ps),y=PD,
-                               text=sprintf("Finish: %d
-PD: %d
-Driver: %s
-Track: %s",ps,PD,Full_Name,track_name)))+
-        geom_boxplot(fill="#FFD700",alpha=0.7)+geom_hline(yintercept=0,linetype="dashed",color="#FFD700",linewidth=1.2)+
-        labs(title="Place Differential by Finishing Position",x="Finishing Position",y="Place Differential")+
-        coord_flip()+scale_x_discrete(limits=factor(40:1))+dark_theme
-      ggplotly(p,tooltip="text",height=900) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+      x_col   <- if (input$pd_visual_type == "boxplot_start") "start_ps" else "ps"
+      x_label <- if (input$pd_visual_type == "boxplot_start") "Starting Position" else "Finishing Position"
+      title   <- paste("Place Differential by", x_label)
+      viz     <- plot_data %>%
+        filter(!!sym(x_col) <= 40, !is.na(!!sym(x_col))) %>%
+        mutate(Grp = factor(as.character(!!sym(x_col)),
+                            levels = as.character(1:40)))
+      grp_ord <- as.character(1:40)
+      make_colored_box(viz, "PD", title, "Place Differential",
+                       color_by = color_by_pd, margin_l = 80,
+                       grp_order = grp_ord)
     }
   })
   
-  #----- PERFORMANCE SECTION -----#
+  # ---------------------------------------------------------------------------
+  # PERFORMANCE
+  # ---------------------------------------------------------------------------
   performance_data <- reactive({
-    req(values$analysis_filtered_data, values$performance_race_ids, input$perf_time_filter)
-    data <- values$analysis_filtered_data %>% filter(race_id %in% values$performance_race_ids)
-    if (input$perf_time_filter=="2025") data <- data %>% filter(race_season==2025)
+    req(values$analysis_filtered_data, performance_race_ids_reactive())
+    req(!is.null(input$perf_time_filter))
+    data <- values$analysis_filtered_data %>%
+      filter(race_id %in% performance_race_ids_reactive())
+    if (input$perf_time_filter != "all")
+      data <- data %>% filter(race_season == as.integer(input$perf_time_filter))
     data
   })
   
   output$performance_data_table <- DT::renderDataTable({
     req(performance_data())
-    default_columns <- c("Full_Name","start_ps","ps","ARP","SpdRk","fl","ll","DKSP","FDSP",
-                         "DKDomRank","FDDomRank","DKPoints","FDPoints","car_number","team_name",
-                         "race_season","track_name","finishing_status","LapsDown","Qualifying")
-    valid_columns <- intersect(default_columns, names(performance_data()))
-    display_data <- performance_data() %>% select(all_of(valid_columns)) %>%
-      mutate(across(any_of(c("ARP","DKSP","FDSP","DKPoints","FDPoints")), ~round(.,1))) %>%
-      rename_with(~case_when(
-        .x=="Full_Name"~"Driver",.x=="start_ps"~"Start",.x=="ps"~"Finish",
-        .x=="fl"~"FL",.x=="ll"~"LL",.x=="DKSP"~"DK Dom Pts",.x=="FDSP"~"FD Dom Pts",
-        .x=="DKPoints"~"DK Pts",.x=="FDPoints"~"FD Pts",.x=="DKDomRank"~"DK Dom Rank",
-        .x=="FDDomRank"~"FD Dom Rank",.x=="car_number"~"Car",.x=="team_name"~"Team",
-        .x=="race_season"~"Season",.x=="track_name"~"Track",.x=="finishing_status"~"Status",
-        .x=="LapsDown"~"Laps Down",TRUE~.x))
-    DT::datatable(display_data,
-                  options=list(scrollX=TRUE,pageLength=25,dom='rtip',  # no 'f' = no search box
-                               columnDefs=list(list(className="dt-center",targets="_all"))),
-                  filter='top',rownames=FALSE,class="display nowrap compact")
+    performance_data() %>%
+      select(any_of(c("Full_Name", "start_ps", "ps", "ARP", "SpdRk",
+                      "fast_laps", "lead_laps", "DKSP", "FDSP",
+                      "DKDomRank", "FDDomRank", "DKPoints", "FDPoints",
+                      "car_number", "team_name", "race_season",
+                      "track_name", "finishing_status", "LapsDown"))) %>%
+      mutate(across(any_of(c("ARP", "DKSP", "FDSP", "DKPoints", "FDPoints")),
+                    ~round(., 1))) %>%
+      rename_with(~recode(.,
+                          Full_Name       = "Driver",   start_ps    = "Start",    ps        = "Finish",
+                          fast_laps       = "FL",       lead_laps   = "LL",       DKSP      = "DK Dom Pts",
+                          FDSP            = "FD Dom Pts", DKPoints  = "DK Pts",   FDPoints  = "FD Pts",
+                          DKDomRank       = "DK Dom Rank", FDDomRank = "FD Dom Rank",
+                          car_number      = "Car",      team_name   = "Team",     race_season = "Season",
+                          track_name      = "Track",    finishing_status = "Status", LapsDown = "Laps Down"
+      )) %>%
+      DT::datatable(
+        rownames = FALSE, filter = "top",
+        class    = "display nowrap compact",
+        options  = list(
+          pageLength = 25, scrollX = TRUE, dom = "rtip",
+          columnDefs = list(list(className = "dt-center", targets = "_all"))
+        )
+      )
   })
   
   output$download_performance_csv <- downloadHandler(
-    filename=function() paste0("performance_",Sys.Date(),".csv"),
-    content=function(file) { req(performance_data()); write.csv(performance_data(),file,row.names=FALSE) }
+    filename = function() paste0("performance_", Sys.Date(), ".csv"),
+    content  = function(file) {
+      req(performance_data())
+      write.csv(performance_data(), file, row.names = FALSE)
+    }
   )
   
   output$performance_plot <- renderPlotly({
-    req(values$analysis_filtered_data, values$performance_race_ids, input$perf_visual_type, input$perf_visual_time)
-    viz_data <- values$analysis_filtered_data %>% filter(race_id %in% values$performance_race_ids)
-    if (input$perf_visual_time=="2025") viz_data <- viz_data %>% filter(race_season==2025)
-    time_label <- ifelse(input$perf_visual_time=="2025","2025","Full History")
-    req(values$analysis_entry_list)
+    req(values$analysis_filtered_data, performance_race_ids_reactive(),
+        input$perf_visual_type, values$analysis_entry_list)
+    req(!is.null(input$perf_visual_time))
     
-    make_perf_boxplot <- function(data, grp_col, val_col, order_dir="desc", title_txt, x_label, margin_l=150) {
-      grp_data <- data %>% group_by(!!sym(grp_col)) %>%
-        summarize(metric=if(order_dir=="desc") mean(!!sym(val_col),na.rm=TRUE) else mean(!!sym(val_col),na.rm=TRUE),
-                  n=n(),.groups='drop') %>% filter(n>0)
-      if (order_dir=="desc") grp_data <- grp_data %>% arrange(desc(metric)) else grp_data <- grp_data %>% arrange(metric)
-      grp_order <- grp_data[[grp_col]]
-      viz <- data %>% filter(!!sym(grp_col) %in% grp_order, !is.na(!!sym(val_col))) %>%
-        mutate(Grp=factor(!!sym(grp_col),levels=grp_order))
-      plot_ly(data=viz,type="box",y=~Grp,x=~get(val_col),orientation="h",
-              marker=list(color="#FFD700",opacity=0.6),line=list(color="#DAA520"),
-              fillcolor="rgba(255,215,0,0.3)",showlegend=FALSE) %>%
-        layout(title=list(text=paste(title_txt,"-",time_label),font=list(size=18,color="#FFD700")),
-               xaxis=list(title=x_label,color="#ffffff",gridcolor="#404040"),
-               yaxis=list(title="",color="#ffffff",categoryorder="array",categoryarray=grp_order),
-               paper_bgcolor="#2d2d2d",plot_bgcolor="#2d2d2d",font=list(color="#ffffff"),
-               height=900,margin=list(l=margin_l))
-    }
+    viz_data <- values$analysis_filtered_data %>%
+      filter(race_id %in% performance_race_ids_reactive())
+    if (input$perf_visual_time != "all")
+      viz_data <- viz_data %>% filter(race_season == as.integer(input$perf_visual_time))
     
+    time_label    <- if (input$perf_visual_time == "all") "Full History" else input$perf_visual_time
     entry_drivers <- values$analysis_entry_list$Name
-    entry_teams <- unique(values$analysis_entry_list$Team)
+    entry_teams   <- unique(values$analysis_entry_list$Team)
     
-    if (input$perf_visual_type=="driver_speed") {
-      make_perf_boxplot(viz_data %>% filter(Full_Name %in% entry_drivers,!is.na(SpdRk)),"Full_Name","SpdRk","desc","Speed Rank by Driver","Speed Rank")
-    } else if (input$perf_visual_type=="team_speed") {
-      make_perf_boxplot(viz_data %>% filter(team_name %in% entry_teams,!is.na(SpdRk)),"team_name","SpdRk","desc","Team Speed Rank","Speed Rank")
-    } else if (input$perf_visual_type=="driver_finish") {
-      make_perf_boxplot(viz_data %>% filter(Full_Name %in% entry_drivers,!is.na(ps)),"Full_Name","ps","desc","Finish Distribution by Driver","Finish Position")
-    } else if (input$perf_visual_type=="team_finish") {
-      make_perf_boxplot(viz_data %>% filter(team_name %in% entry_teams,!is.na(ps)),"team_name","ps","desc","Team Finish Distribution","Finish Position")
-    } else if (input$perf_visual_type=="driver_arp") {
-      make_perf_boxplot(viz_data %>% filter(Full_Name %in% entry_drivers,!is.na(ARP)),"Full_Name","ARP","desc","ARP by Driver","Avg Running Position")
-    } else {
-      make_perf_boxplot(viz_data %>% filter(team_name %in% entry_teams,!is.na(ARP)),"team_name","ARP","desc","Team ARP Distribution","Avg Running Position")
+    color_by_perf <- input$perf_color_by %||% "none"
+    
+    make_perf_box <- function(data, grp_col, val_col, title_txt, x_label,
+                              ascending = TRUE, margin_l = 150) {
+      grp_order <- data %>%
+        filter(!is.na(!!sym(val_col))) %>%
+        group_by(!!sym(grp_col)) %>%
+        summarise(m = mean(!!sym(val_col), na.rm = TRUE), .groups = "drop") %>%
+        { if (ascending) arrange(., desc(m)) else arrange(., m) } %>%
+        pull(!!sym(grp_col))
+      data %>%
+        filter(!!sym(grp_col) %in% grp_order, !is.na(!!sym(val_col))) %>%
+        mutate(Grp = factor(!!sym(grp_col), levels = grp_order)) %>%
+        make_colored_box(val_col,
+                         paste(title_txt, "—", time_label), x_label,
+                         color_by = color_by_perf, margin_l = margin_l,
+                         grp_order = grp_order)
     }
+    
+    switch(input$perf_visual_type,
+           driver_speed  = make_perf_box(viz_data %>% filter(Full_Name %in% entry_drivers, !is.na(SpdRk)),
+                                         "Full_Name", "SpdRk", "Speed Rank by Driver",    "Speed Rank"),
+           team_speed    = make_perf_box(viz_data %>% filter(team_name %in% entry_teams,  !is.na(SpdRk)),
+                                         "team_name", "SpdRk", "Team Speed Rank",          "Speed Rank"),
+           driver_finish = make_perf_box(viz_data %>% filter(Full_Name %in% entry_drivers, !is.na(ps)),
+                                         "Full_Name", "ps",    "Finish Distribution by Driver", "Finish Position"),
+           team_finish   = make_perf_box(viz_data %>% filter(team_name %in% entry_teams,  !is.na(ps)),
+                                         "team_name", "ps",    "Team Finish Distribution", "Finish Position"),
+           driver_arp    = make_perf_box(viz_data %>% filter(Full_Name %in% entry_drivers, !is.na(ARP)),
+                                         "Full_Name", "ARP",   "ARP by Driver",            "Avg Running Position"),
+           team_arp      = make_perf_box(viz_data %>% filter(team_name %in% entry_teams,  !is.na(ARP)),
+                                         "team_name", "ARP",   "Team ARP Distribution",    "Avg Running Position")
+    )
   })
   
-  #----- FANTASY SCORING SECTION -----#
+  # ---------------------------------------------------------------------------
+  # FANTASY SCORING
+  # ---------------------------------------------------------------------------
   fantasy_data <- reactive({
     req(values$analysis_filtered_data, dominator_filtered_races())
-    values$analysis_filtered_data %>% filter(race_id %in% dominator_filtered_races())
+    values$analysis_filtered_data %>%
+      filter(race_id %in% dominator_filtered_races())
   })
   
   output$fantasy_data_table <- DT::renderDataTable({
     req(fantasy_data(), input$fs_platform)
-    if (input$fs_platform=="DK") {
-      display_data <- fantasy_data() %>% filter(DKRank<=25) %>%
-        select(Driver=Full_Name,Rank=DKRank,`Total Pts`=DKPoints,`Finish Pts`=DKFP,
-               `PD Pts`=DKPD,`Dom Pts`=DKSP,Finish=ps,Start=start_ps,
-               `Laps Led`=lead_laps,`Fast Laps`=fast_laps,Race=race_name,Track=track_name,Season=race_season) %>%
-        mutate(across(c(`Total Pts`,`Finish Pts`,`PD Pts`,`Dom Pts`),~round(.,1))) %>%
+    if (input$fs_platform == "DK") {
+      fantasy_data() %>%
+        filter(DKRank <= 25) %>%
+        transmute(Driver = Full_Name, Rank = DKRank,
+                  `Total Pts` = round(DKPoints, 1), `Finish Pts` = round(DKFP, 1),
+                  `PD Pts` = round(DKPD, 1), `Dom Pts` = round(DKSP, 1),
+                  Finish = ps, Start = start_ps,
+                  `Laps Led` = lead_laps, `Fast Laps` = fast_laps,
+                  Race = race_name, Track = track_name, Season = race_season) %>%
         arrange(desc(`Total Pts`))
     } else {
-      display_data <- fantasy_data() %>% filter(FDRank<=25) %>%
-        select(Driver=Full_Name,Rank=FDRank,`Total Pts`=FDPoints,`Finish Pts`=FDFP,
-               `PD Pts`=FDPD,`Dom Pts`=FDSP,`Lap Pts`=FDLP,Finish=ps,Start=start_ps,
-               `Laps Led`=lead_laps,Race=race_name,Track=track_name,Season=race_season) %>%
-        mutate(across(c(`Total Pts`,`Finish Pts`,`PD Pts`,`Dom Pts`,`Lap Pts`),~round(.,1))) %>%
+      fantasy_data() %>%
+        filter(FDRank <= 25) %>%
+        transmute(Driver = Full_Name, Rank = FDRank,
+                  `Total Pts` = round(FDPoints, 1), `Finish Pts` = round(FDFP, 1),
+                  `PD Pts` = round(FDPD, 1), `Dom Pts` = round(FDSP, 1),
+                  `Lap Pts` = round(FDLP, 1),
+                  Finish = ps, Start = start_ps, `Laps Led` = lead_laps,
+                  Race = race_name, Track = track_name, Season = race_season) %>%
         arrange(desc(`Total Pts`))
-    }
-    DT::datatable(display_data,
-                  options=list(pageLength=25,scrollX=TRUE,dom='tip',  # no 'f' = no search box
-                               columnDefs=list(list(className="dt-center",targets="_all"))),
-                  rownames=FALSE,class="display nowrap compact")
+    } %>%
+      DT::datatable(
+        rownames  = FALSE,
+        class     = "display nowrap compact",
+        options   = list(
+          pageLength = 25, scrollX = TRUE, dom = "tip",
+          columnDefs = list(list(className = "dt-center", targets = "_all"))
+        )
+      )
   })
   
   output$download_fantasy_csv <- downloadHandler(
-    filename=function() paste0("fantasy_",input$fs_platform,"_",Sys.Date(),".csv"),
-    content=function(file) { req(fantasy_data()); write.csv(fantasy_data(),file,row.names=FALSE) }
+    filename = function() paste0("fantasy_", input$fs_platform, "_", Sys.Date(), ".csv"),
+    content  = function(file) {
+      req(fantasy_data())
+      write.csv(fantasy_data(), file, row.names = FALSE)
+    }
   )
   
   output$fantasy_plot <- renderPlotly({
     req(fantasy_data(), input$fs_visual_type, input$fs_visual_platform)
-    plot_data <- fantasy_data()
-    platform <- input$fs_visual_platform
-    points_col <- if(platform=="DK") "DKPoints" else "FDPoints"
-    rank_col   <- if(platform=="DK") "DKRank"   else "FDRank"
-    platform_name <- if(platform=="DK") "DraftKings" else "FanDuel"
+    plot_data     <- fantasy_data()
+    color_by_fs   <- input$fs_color_by %||% "none"
+    platform      <- input$fs_visual_platform
+    points_col    <- if (platform == "DK") "DKPoints" else "FDPoints"
+    rank_col      <- if (platform == "DK") "DKRank"   else "FDRank"
+    platform_name <- if (platform == "DK") "DraftKings" else "FanDuel"
     
-    # dark_layout inlined below
-    dark_theme <- theme_minimal()+theme(
-      plot.title=element_text(size=18,face="bold",color="#FFD700"),
-      axis.title=element_text(size=16,color="#ffffff"),axis.text=element_text(size=14,color="#ffffff"),
-      panel.background=element_rect(fill="#2d2d2d"),plot.background=element_rect(fill="#2d2d2d"),
-      panel.grid.major=element_line(color="#404040"),panel.grid.minor=element_line(color="#333333"),
-      legend.background=element_rect(fill="#2d2d2d"),legend.key=element_rect(fill="#2d2d2d"),
-      legend.text=element_text(color="#ffffff"),legend.title=element_text(color="#FFD700"))
+    dark_theme <- theme_minimal() + theme(
+      plot.title       = element_text(size = 18, face = "bold", color = "#FFE500"),
+      axis.title       = element_text(size = 16, color = "#ffffff"),
+      axis.text        = element_text(size = 14, color = "#ffffff"),
+      panel.background = element_rect(fill = "#1e1e1e"),
+      plot.background  = element_rect(fill = "#1e1e1e"),
+      panel.grid.major = element_line(color = "#404040"),
+      panel.grid.minor = element_line(color = "#333333"),
+      legend.background = element_rect(fill = "#2d2d2d"),
+      legend.key        = element_rect(fill = "#2d2d2d"),
+      legend.text       = element_text(color = "#ffffff"),
+      legend.title      = element_text(color = "#FFE500"))
+    dark_layout <- function(p) p %>% layout(
+      paper_bgcolor = "#2d2d2d", plot_bgcolor = "#2d2d2d",
+      font  = list(color = "#ffffff"),
+      xaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"),
+      yaxis = list(gridcolor = "#404040", zerolinecolor = "#666666"))
     
-    if (input$fs_visual_type=="score_dist") {
-      viz_data <- plot_data %>% filter(!!sym(rank_col)<=15)
-      p <- ggplot(viz_data,aes(x=factor(!!sym(rank_col)),y=!!sym(points_col)))+
-        geom_boxplot(aes(text=sprintf("Rank: %d
-Pts: %.1f
-Driver: %s
-Track: %s",!!sym(rank_col),!!sym(points_col),Full_Name,track_name)),fill="dodgerblue",alpha=0.7)+
-        geom_smooth(aes(x=as.numeric(!!sym(rank_col)),y=!!sym(points_col),group=1),method="loess",se=FALSE,color="#FFD700",linewidth=1.5)+
-        labs(title=paste(platform_name,"Points by Fantasy Rank"),x="Rank",y="Points")+
-        scale_x_discrete(limits=factor(1:15))+dark_theme
-      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+    vt <- input$fs_visual_type
+    
+    if (vt == "score_dist") {
+      viz <- plot_data %>% filter(!!sym(rank_col) <= 15)
+      p <- ggplot(viz, aes(x = factor(!!sym(rank_col)), y = !!sym(points_col))) +
+        geom_boxplot(aes(text = sprintf("Rank: %d\nPts: %.1f\nDriver: %s\nTrack: %s",
+                                        !!sym(rank_col), !!sym(points_col), Full_Name, track_name)),
+                     fill = "#3a6ea5", alpha = 0.8) +
+        geom_smooth(aes(x = as.numeric(!!sym(rank_col)), y = !!sym(points_col), group = 1),
+                    method = "loess", se = FALSE, color = "#FFE500", linewidth = 1.5) +
+        labs(title = paste(platform_name, "Points by Fantasy Rank"),
+             x = "Rank", y = "Points") +
+        scale_x_discrete(limits = factor(1:15)) + dark_theme
+      ggplotly(p, tooltip = "text", height = 700) %>% dark_layout()
       
-    } else if (input$fs_visual_type %in% c("components","components_start","components_finish")) {
+    } else if (vt == "components") {
       make_comp <- function(d) {
-        if(platform=="DK") d %>% mutate(Finish_Pct=round(DKFP/DKPoints*100,1),PD_Pct=round(DKPD/DKPoints*100,1),Dom_Pct=round(DKSP/DKPoints*100,1))
-        else d %>% mutate(Finish_Pct=round(FDFP/(FDPoints-FDLP)*100,1),PD_Pct=round(FDPD/(FDPoints-FDLP)*100,1),Dom_Pct=round(FDSP/(FDPoints-FDLP)*100,1))
+        if (platform == "DK")
+          d %>% mutate(
+            Finish_Pct = round(DKFP / DKPoints * 100, 1),
+            PD_Pct     = round(DKPD / DKPoints * 100, 1),
+            Dom_Pct    = round(DKSP / DKPoints * 100, 1))
+        else
+          d %>% mutate(
+            Finish_Pct = round(FDFP / (FDPoints - FDLP) * 100, 1),
+            PD_Pct     = round(FDPD / (FDPoints - FDLP) * 100, 1),
+            Dom_Pct    = round(FDSP / (FDPoints - FDLP) * 100, 1))
       }
-      if (input$fs_visual_type=="components") {
-        grp_col <- rank_col; filt <- plot_data %>% filter(!!sym(rank_col)<=15)
-      } else if (input$fs_visual_type=="components_start") {
-        grp_col <- "start_ps"; filt <- plot_data %>% filter(start_ps<=20,!is.na(start_ps))
-      } else {
-        grp_col <- "ps"; filt <- plot_data %>% filter(ps<=20,!is.na(ps))
-      }
-      comp_data <- make_comp(filt) %>% group_by(!!sym(grp_col)) %>%
-        summarize(FP=mean(Finish_Pct,na.rm=TRUE),PD=mean(PD_Pct,na.rm=TRUE),Dom=mean(Dom_Pct,na.rm=TRUE),.groups='drop') %>%
-        pivot_longer(cols=c(FP,PD,Dom),names_to="Type",values_to="Pct") %>%
-        mutate(Type=case_when(Type=="FP"~"Finish Position",Type=="PD"~"Place Differential",TRUE~"Dominator Points"))
-      p <- ggplot(comp_data,aes(x=factor(!!sym(grp_col)),y=Pct,fill=Type))+
-        geom_bar(stat="identity",position="stack")+
-        geom_text(aes(label=sprintf("%.0f%%",Pct)),position=position_stack(vjust=0.5),color="white",fontface="bold",size=3)+
-        scale_fill_manual(values=c("Finish Position"="#1a1a1a","Place Differential"="#DAA520","Dominator Points"="#FFD700"))+
-        labs(title=paste(platform_name,"Scoring Components"),x=grp_col,y="%",fill="Type")+dark_theme
-      ggplotly(p,tooltip=c("x","y","fill"),height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+      grp_col <- rank_col
+      filt    <- plot_data %>% filter(!!sym(rank_col) <= 15)
+      comp_data <- make_comp(filt) %>%
+        group_by(!!sym(grp_col)) %>%
+        summarise(FP = mean(Finish_Pct, na.rm = TRUE),
+                  PD = mean(PD_Pct,     na.rm = TRUE),
+                  Dom= mean(Dom_Pct,    na.rm = TRUE), .groups = "drop") %>%
+        pivot_longer(cols = c(FP, PD, Dom), names_to = "Type", values_to = "Pct") %>%
+        mutate(Type = recode(Type, FP = "Finish Position",
+                             PD = "Place Differential", Dom = "Dominator Points"))
+      p <- ggplot(comp_data, aes(x = factor(!!sym(grp_col)), y = Pct, fill = Type)) +
+        geom_bar(stat = "identity", position = "stack") +
+        geom_text(aes(label = sprintf("%.0f%%", Pct)),
+                  position = position_stack(vjust = 0.5),
+                  color = "white", fontface = "bold", size = 3) +
+        scale_fill_manual(values = c(
+          "Finish Position"    = "#1a1a1a",
+          "Place Differential" = "#DAA520",
+          "Dominator Points"   = "#FFE500")) +
+        labs(title = paste(platform_name, "Scoring Components"),
+             x = grp_col, y = "%", fill = "Type") + dark_theme
+      ggplotly(p, tooltip = c("x", "y", "fill"), height = 700) %>% dark_layout()
       
     } else {
-      filt_col <- if(input$fs_visual_type=="score_by_start") "start_ps" else "ps"
-      fill_col <- if(input$fs_visual_type=="score_by_start") "purple" else "orange"
-      viz_data <- plot_data %>% filter(!!sym(filt_col)<=40,!is.na(!!sym(filt_col)),!is.na(!!sym(points_col)))
-      p <- ggplot(viz_data,aes(x=factor(!!sym(filt_col)),y=!!sym(points_col)))+
-        geom_boxplot(aes(text=sprintf("%s: %%d
-Pts: %%.1f
-Driver: %%s
-Track: %%s" |>
-                                        sprintf(if(filt_col=="start_ps")"Start" else "Finish"), !!sym(filt_col),!!sym(points_col),Full_Name,track_name)),
-                     fill=fill_col,alpha=0.6)+
-        labs(title=paste(platform_name,"Points by",if(filt_col=="start_ps")"Start" else "Finish"),
-             x=if(filt_col=="start_ps")"Starting Position" else "Finish Position",y="Points")+
-        scale_x_discrete(limits=factor(1:40))+dark_theme+
-        theme(axis.text.x=element_text(angle=45,hjust=1,color="#ffffff"))
-      ggplotly(p,tooltip="text",height=700) %>% layout(paper_bgcolor="#2d2d2d", plot_bgcolor="#2d2d2d", font=list(color="#ffffff"), xaxis=list(gridcolor="#404040", zerolinecolor="#666666"), yaxis=list(gridcolor="#404040", zerolinecolor="#666666"))
+      filt_col  <- if (vt == "score_by_start") "start_ps" else "ps"
+      fill_col  <- if (vt == "score_by_start") "#4a6fa5" else "#5a9e6f"
+      x_label   <- if (vt == "score_by_start") "Starting Position" else "Finish Position"
+      viz <- plot_data %>%
+        filter(!!sym(filt_col) <= 40, !is.na(!!sym(filt_col)), !is.na(!!sym(points_col)))
+      p <- ggplot(viz, aes(x = factor(!!sym(filt_col)), y = !!sym(points_col))) +
+        geom_boxplot(fill = fill_col, color = "#FFE500", alpha = 0.7) +
+        labs(title = paste(platform_name, "Points by", x_label),
+             x = x_label, y = "Points") +
+        scale_x_discrete(limits = factor(1:40)) + dark_theme +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, color = "#ffffff"))
+      ggplotly(p, height = 700) %>% dark_layout()
     }
   })
-}
+  
+} # end server
 
 shinyApp(ui = ui, server = server)

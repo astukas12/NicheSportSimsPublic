@@ -1,37 +1,39 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Corey Heim (42329896),Corey Heim,42329896,D,11700,Buckle Up South Carolina 200,Nasca,68.07
-D,Christopher Bell (42329897),Christopher Bell,42329897,D,11200,Buckle Up South Carolina 200,Nasca,50.9
-D,Carson Hocevar (42329898),Carson Hocevar,42329898,D,10700,Buckle Up South Carolina 200,Nasca,43.92
-D,Layne Riggs (42329899),Layne Riggs,42329899,D,10500,Buckle Up South Carolina 200,Nasca,49.7
-D,Christian Eckes (42329900),Christian Eckes,42329900,D,10000,Buckle Up South Carolina 200,Nasca,42.12
-D,Ross Chastain (42329901),Ross Chastain,42329901,D,9500,Buckle Up South Carolina 200,Nasca,30.61
-D,Ty Majeski (42329902),Ty Majeski,42329902,D,9000,Buckle Up South Carolina 200,Nasca,38.86
-D,Chandler Smith (42329903),Chandler Smith,42329903,D,8800,Buckle Up South Carolina 200,Nasca,37.58
-D,Kaden Honeycutt (42329904),Kaden Honeycutt,42329904,D,8600,Buckle Up South Carolina 200,Nasca,29.85
-D,Daniel Hemric (42329905),Daniel Hemric,42329905,D,8400,Buckle Up South Carolina 200,Nasca,32.31
-D,Ben Rhodes (42329906),Ben Rhodes,42329906,D,8200,Buckle Up South Carolina 200,Nasca,27.29
-D,Justin Haley (42329907),Justin Haley,42329907,D,8000,Buckle Up South Carolina 200,Nasca,38.05
-D,Tyler Ankrum (42329908),Tyler Ankrum,42329908,D,7800,Buckle Up South Carolina 200,Nasca,35.48
-D,AJ Allmendinger (42332419),AJ Allmendinger,42332419,D,7700,Buckle Up South Carolina 200,Nasca,0
-D,Grant Enfinger (42329909),Grant Enfinger,42329909,D,7600,Buckle Up South Carolina 200,Nasca,34.26
-D,Giovanni Ruggiero (42329910),Giovanni Ruggiero,42329910,D,7500,Buckle Up South Carolina 200,Nasca,31.72
-D,Corey LaJoie (42329911),Corey LaJoie,42329911,D,7400,Buckle Up South Carolina 200,Nasca,41.52
-D,Stewart Friesen (42329912),Stewart Friesen,42329912,D,7200,Buckle Up South Carolina 200,Nasca,33.6
-D,Tanner Gray (42329913),Tanner Gray,42329913,D,7100,Buckle Up South Carolina 200,Nasca,24.54
-D,Jake Garcia (42329914),Jake Garcia,42329914,D,6900,Buckle Up South Carolina 200,Nasca,26.59
-D,Connor Mosack (42329915),Connor Mosack,42329915,D,6700,Buckle Up South Carolina 200,Nasca,19.33
-D,William Sawalich (42329916),William Sawalich,42329916,D,6600,Buckle Up South Carolina 200,Nasca,25.32
-D,Brenden Queen (42329917),Brenden Queen,42329917,D,6500,Buckle Up South Carolina 200,Nasca,30.22
-D,Andres Perez De Lara (42329918),Andres Perez De Lara,42329918,D,6400,Buckle Up South Carolina 200,Nasca,20.1
-D,Conner Jones (42329919),Conner Jones,42329919,D,6300,Buckle Up South Carolina 200,Nasca,13.38
-D,Cole Butcher (42329920),Cole Butcher,42329920,D,6200,Buckle Up South Carolina 200,Nasca,16.45
-D,Kris Wright (42329921),Kris Wright,42329921,D,6000,Buckle Up South Carolina 200,Nasca,24.5
-D,Mini Tyrrell (42329922),Mini Tyrrell,42329922,D,5900,Buckle Up South Carolina 200,Nasca,0
-D,Dawson Sutton (42329923),Dawson Sutton,42329923,D,5800,Buckle Up South Carolina 200,Nasca,22.3
-D,Timmy Hill (42329924),Timmy Hill,42329924,D,5600,Buckle Up South Carolina 200,Nasca,35.58
-D,Clayton Green (42329925),Clayton Green,42329925,D,5500,Buckle Up South Carolina 200,Nasca,12.86
-D,Spencer Boyd (42329926),Spencer Boyd,42329926,D,5400,Buckle Up South Carolina 200,Nasca,24.34
-D,Caleb Costner (42329927),Caleb Costner,42329927,D,5300,Buckle Up South Carolina 200,Nasca,14.58
-D,Josh Reaume (42329928),Josh Reaume,42329928,D,5200,Buckle Up South Carolina 200,Nasca,23.63
-D,Frankie Muniz (42329929),Frankie Muniz,42329929,D,5100,Buckle Up South Carolina 200,Nasca,20.24
-D,Justin S Carroll (42329930),Justin S Carroll,42329930,D,5000,Buckle Up South Carolina 200,Nasca,18.5
+D,Corey Heim (42487487),Corey Heim,42487487,D,12000,Black's Tire 200,Nasca,58.45
+D,Layne Riggs (42487488),Layne Riggs,42487488,D,11000,Black's Tire 200,Nasca,37.41
+D,Carson Hocevar (42487489),Carson Hocevar,42487489,D,10700,Black's Tire 200,Nasca,17.6
+D,Christian Eckes (42487490),Christian Eckes,42487490,D,10000,Black's Tire 200,Nasca,35.05
+D,Ty Majeski (42487491),Ty Majeski,42487491,D,9700,Black's Tire 200,Nasca,21.29
+D,Sammy Smith (42487492),Sammy Smith,42487492,D,9500,Black's Tire 200,Nasca,0
+D,Chandler Smith (42487493),Chandler Smith,42487493,D,9300,Black's Tire 200,Nasca,44.68
+D,Kaden Honeycutt (42487494),Kaden Honeycutt,42487494,D,9000,Black's Tire 200,Nasca,40.34
+D,Daniel Hemric (42487495),Daniel Hemric,42487495,D,8500,Black's Tire 200,Nasca,29.08
+D,Tyler Ankrum (42487496),Tyler Ankrum,42487496,D,8300,Black's Tire 200,Nasca,14.42
+D,Ben Rhodes (42487497),Ben Rhodes,42487497,D,8100,Black's Tire 200,Nasca,35.11
+D,Justin Haley (42487498),Justin Haley,42487498,D,7900,Black's Tire 200,Nasca,34.45
+D,Giovanni Ruggiero (42487499),Giovanni Ruggiero,42487499,D,7700,Black's Tire 200,Nasca,31.2
+D,Grant Enfinger (42487500),Grant Enfinger,42487500,D,7500,Black's Tire 200,Nasca,17.15
+D,Ty Dillon (42487501),Ty Dillon,42487501,D,7400,Black's Tire 200,Nasca,49.7
+D,Corey LaJoie (42487502),Corey LaJoie,42487502,D,7200,Black's Tire 200,Nasca,5.5
+D,Landen Lewis (42487503),Landen Lewis,42487503,D,7000,Black's Tire 200,Nasca,40.9
+D,Tanner Gray (42487504),Tanner Gray,42487504,D,6900,Black's Tire 200,Nasca,13.86
+D,Connor Hall (42487505),Connor Hall,42487505,D,6800,Black's Tire 200,Nasca,0
+D,Jake Garcia (42487506),Jake Garcia,42487506,D,6700,Black's Tire 200,Nasca,13.89
+D,Stewart Friesen (42487507),Stewart Friesen,42487507,D,6600,Black's Tire 200,Nasca,20.71
+D,Parker Eatmon (42487508),Parker Eatmon,42487508,D,6500,Black's Tire 200,Nasca,0
+D,Adam Andretti (42487509),Adam Andretti,42487509,D,6400,Black's Tire 200,Nasca,17.4
+D,Brenden Queen (42487510),Brenden Queen,42487510,D,6300,Black's Tire 200,Nasca,33.11
+D,Michael Christopher Jr (42487511),Michael Christopher Jr,42487511,D,6200,Black's Tire 200,Nasca,0
+D,Luke Baldwin (42487512),Luke Baldwin,42487512,D,6000,Black's Tire 200,Nasca,0
+D,Andres Perez De Lara (42487513),Andres Perez De Lara,42487513,D,5900,Black's Tire 200,Nasca,28.04
+D,Cole Butcher (42487514),Cole Butcher,42487514,D,5800,Black's Tire 200,Nasca,17.98
+D,Dawson Sutton (42487515),Dawson Sutton,42487515,D,5700,Black's Tire 200,Nasca,11.59
+D,Kris Wright (42487516),Kris Wright,42487516,D,5600,Black's Tire 200,Nasca,19.4
+D,Mini Tyrrell (42487517),Mini Tyrrell,42487517,D,5500,Black's Tire 200,Nasca,21.95
+D,Timmy Hill (42487518),Timmy Hill,42487518,D,5400,Black's Tire 200,Nasca,27.38
+D,Spencer Boyd (42487519),Spencer Boyd,42487519,D,5300,Black's Tire 200,Nasca,20.67
+D,Clayton Green (42487520),Clayton Green,42487520,D,5200,Black's Tire 200,Nasca,23
+D,Caleb Costner (42487521),Caleb Costner,42487521,D,5100,Black's Tire 200,Nasca,17
+D,Frankie Muniz (42487522),Frankie Muniz,42487522,D,5000,Black's Tire 200,Nasca,29
+D,Jonathan Shafer (42487523),Jonathan Shafer,42487523,D,4900,Black's Tire 200,Nasca,0
+D,Justin S Carroll (42487524),Justin S Carroll,42487524,D,4800,Black's Tire 200,Nasca,15
