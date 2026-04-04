@@ -807,11 +807,20 @@ server <- function(input, output, session) {
             rv$cpt_score_lookup  <- setNames(cpt_data$FPTS,  cpt_data$Player)
             rv$util_score_lookup <- setNames(util_data$FPTS, util_data$Player)
             
-            # player_scores uses F (util) rows for display/exposure purposes
-            if ("FieldExp" %in% names(util_data)) {
-              rv$player_scores <- util_data[, .(
-                FPTS = max(FPTS, na.rm = TRUE),
-                FieldExp = max(FieldExp, na.rm = TRUE)
+            # Store per-position field ownership for CPT vs Flex split in exposure table
+            if ("FieldExp" %in% names(player_data)) {
+              rv$mma_sd_cpt_field_exp  <- setNames(cpt_data$FieldExp,  cpt_data$Player)
+              rv$mma_sd_flex_field_exp <- setNames(util_data$FieldExp, util_data$Player)
+            } else {
+              rv$mma_sd_cpt_field_exp  <- NULL
+              rv$mma_sd_flex_field_exp <- NULL
+            }
+            
+            # player_scores: sum CPT + F FieldExp for total ownership; FPTS from F rows
+            if ("FieldExp" %in% names(player_data)) {
+              rv$player_scores <- player_data[RosterPosition %in% c("CPT", "F"), .(
+                FPTS     = max(FPTS,     na.rm = TRUE),
+                FieldExp = sum(FieldExp, na.rm = TRUE)
               ), by = Player]
             } else {
               rv$player_scores <- util_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
@@ -1229,6 +1238,7 @@ server <- function(input, output, session) {
       h4(paste("Your", player_label, "Exposure vs Field")),
       if (rv$sport == "F1") p("CPT% and D% show exposure in each slot separately. Leverage = Your% - Field%.", style = "color: #CCCCCC; font-size: 13px;") else NULL,
       if (rv$sport == "CBB-SD") p("CPT exposure counted separately. Field% sums CPT + UTIL rows from DK.", style = "color: #CCCCCC; font-size: 13px;") else NULL,
+      if (rv$sport == "MMA-SD") p("CPT% and Flex% show exposure in each slot separately. Total% = CPT% + Flex%. Leverage = Your% - Field%.", style = "color: #CCCCCC; font-size: 13px;") else NULL,
       DTOutput("exposure_table"),
       
       if (isTRUE(rv$sport %in% c("CBB", "CBB-SD"))) {
@@ -1353,6 +1363,114 @@ server <- function(input, output, session) {
                     backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
         formatCurrency('CPT Lev', currency = "", digits = 1, before = FALSE) %>%
         formatCurrency('D Lev',   currency = "", digits = 1, before = FALSE)
+      
+      return(dt_output)
+    }
+    
+    # ---- MMA-SD: captain/flex position-split exposure ----
+    if (isTRUE(rv$sport == "MMA-SD")) {
+      # Parse user lineups tagging CPT vs Flex — all entries including dupes
+      user_pos_rows <- rbindlist(lapply(user_data$Lineup, function(lu) {
+        players <- extract_players(lu)
+        capt    <- extract_captain(lu)
+        data.table(
+          Player   = players,
+          Position = ifelse(players == capt, "CPT", "Flex")
+        )
+      }))
+      
+      user_cpt_exp  <- user_pos_rows[Position == "CPT",  .(UserCptExp  = .N / n_user_entries * 100), by = Player]
+      user_flex_exp <- user_pos_rows[Position == "Flex", .(UserFlexExp = .N / n_user_entries * 100), by = Player]
+      
+      # Field CPT% and Flex% — prefer pre-computed per-position lookups from DK %Drafted
+      n_field_entries <- nrow(field_data)
+      
+      if (!is.null(rv$mma_sd_cpt_field_exp) && !is.null(rv$mma_sd_flex_field_exp)) {
+        field_cpt_exp  <- data.table(Player = names(rv$mma_sd_cpt_field_exp),  FieldCptExp  = unname(rv$mma_sd_cpt_field_exp))
+        field_flex_exp <- data.table(Player = names(rv$mma_sd_flex_field_exp), FieldFlexExp = unname(rv$mma_sd_flex_field_exp))
+      } else {
+        # Fallback: parse all field entries
+        field_pos_rows <- rbindlist(lapply(field_data$Lineup, function(lu) {
+          players <- extract_players(lu)
+          capt    <- extract_captain(lu)
+          data.table(
+            Player   = players,
+            Position = ifelse(players == capt, "CPT", "Flex")
+          )
+        }))
+        field_cpt_exp  <- field_pos_rows[Position == "CPT",  .(FieldCptExp  = .N / n_field_entries * 100), by = Player]
+        field_flex_exp <- field_pos_rows[Position == "Flex", .(FieldFlexExp = .N / n_field_entries * 100), by = Player]
+      }
+      
+      # Build combined table
+      all_players   <- sort(unique(c(user_pos_rows$Player, field_cpt_exp$Player, field_flex_exp$Player)))
+      exposure_data <- data.table(Player = all_players)
+      exposure_data <- merge(exposure_data, user_cpt_exp,   by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, user_flex_exp,  by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_cpt_exp,  by = "Player", all.x = TRUE)
+      exposure_data <- merge(exposure_data, field_flex_exp, by = "Player", all.x = TRUE)
+      for (col in c("UserCptExp","UserFlexExp","FieldCptExp","FieldFlexExp")) {
+        if (!col %in% names(exposure_data)) exposure_data[, (col) := 0]
+        exposure_data[is.na(get(col)), (col) := 0]
+      }
+      exposure_data[, UserTotal  := UserCptExp  + UserFlexExp]
+      exposure_data[, FieldTotal := FieldCptExp + FieldFlexExp]
+      exposure_data[, CptLev     := UserCptExp  - FieldCptExp]
+      exposure_data[, FlexLev    := UserFlexExp - FieldFlexExp]
+      exposure_data[, TotalLev   := UserTotal   - FieldTotal]
+      
+      # Add FPTS
+      if (!is.null(rv$player_scores)) {
+        exposure_data <- merge(exposure_data, rv$player_scores[, .(Player, FPTS)], by = "Player", all.x = TRUE)
+      } else {
+        exposure_data[, FPTS := NA_real_]
+      }
+      
+      exposure_data <- exposure_data[order(-UserTotal)]
+      
+      display_data <- exposure_data[, .(
+        Player,
+        FPTS            = round(FPTS, 1),
+        `Your CPT%`     = round(UserCptExp,   1),
+        `Field CPT%`    = round(FieldCptExp,  1),
+        `CPT Lev`       = round(CptLev,        1),
+        `Your Flex%`    = round(UserFlexExp,  1),
+        `Field Flex%`   = round(FieldFlexExp, 1),
+        `Flex Lev`      = round(FlexLev,       1),
+        `Your Total%`   = round(UserTotal,    1),
+        `Field Total%`  = round(FieldTotal,   1),
+        `Total Lev`     = round(TotalLev,      1)
+      )]
+      
+      dt_output <- datatable(
+        display_data,
+        rownames = FALSE,
+        options = list(
+          pageLength = 20,
+          dom = 'frtip',
+          columnDefs = list(
+            list(className = 'dt-center', targets = 1:(ncol(display_data)-1))
+          )
+        )
+      ) %>%
+        formatStyle('CPT Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('Flex Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('Total Lev',
+                    color = styleInterval(0, c('#dc3545', '#28a745')), fontWeight = 'bold') %>%
+        formatStyle('Your CPT%',
+                    background = styleColorBar(c(0, 100), '#e74c3c'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatStyle('Your Flex%',
+                    background = styleColorBar(c(0, 100), '#3498db'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatStyle('Your Total%',
+                    background = styleColorBar(c(0, 100), '#FFE500'),
+                    backgroundSize = '100% 90%', backgroundRepeat = 'no-repeat', backgroundPosition = 'center') %>%
+        formatCurrency('CPT Lev',   currency = "", digits = 1, before = FALSE) %>%
+        formatCurrency('Flex Lev',  currency = "", digits = 1, before = FALSE) %>%
+        formatCurrency('Total Lev', currency = "", digits = 1, before = FALSE)
       
       return(dt_output)
     }
