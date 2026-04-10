@@ -651,46 +651,63 @@ server <- function(input, output, session) {
                  choices = year_radio_choices(), selected = as.character(CURRENT_YEAR), inline = TRUE)
   })
   
-  # FR view pills
+  # FR view pills — JS setInputValue → fr_view_pill
   output$fr_view_pills_ui <- renderUI({
-    req(values$analysis_races_available)
+    req(values$filters_confirmed)
     views <- c("Driver" = "driver", "Car" = "car", "Team" = "team",
                "Start Pos" = "start_pos", "Tier" = "tier")
-    cur <- if (!is.null(values$fr_view_sel)) values$fr_view_sel else "driver"
-    pill_btn <- function(lbl, val) {
-      actionButton(paste0("frview_", val), lbl,
-                   style = paste0(
-                     "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
-                     if (cur == val)
-                       "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
-                     else
-                       "background:#2a2a2a!important;color:#888!important;border:2px solid #444!important;"))
-    }
+    cur <- values$fr_view_sel %||% "driver"
     div(style = "display:flex;flex-wrap:wrap;gap:4px;",
-        mapply(pill_btn, names(views), views, SIMPLIFY = FALSE))
+        tagList(mapply(function(lbl, val) {
+          is_on <- identical(cur, val)
+          js    <- sprintf("Shiny.setInputValue('fr_view_pill', '%s', {priority:'event'})", val)
+          tags$span(onClick = js, style = paste0(
+            "display:inline-block;cursor:pointer;user-select:none;",
+            "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
+            if (is_on) "background:#FFE500;color:#000;border:2px solid #FFE500;"
+            else       "background:#2a2a2a;color:#888;border:2px solid #444;"), lbl)
+        }, names(views), views, SIMPLIFY = FALSE)))
   })
   
-  # FR time pills — multi-select seasons + "All"
+  observeEvent(input$fr_view_pill, {
+    if (!is.null(input$fr_view_pill)) values$fr_view_sel <- input$fr_view_pill
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+  # FR time pills — JS setInputValue → fr_time_pill
   output$fr_time_pills_ui <- renderUI({
     req(values$analysis_races_available)
-    seasons <- sort(unique(values$analysis_races_available$race_season))
-    cur     <- if (!is.null(values$fr_seasons_sel)) values$fr_seasons_sel else "all"
+    seasons <- sort(unique(values$analysis_races_available$race_season[
+      values$analysis_races_available$race_id %in% performance_race_ids_reactive()]))
+    cur <- values$fr_seasons_sel %||% "all"
     make_pill <- function(lbl, val) {
-      is_active <- val %in% cur
-      actionButton(paste0("frtime_", val), lbl,
-                   style = paste0(
-                     "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
-                     if (is_active)
-                       "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
-                     else
-                       "background:#2a2a2a!important;color:#888!important;border:2px solid #444!important;"))
+      is_on <- if (val == "all") identical(cur, "all") else (!identical(cur,"all") && val %in% cur)
+      js    <- sprintf("Shiny.setInputValue('fr_time_pill', '%s', {priority:'event'})", val)
+      tags$span(onClick = js, style = paste0(
+        "display:inline-block;cursor:pointer;user-select:none;",
+        "margin:2px;padding:4px 12px;font-size:12px;font-weight:600;border-radius:20px;",
+        if (is_on) "background:#FFE500;color:#000;border:2px solid #FFE500;"
+        else       "background:#2a2a2a;color:#888;border:2px solid #444;"), lbl)
     }
-    all_pills <- c(
-      list(make_pill("All", "all")),
-      lapply(seasons, function(s) make_pill(as.character(s), as.character(s)))
-    )
-    div(style = "display:flex;flex-wrap:wrap;gap:4px;", tagList(all_pills))
+    div(style = "display:flex;flex-wrap:wrap;gap:4px;",
+        make_pill("All", "all"),
+        tagList(lapply(as.character(seasons), function(s) make_pill(s, s))))
   })
+  
+  observeEvent(input$fr_time_pill, {
+    clicked <- input$fr_time_pill
+    if (is.null(clicked)) return()
+    cur <- values$fr_seasons_sel %||% "all"
+    if (clicked == "all") {
+      values$fr_seasons_sel <- "all"
+    } else if (identical(cur, "all")) {
+      values$fr_seasons_sel <- clicked
+    } else if (clicked %in% cur) {
+      remaining <- setdiff(cur, clicked)
+      values$fr_seasons_sel <- if (length(remaining) == 0) "all" else remaining
+    } else {
+      values$fr_seasons_sel <- c(cur, clicked)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
   
   # Expose fr_view for conditionalPanel
   output$fr_view_is_tier <- reactive({
@@ -916,13 +933,11 @@ server <- function(input, output, session) {
   
   # Track pills — grouped by type. Clicking a type header toggles all tracks
   # in that type; clicking an individual track pill toggles just that track.
-  # Perf pool track type pills — JS onclick fires single shared inputs
-  # 'perf_type_click' carries the track_type value
-  # 'perf_track_click' carries the track_name value
+  # values$perf_track_types stores individual track_names (not types).
   output$track_type_pills_ui <- renderUI({
     req(values$analysis_races_available)
     ra    <- values$analysis_races_available
-    active_tracks <- values$perf_track_types
+    active_tracks <- values$perf_track_types   # now stores track names
     
     type_labels <- c(
       short_track   = "Short Track",
@@ -934,52 +949,46 @@ server <- function(input, output, session) {
       other         = "Other"
     )
     
-    types  <- sort(unique(ra$track_type[!is.na(ra$track_type)]))
+    types <- sort(unique(ra$track_type[!is.na(ra$track_type)]))
     
     groups <- lapply(types, function(tt) {
       tracks_in_type <- sort(unique(ra$track_name[ra$track_type == tt & !is.na(ra$track_name)]))
-      all_active <- all(tracks_in_type %in% active_tracks)
-      type_label <- if (tt %in% names(type_labels)) type_labels[[tt]] else tt
+      all_active  <- all(tracks_in_type %in% active_tracks)
+      type_label  <- if (tt %in% names(type_labels)) type_labels[[tt]] else tt
       
-      type_js <- sprintf(
-        "Shiny.setInputValue('perf_type_click', '%s', {priority:'event'})", tt)
-      type_pill <- tags$span(
-        onClick = type_js,
-        style = paste0(
-          "display:inline-block;cursor:pointer;user-select:none;",
+      # Type header pill
+      type_pill <- actionButton(
+        inputId = paste0("typepill_", gsub("[^a-z]", "_", tt)),
+        label   = type_label,
+        style   = paste0(
           "margin:2px;padding:4px 14px;font-size:12px;font-weight:700;border-radius:20px;",
           if (all_active)
-            "background:#FFE500;color:#000;border:2px solid #FFE500;"
+            "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
           else
-            "background:#2a2a2a;color:#888;border:2px solid #555;"
-        ),
-        type_label
+            "background:#2a2a2a!important;color:#888!important;border:2px solid #555!important;"
+        )
       )
       
+      # Individual track pills
       track_pills <- lapply(tracks_in_type, function(tn) {
         is_active <- tn %in% active_tracks
-        # JSON-encode track name so special chars are safe in JS string
-        tn_safe <- gsub("'", "\\'", tn)
-        track_js <- sprintf(
-          "Shiny.setInputValue('perf_track_click', '%s', {priority:'event'})", tn_safe)
-        tags$span(
-          onClick = track_js,
-          style = paste0(
-            "display:inline-block;cursor:pointer;user-select:none;",
+        actionButton(
+          inputId = paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn)),
+          label   = tn,
+          style   = paste0(
             "margin:2px;padding:3px 10px;font-size:11px;font-weight:500;border-radius:20px;",
             if (is_active)
-              "background:rgba(255,229,0,0.2);color:#FFE500;border:1px solid #FFE500;"
+              "background:rgba(255,229,0,0.2)!important;color:#FFE500!important;border:1px solid #FFE500!important;"
             else
-              "background:#1e1e1e;color:#666;border:1px solid #3a3a3a;"
-          ),
-          tn
+              "background:#1e1e1e!important;color:#666!important;border:1px solid #3a3a3a!important;"
+          )
         )
       })
       
       div(style = "margin-bottom:8px;",
           div(style = "display:flex;flex-wrap:wrap;gap:3px;align-items:center;",
               type_pill,
-              tags$span(style = "color:#444;margin:0 4px;font-size:14px;", "▸"),
+              span(style = "color:#444;margin:0 4px;font-size:14px;", "▸"),
               tagList(track_pills)
           )
       )
@@ -988,31 +997,43 @@ server <- function(input, output, session) {
     tagList(groups)
   })
   
-  # Single observer for type header clicks
-  observeEvent(input$perf_type_click, {
-    tt <- input$perf_type_click
-    req(tt, values$analysis_races_available)
-    tracks_in_type <- unique(values$analysis_races_available$track_name[
-      values$analysis_races_available$track_type == tt])
-    current <- values$perf_track_types
-    if (all(tracks_in_type %in% current)) {
-      values$perf_track_types <- setdiff(current, tracks_in_type)
-    } else {
-      values$perf_track_types <- union(current, tracks_in_type)
-    }
-  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  # Observer: type header pill toggles all tracks in that type
+  observe({
+    req(values$analysis_races_available)
+    types <- unique(values$analysis_races_available$track_type[
+      !is.na(values$analysis_races_available$track_type)])
+    lapply(types, function(tt) {
+      btn_id <- paste0("typepill_", gsub("[^a-z]", "_", tt))
+      observeEvent(input[[btn_id]], {
+        tracks_in_type <- unique(values$analysis_races_available$track_name[
+          values$analysis_races_available$track_type == tt])
+        current <- values$perf_track_types
+        if (all(tracks_in_type %in% current)) {
+          values$perf_track_types <- setdiff(current, tracks_in_type)
+        } else {
+          values$perf_track_types <- union(current, tracks_in_type)
+        }
+      }, ignoreInit = TRUE)
+    })
+  })
   
-  # Single observer for individual track clicks
-  observeEvent(input$perf_track_click, {
-    tn <- input$perf_track_click
-    req(tn)
-    current <- values$perf_track_types
-    if (tn %in% current) {
-      values$perf_track_types <- setdiff(current, tn)
-    } else {
-      values$perf_track_types <- c(current, tn)
-    }
-  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  # Observer: individual track pill toggles one track
+  observe({
+    req(values$analysis_races_available)
+    tracks <- unique(values$analysis_races_available$track_name[
+      !is.na(values$analysis_races_available$track_name)])
+    lapply(tracks, function(tn) {
+      btn_id <- paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn))
+      observeEvent(input[[btn_id]], {
+        current <- values$perf_track_types
+        if (tn %in% current) {
+          values$perf_track_types <- setdiff(current, tn)
+        } else {
+          values$perf_track_types <- c(current, tn)
+        }
+      }, ignoreInit = TRUE)
+    })
+  })
   
   # Season from selector
   output$perf_season_from_ui <- renderUI({
@@ -1381,50 +1402,21 @@ server <- function(input, output, session) {
   })
   
   # FR view pill observers
-  observe({
-    for (val in c("driver", "car", "team", "start_pos", "tier")) {
-      local({
-        v <- val
-        observeEvent(input[[paste0("frview_", v)]], {
-          values$fr_view_sel <- v
-        }, ignoreInit = TRUE)
-      })
-    }
-  })
   
-  # FR time pill observers — "all" clears multi-select; years toggle
-  observe({
-    req(values$analysis_races_available)
-    seasons <- as.character(sort(unique(values$analysis_races_available$race_season)))
-    observeEvent(input[["frtime_all"]], {
-      values$fr_seasons_sel <- "all"
-    }, ignoreInit = TRUE)
-    lapply(seasons, function(s) {
-      observeEvent(input[[paste0("frtime_", s)]], {
-        cur <- values$fr_seasons_sel
-        if (identical(cur, "all")) {
-          values$fr_seasons_sel <- s
-        } else if (s %in% cur) {
-          remaining <- setdiff(cur, s)
-          values$fr_seasons_sel <- if (length(remaining) == 0) "all" else remaining
-        } else {
-          values$fr_seasons_sel <- c(cur, s)
-        }
-      }, ignoreInit = TRUE)
-    })
-  })
   
   observeEvent(input$add_tier,    { values$num_tiers <- min(values$num_tiers + 1, 8) })
   observeEvent(input$remove_tier, { values$num_tiers <- max(values$num_tiers - 1, 1) })
   
   finish_rates_data <- reactive({
-    req(values$analysis_filtered_data)
+    req(values$analysis_filtered_data, performance_race_ids_reactive())
     view_sel    <- values$fr_view_sel    %||% "driver"
     seasons_sel <- values$fr_seasons_sel %||% "all"
     
-    data <- values$analysis_filtered_data
+    # Start from Perf pool only
+    data <- values$analysis_filtered_data %>%
+      filter(race_id %in% performance_race_ids_reactive())
     
-    # Season filter — multi-select pills
+    # Season pills narrow further within the Perf pool
     if (!identical(seasons_sel, "all"))
       data <- data %>% filter(race_season %in% as.integer(seasons_sel))
     
@@ -1491,7 +1483,7 @@ server <- function(input, output, session) {
                   filter   = "top",
                   class    = "display nowrap compact",
                   options  = list(
-                    pageLength = 50, scrollX = TRUE, dom = "ltp",
+                    pageLength = -1, scrollX = TRUE, dom = "tp",
                     columnDefs = list(list(className = "dt-center", targets = "_all"))
                   )
     )
