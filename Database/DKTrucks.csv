@@ -1,39 +1,37 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Corey Heim (42487487),Corey Heim,42487487,D,12000,Black's Tire 200,Nasca,58.45
-D,Layne Riggs (42487488),Layne Riggs,42487488,D,11000,Black's Tire 200,Nasca,37.41
-D,Carson Hocevar (42487489),Carson Hocevar,42487489,D,10700,Black's Tire 200,Nasca,17.6
-D,Christian Eckes (42487490),Christian Eckes,42487490,D,10000,Black's Tire 200,Nasca,35.05
-D,Ty Majeski (42487491),Ty Majeski,42487491,D,9700,Black's Tire 200,Nasca,21.29
-D,Sammy Smith (42487492),Sammy Smith,42487492,D,9500,Black's Tire 200,Nasca,0
-D,Chandler Smith (42487493),Chandler Smith,42487493,D,9300,Black's Tire 200,Nasca,44.68
-D,Kaden Honeycutt (42487494),Kaden Honeycutt,42487494,D,9000,Black's Tire 200,Nasca,40.34
-D,Daniel Hemric (42487495),Daniel Hemric,42487495,D,8500,Black's Tire 200,Nasca,29.08
-D,Tyler Ankrum (42487496),Tyler Ankrum,42487496,D,8300,Black's Tire 200,Nasca,14.42
-D,Ben Rhodes (42487497),Ben Rhodes,42487497,D,8100,Black's Tire 200,Nasca,35.11
-D,Justin Haley (42487498),Justin Haley,42487498,D,7900,Black's Tire 200,Nasca,34.45
-D,Giovanni Ruggiero (42487499),Giovanni Ruggiero,42487499,D,7700,Black's Tire 200,Nasca,31.2
-D,Grant Enfinger (42487500),Grant Enfinger,42487500,D,7500,Black's Tire 200,Nasca,17.15
-D,Ty Dillon (42487501),Ty Dillon,42487501,D,7400,Black's Tire 200,Nasca,49.7
-D,Corey LaJoie (42487502),Corey LaJoie,42487502,D,7200,Black's Tire 200,Nasca,5.5
-D,Landen Lewis (42487503),Landen Lewis,42487503,D,7000,Black's Tire 200,Nasca,40.9
-D,Tanner Gray (42487504),Tanner Gray,42487504,D,6900,Black's Tire 200,Nasca,13.86
-D,Connor Hall (42487505),Connor Hall,42487505,D,6800,Black's Tire 200,Nasca,0
-D,Jake Garcia (42487506),Jake Garcia,42487506,D,6700,Black's Tire 200,Nasca,13.89
-D,Stewart Friesen (42487507),Stewart Friesen,42487507,D,6600,Black's Tire 200,Nasca,20.71
-D,Parker Eatmon (42487508),Parker Eatmon,42487508,D,6500,Black's Tire 200,Nasca,0
-D,Adam Andretti (42487509),Adam Andretti,42487509,D,6400,Black's Tire 200,Nasca,17.4
-D,Brenden Queen (42487510),Brenden Queen,42487510,D,6300,Black's Tire 200,Nasca,33.11
-D,Michael Christopher Jr (42487511),Michael Christopher Jr,42487511,D,6200,Black's Tire 200,Nasca,0
-D,Luke Baldwin (42487512),Luke Baldwin,42487512,D,6000,Black's Tire 200,Nasca,0
-D,Andres Perez De Lara (42487513),Andres Perez De Lara,42487513,D,5900,Black's Tire 200,Nasca,28.04
-D,Cole Butcher (42487514),Cole Butcher,42487514,D,5800,Black's Tire 200,Nasca,17.98
-D,Dawson Sutton (42487515),Dawson Sutton,42487515,D,5700,Black's Tire 200,Nasca,11.59
-D,Kris Wright (42487516),Kris Wright,42487516,D,5600,Black's Tire 200,Nasca,19.4
-D,Mini Tyrrell (42487517),Mini Tyrrell,42487517,D,5500,Black's Tire 200,Nasca,21.95
-D,Timmy Hill (42487518),Timmy Hill,42487518,D,5400,Black's Tire 200,Nasca,27.38
-D,Spencer Boyd (42487519),Spencer Boyd,42487519,D,5300,Black's Tire 200,Nasca,20.67
-D,Clayton Green (42487520),Clayton Green,42487520,D,5200,Black's Tire 200,Nasca,23
-D,Caleb Costner (42487521),Caleb Costner,42487521,D,5100,Black's Tire 200,Nasca,17
-D,Frankie Muniz (42487522),Frankie Muniz,42487522,D,5000,Black's Tire 200,Nasca,29
-D,Jonathan Shafer (42487523),Jonathan Shafer,42487523,D,4900,Black's Tire 200,Nasca,0
-D,Justin S Carroll (42487524),Justin S Carroll,42487524,D,4800,Black's Tire 200,Nasca,15
+D,Corey Heim (42575174),Corey Heim,42575174,D,11000,Tennessee Army National Guard 250,Nasca,81.75
+D,Kyle Busch (42575175),Kyle Busch,42575175,D,10700,Tennessee Army National Guard 250,Nasca,59.4
+D,Layne Riggs (42575176),Layne Riggs,42575176,D,10500,Tennessee Army National Guard 250,Nasca,39.61
+D,Christopher Bell (42575177),Christopher Bell,42575177,D,10200,Tennessee Army National Guard 250,Nasca,41.3
+D,Chandler Smith (42575178),Chandler Smith,42575178,D,10000,Tennessee Army National Guard 250,Nasca,49.9
+D,Carson Hocevar (42575179),Carson Hocevar,42575179,D,9700,Tennessee Army National Guard 250,Nasca,9.95
+D,Chase Briscoe (42575180),Chase Briscoe,42575180,D,9500,Tennessee Army National Guard 250,Nasca,0
+D,Kaden Honeycutt (42575181),Kaden Honeycutt,42575181,D,9000,Tennessee Army National Guard 250,Nasca,43.17
+D,Ross Chastain (42575182),Ross Chastain,42575182,D,8500,Tennessee Army National Guard 250,Nasca,67.65
+D,Christian Eckes (42575183),Christian Eckes,42575183,D,8300,Tennessee Army National Guard 250,Nasca,35.44
+D,Ty Majeski (42575184),Ty Majeski,42575184,D,8100,Tennessee Army National Guard 250,Nasca,24.87
+D,Ricky Stenhouse Jr (42575185),Ricky Stenhouse Jr,42575185,D,8000,Tennessee Army National Guard 250,Nasca,47.4
+D,Tyler Ankrum (42575186),Tyler Ankrum,42575186,D,7800,Tennessee Army National Guard 250,Nasca,20.14
+D,Daniel Suarez (42575187),Daniel Suarez,42575187,D,7700,Tennessee Army National Guard 250,Nasca,0
+D,Giovanni Ruggiero (42575188),Giovanni Ruggiero,42575188,D,7500,Tennessee Army National Guard 250,Nasca,28.45
+D,Grant Enfinger (42575189),Grant Enfinger,42575189,D,7300,Tennessee Army National Guard 250,Nasca,23.39
+D,Daniel Hemric (42575190),Daniel Hemric,42575190,D,7100,Tennessee Army National Guard 250,Nasca,25.02
+D,Tanner Gray (42575191),Tanner Gray,42575191,D,6900,Tennessee Army National Guard 250,Nasca,15.13
+D,Jake Garcia (42575192),Jake Garcia,42575192,D,6800,Tennessee Army National Guard 250,Nasca,16.11
+D,Stewart Friesen (42575193),Stewart Friesen,42575193,D,6700,Tennessee Army National Guard 250,Nasca,27.71
+D,Ben Rhodes (42575194),Ben Rhodes,42575194,D,6600,Tennessee Army National Guard 250,Nasca,34.18
+D,Corey LaJoie (42575195),Corey LaJoie,42575195,D,6500,Tennessee Army National Guard 250,Nasca,20.67
+D,Justin Haley (42575196),Justin Haley,42575196,D,6400,Tennessee Army National Guard 250,Nasca,34.36
+D,Brenden Queen (42575197),Brenden Queen,42575197,D,6300,Tennessee Army National Guard 250,Nasca,25.89
+D,Andres Perez De Lara (42575198),Andres Perez De Lara,42575198,D,6100,Tennessee Army National Guard 250,Nasca,19.83
+D,Cole Butcher (42575199),Cole Butcher,42575199,D,6000,Tennessee Army National Guard 250,Nasca,19.47
+D,Kris Wright (42575200),Kris Wright,42575200,D,5900,Tennessee Army National Guard 250,Nasca,20.12
+D,Carson Ferguson (42575201),Carson Ferguson,42575201,D,5800,Tennessee Army National Guard 250,Nasca,0
+D,Luke Baldwin (42575202),Luke Baldwin,42575202,D,5700,Tennessee Army National Guard 250,Nasca,19
+D,Tyler Reif (42575203),Tyler Reif,42575203,D,5600,Tennessee Army National Guard 250,Nasca,32.5
+D,Timmy Hill (42575204),Timmy Hill,42575204,D,5500,Tennessee Army National Guard 250,Nasca,21.58
+D,Mini Tyrrell (42575205),Mini Tyrrell,42575205,D,5400,Tennessee Army National Guard 250,Nasca,20.85
+D,Dawson Sutton (42575206),Dawson Sutton,42575206,D,5300,Tennessee Army National Guard 250,Nasca,15.25
+D,Spencer Boyd (42575207),Spencer Boyd,42575207,D,5200,Tennessee Army National Guard 250,Nasca,20.5
+D,Clayton Green (42575208),Clayton Green,42575208,D,5100,Tennessee Army National Guard 250,Nasca,21
+D,Frankie Muniz (42575209),Frankie Muniz,42575209,D,5000,Tennessee Army National Guard 250,Nasca,25

@@ -916,11 +916,13 @@ server <- function(input, output, session) {
   
   # Track pills — grouped by type. Clicking a type header toggles all tracks
   # in that type; clicking an individual track pill toggles just that track.
-  # values$perf_track_types stores individual track_names (not types).
+  # Perf pool track type pills — JS onclick fires single shared inputs
+  # 'perf_type_click' carries the track_type value
+  # 'perf_track_click' carries the track_name value
   output$track_type_pills_ui <- renderUI({
     req(values$analysis_races_available)
     ra    <- values$analysis_races_available
-    active_tracks <- values$perf_track_types   # now stores track names
+    active_tracks <- values$perf_track_types
     
     type_labels <- c(
       short_track   = "Short Track",
@@ -932,46 +934,52 @@ server <- function(input, output, session) {
       other         = "Other"
     )
     
-    types <- sort(unique(ra$track_type[!is.na(ra$track_type)]))
+    types  <- sort(unique(ra$track_type[!is.na(ra$track_type)]))
     
     groups <- lapply(types, function(tt) {
       tracks_in_type <- sort(unique(ra$track_name[ra$track_type == tt & !is.na(ra$track_name)]))
-      all_active  <- all(tracks_in_type %in% active_tracks)
-      type_label  <- if (tt %in% names(type_labels)) type_labels[[tt]] else tt
+      all_active <- all(tracks_in_type %in% active_tracks)
+      type_label <- if (tt %in% names(type_labels)) type_labels[[tt]] else tt
       
-      # Type header pill
-      type_pill <- actionButton(
-        inputId = paste0("typepill_", gsub("[^a-z]", "_", tt)),
-        label   = type_label,
-        style   = paste0(
+      type_js <- sprintf(
+        "Shiny.setInputValue('perf_type_click', '%s', {priority:'event'})", tt)
+      type_pill <- tags$span(
+        onClick = type_js,
+        style = paste0(
+          "display:inline-block;cursor:pointer;user-select:none;",
           "margin:2px;padding:4px 14px;font-size:12px;font-weight:700;border-radius:20px;",
           if (all_active)
-            "background:#FFE500!important;color:#000!important;border:2px solid #FFE500!important;"
+            "background:#FFE500;color:#000;border:2px solid #FFE500;"
           else
-            "background:#2a2a2a!important;color:#888!important;border:2px solid #555!important;"
-        )
+            "background:#2a2a2a;color:#888;border:2px solid #555;"
+        ),
+        type_label
       )
       
-      # Individual track pills
       track_pills <- lapply(tracks_in_type, function(tn) {
         is_active <- tn %in% active_tracks
-        actionButton(
-          inputId = paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn)),
-          label   = tn,
-          style   = paste0(
+        # JSON-encode track name so special chars are safe in JS string
+        tn_safe <- gsub("'", "\\'", tn)
+        track_js <- sprintf(
+          "Shiny.setInputValue('perf_track_click', '%s', {priority:'event'})", tn_safe)
+        tags$span(
+          onClick = track_js,
+          style = paste0(
+            "display:inline-block;cursor:pointer;user-select:none;",
             "margin:2px;padding:3px 10px;font-size:11px;font-weight:500;border-radius:20px;",
             if (is_active)
-              "background:rgba(255,229,0,0.2)!important;color:#FFE500!important;border:1px solid #FFE500!important;"
+              "background:rgba(255,229,0,0.2);color:#FFE500;border:1px solid #FFE500;"
             else
-              "background:#1e1e1e!important;color:#666!important;border:1px solid #3a3a3a!important;"
-          )
+              "background:#1e1e1e;color:#666;border:1px solid #3a3a3a;"
+          ),
+          tn
         )
       })
       
       div(style = "margin-bottom:8px;",
           div(style = "display:flex;flex-wrap:wrap;gap:3px;align-items:center;",
               type_pill,
-              span(style = "color:#444;margin:0 4px;font-size:14px;", "▸"),
+              tags$span(style = "color:#444;margin:0 4px;font-size:14px;", "▸"),
               tagList(track_pills)
           )
       )
@@ -980,43 +988,31 @@ server <- function(input, output, session) {
     tagList(groups)
   })
   
-  # Observer: type header pill toggles all tracks in that type
-  observe({
-    req(values$analysis_races_available)
-    types <- unique(values$analysis_races_available$track_type[
-      !is.na(values$analysis_races_available$track_type)])
-    lapply(types, function(tt) {
-      btn_id <- paste0("typepill_", gsub("[^a-z]", "_", tt))
-      observeEvent(input[[btn_id]], {
-        tracks_in_type <- unique(values$analysis_races_available$track_name[
-          values$analysis_races_available$track_type == tt])
-        current <- values$perf_track_types
-        if (all(tracks_in_type %in% current)) {
-          values$perf_track_types <- setdiff(current, tracks_in_type)
-        } else {
-          values$perf_track_types <- union(current, tracks_in_type)
-        }
-      }, ignoreInit = TRUE)
-    })
-  })
+  # Single observer for type header clicks
+  observeEvent(input$perf_type_click, {
+    tt <- input$perf_type_click
+    req(tt, values$analysis_races_available)
+    tracks_in_type <- unique(values$analysis_races_available$track_name[
+      values$analysis_races_available$track_type == tt])
+    current <- values$perf_track_types
+    if (all(tracks_in_type %in% current)) {
+      values$perf_track_types <- setdiff(current, tracks_in_type)
+    } else {
+      values$perf_track_types <- union(current, tracks_in_type)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
   
-  # Observer: individual track pill toggles one track
-  observe({
-    req(values$analysis_races_available)
-    tracks <- unique(values$analysis_races_available$track_name[
-      !is.na(values$analysis_races_available$track_name)])
-    lapply(tracks, function(tn) {
-      btn_id <- paste0("trackpill_", gsub("[^a-zA-Z0-9]", "_", tn))
-      observeEvent(input[[btn_id]], {
-        current <- values$perf_track_types
-        if (tn %in% current) {
-          values$perf_track_types <- setdiff(current, tn)
-        } else {
-          values$perf_track_types <- c(current, tn)
-        }
-      }, ignoreInit = TRUE)
-    })
-  })
+  # Single observer for individual track clicks
+  observeEvent(input$perf_track_click, {
+    tn <- input$perf_track_click
+    req(tn)
+    current <- values$perf_track_types
+    if (tn %in% current) {
+      values$perf_track_types <- setdiff(current, tn)
+    } else {
+      values$perf_track_types <- c(current, tn)
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
   
   # Season from selector
   output$perf_season_from_ui <- renderUI({
@@ -1422,15 +1418,13 @@ server <- function(input, output, session) {
   observeEvent(input$remove_tier, { values$num_tiers <- max(values$num_tiers - 1, 1) })
   
   finish_rates_data <- reactive({
-    req(values$analysis_filtered_data, performance_race_ids_reactive())
+    req(values$analysis_filtered_data)
     view_sel    <- values$fr_view_sel    %||% "driver"
     seasons_sel <- values$fr_seasons_sel %||% "all"
     
-    # Finish rates always uses the Perf pool
-    data <- values$analysis_filtered_data %>%
-      filter(race_id %in% performance_race_ids_reactive())
+    data <- values$analysis_filtered_data
     
-    # Season pills narrow further within Perf pool
+    # Season filter — multi-select pills
     if (!identical(seasons_sel, "all"))
       data <- data %>% filter(race_season %in% as.integer(seasons_sel))
     
@@ -1701,47 +1695,47 @@ server <- function(input, output, session) {
     if (is.null(grp_order))
       grp_order <- levels(data$Grp)
     
-    # Build x and y formulas dynamically — ~get() doesn't work in plotly
-    x_fml <- as.formula(paste0("~", x_col))
-    
-    hex_to_rgba <- function(hex, alpha = 0.25) {
-      r <- strtoi(substr(hex, 2, 3), 16)
-      g <- strtoi(substr(hex, 4, 5), 16)
-      b <- strtoi(substr(hex, 6, 7), 16)
-      sprintf("rgba(%d,%d,%d,%.2f)", r, g, b, alpha)
-    }
-    
     if (color_by == "none") {
       p <- plot_ly(data = data, type = "box",
-                   y = ~Grp, x = x_fml, orientation = "h",
+                   y = ~Grp, x = ~get(x_col), orientation = "h",
                    marker    = list(color = "#FFE500", opacity = 0.6),
                    line      = list(color = "#D4B000"),
-                   fillcolor = "rgba(255,229,0,0.20)",
+                   fillcolor = "rgba(255,229,0,0.25)",
                    showlegend = FALSE)
     } else {
-      grp_vals <- sort(unique(as.character(data[[color_by]])))
-      # Cycle through palette — first entry stays gold
-      pal <- group_palette
+      grp_vals  <- sort(unique(as.character(data[[color_by]])))
       color_map <- setNames(
-        pal[((seq_along(grp_vals) - 1) %% length(pal)) + 1],
+        group_palette[seq_along(grp_vals) %% length(group_palette) + 1],
         grp_vals)
-      
+      traces <- lapply(grp_vals, function(gv) {
+        sub <- data %>% filter(as.character(.data[[color_by]]) == gv)
+        hex <- color_map[[gv]]
+        # convert hex to rgba for fill
+        r <- strtoi(substr(hex,2,3),16)
+        g <- strtoi(substr(hex,4,5),16)
+        b <- strtoi(substr(hex,6,7),16)
+        fill_rgba <- sprintf("rgba(%d,%d,%d,0.25)", r, g, b)
+        plot_ly(data = sub, type = "box",
+                y = ~Grp, x = ~get(x_col), orientation = "h",
+                name      = gv,
+                marker    = list(color = hex, opacity = 0.7),
+                line      = list(color = hex),
+                fillcolor = fill_rgba)
+      })
+      p <- do.call(subplot, c(traces, list(shareX = TRUE, shareY = TRUE, nrows = 1)))
+      # rebuild as overlay — subplot doesn't give us what we want; use add_trace
       p <- plot_ly()
       for (gv in grp_vals) {
-        sub <- data[as.character(data[[color_by]]) == gv, , drop = FALSE]
-        if (nrow(sub) == 0) next
+        sub <- data %>% filter(as.character(.data[[color_by]]) == gv)
         hex <- color_map[[gv]]
-        p <- p %>% add_trace(
-          data      = sub,
-          type      = "box",
-          y         = ~Grp,
-          x         = x_fml,
-          orientation = "h",
-          name      = as.character(gv),
-          marker    = list(color = hex, opacity = 0.8),
-          line      = list(color = hex, width = 1.5),
-          fillcolor = hex_to_rgba(hex, 0.20),
-          boxmean   = FALSE)
+        r <- strtoi(substr(hex,2,3),16); g <- strtoi(substr(hex,4,5),16); b <- strtoi(substr(hex,6,7),16)
+        fill_rgba <- sprintf("rgba(%d,%d,%d,0.25)", r, g, b)
+        p <- p %>% add_trace(data = sub, type = "box",
+                             y = ~Grp, x = ~get(x_col), orientation = "h",
+                             name      = gv,
+                             marker    = list(color = hex, opacity = 0.7),
+                             line      = list(color = hex),
+                             fillcolor = fill_rgba)
       }
     }
     
@@ -1749,24 +1743,22 @@ server <- function(input, output, session) {
                         track_type   = "Track Type",
                         race_season  = "Season",
                         track_name   = "Track",
-                        "")
+                        NULL)
     
     p %>% layout(
-      title     = list(text = title_txt, font = list(size = 18, color = "#FFE500")),
-      boxmode   = "group",
-      xaxis     = list(title = x_label, color = "#ffffff",
-                       gridcolor = "#404040", zerolinecolor = "#555555"),
-      yaxis     = list(title = "", color = "#ffffff",
-                       categoryorder = "array",
-                       categoryarray = rev(grp_order)),
-      legend    = list(title = list(text = col_label, font = list(color = "#FFE500")),
-                       font  = list(color = "#ffffff"),
-                       bgcolor = "rgba(30,30,30,0.8)",
-                       bordercolor = "#444", borderwidth = 1),
-      paper_bgcolor = "#1e1e1e", plot_bgcolor  = "#1e1e1e",
-      font      = list(color = "#ffffff"),
-      height    = 900,
-      margin    = list(l = margin_l, r = 20, t = 50, b = 40))
+      title       = list(text = title_txt, font = list(size = 18, color = "#FFE500")),
+      boxmode     = "overlay",
+      xaxis       = list(title = x_label, color = "#ffffff", gridcolor = "#404040",
+                         zerolinecolor = "#555555"),
+      yaxis       = list(title = "", color = "#ffffff",
+                         categoryorder = "array", categoryarray = rev(grp_order)),
+      legend      = list(title = list(text = col_label),
+                         font = list(color = "#ffffff"),
+                         bgcolor = "rgba(0,0,0,0)"),
+      paper_bgcolor = "#1e1e1e", plot_bgcolor = "#1e1e1e",
+      font        = list(color = "#ffffff"),
+      height      = 900,
+      margin      = list(l = margin_l, r = 20, t = 50, b = 40))
   }
   
   output$dominator_plot <- renderPlotly({

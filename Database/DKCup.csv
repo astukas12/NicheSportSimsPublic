@@ -1,38 +1,39 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Denny Hamlin (42404449),Denny Hamlin,42404449,D,11000,Cook Out 400,Nasca,43.93
-D,Ryan Blaney (42404450),Ryan Blaney,42404450,D,10700,Cook Out 400,Nasca,43.24
-D,Kyle Larson (42404451),Kyle Larson,42404451,D,10500,Cook Out 400,Nasca,30.69
-D,Christopher Bell (42404452),Christopher Bell,42404452,D,10200,Cook Out 400,Nasca,46.52
-D,William Byron (42404453),William Byron,42404453,D,10000,Cook Out 400,Nasca,38.01
-D,Chase Elliott (42404454),Chase Elliott,42404454,D,9700,Cook Out 400,Nasca,35.02
-D,Tyler Reddick (42404455),Tyler Reddick,42404455,D,9500,Cook Out 400,Nasca,52.08
-D,Chase Briscoe (42404456),Chase Briscoe,42404456,D,9200,Cook Out 400,Nasca,24.35
-D,Joey Logano (42404457),Joey Logano,42404457,D,9000,Cook Out 400,Nasca,28.59
-D,Ty Gibbs (42404458),Ty Gibbs,42404458,D,8500,Cook Out 400,Nasca,34.26
-D,Bubba Wallace (42404459),Bubba Wallace,42404459,D,8300,Cook Out 400,Nasca,32.67
-D,Ryan Preece (42404460),Ryan Preece,42404460,D,8100,Cook Out 400,Nasca,40.76
-D,Chris Buescher (42404461),Chris Buescher,42404461,D,8000,Cook Out 400,Nasca,32.98
-D,Brad Keselowski (42404462),Brad Keselowski,42404462,D,7800,Cook Out 400,Nasca,48.96
-D,Josh Berry (42404463),Josh Berry,42404463,D,7500,Cook Out 400,Nasca,19.09
-D,Ross Chastain (42404464),Ross Chastain,42404464,D,7300,Cook Out 400,Nasca,24.79
-D,Carson Hocevar (42404465),Carson Hocevar,42404465,D,7200,Cook Out 400,Nasca,30.28
-D,Kyle Busch (42404466),Kyle Busch,42404466,D,7000,Cook Out 400,Nasca,17.88
-D,Austin Cindric (42404467),Austin Cindric,42404467,D,6900,Cook Out 400,Nasca,17.86
-D,Justin Allgaier (42404468),Justin Allgaier,42404468,D,6800,Cook Out 400,Nasca,14.8
-D,Daniel Suarez (42404469),Daniel Suarez,42404469,D,6700,Cook Out 400,Nasca,32.38
-D,AJ Allmendinger (42404470),AJ Allmendinger,42404470,D,6500,Cook Out 400,Nasca,30.57
-D,Connor Zilisch (42404471),Connor Zilisch,42404471,D,6400,Cook Out 400,Nasca,20.24
-D,Erik Jones (42404472),Erik Jones,42404472,D,6300,Cook Out 400,Nasca,29.85
-D,Michael McDowell (42404473),Michael McDowell,42404473,D,6200,Cook Out 400,Nasca,30.85
-D,John H. Nemechek (42404474),John H. Nemechek,42404474,D,6100,Cook Out 400,Nasca,23.7
-D,Shane Van Gisbergen (42404475),Shane Van Gisbergen,42404475,D,6000,Cook Out 400,Nasca,33.38
-D,Noah Gragson (42404476),Noah Gragson,42404476,D,5900,Cook Out 400,Nasca,28.06
-D,Zane Smith (42404477),Zane Smith,42404477,D,5800,Cook Out 400,Nasca,24.88
-D,Todd Gilliland (42404478),Todd Gilliland,42404478,D,5700,Cook Out 400,Nasca,21.97
-D,Austin Dillon (42404479),Austin Dillon,42404479,D,5600,Cook Out 400,Nasca,24.37
-D,Ricky Stenhouse Jr (42404480),Ricky Stenhouse Jr,42404480,D,5500,Cook Out 400,Nasca,18.71
-D,Austin Hill (42404481),Austin Hill,42404481,D,5300,Cook Out 400,Nasca,27
-D,Cole Custer (42404482),Cole Custer,42404482,D,5100,Cook Out 400,Nasca,19.47
-D,Ty Dillon (42404483),Ty Dillon,42404483,D,5000,Cook Out 400,Nasca,28.09
-D,Riley Herbst (42404484),Riley Herbst,42404484,D,4900,Cook Out 400,Nasca,19.3
-D,Cody Ware (42404485),Cody Ware,42404485,D,4800,Cook Out 400,Nasca,19.02
+D,Kyle Larson (42575396),Kyle Larson,42575396,D,11500,Food City 500,Nasca,32.17
+D,Denny Hamlin (42575397),Denny Hamlin,42575397,D,11000,Food City 500,Nasca,55.82
+D,Ryan Blaney (42575398),Ryan Blaney,42575398,D,10700,Food City 500,Nasca,44.58
+D,Christopher Bell (42575399),Christopher Bell,42575399,D,10500,Food City 500,Nasca,46.11
+D,William Byron (42575400),William Byron,42575400,D,10000,Food City 500,Nasca,38.61
+D,Chase Elliott (42575401),Chase Elliott,42575401,D,9700,Food City 500,Nasca,40.76
+D,Ty Gibbs (42575402),Ty Gibbs,42575402,D,9500,Food City 500,Nasca,36
+D,Joey Logano (42575403),Joey Logano,42575403,D,9200,Food City 500,Nasca,31.64
+D,Chase Briscoe (42575404),Chase Briscoe,42575404,D,8900,Food City 500,Nasca,26.31
+D,Brad Keselowski (42575405),Brad Keselowski,42575405,D,8700,Food City 500,Nasca,48.24
+D,Tyler Reddick (42575406),Tyler Reddick,42575406,D,8500,Food City 500,Nasca,49.18
+D,Chris Buescher (42575407),Chris Buescher,42575407,D,8200,Food City 500,Nasca,33
+D,Carson Hocevar (42575408),Carson Hocevar,42575408,D,8000,Food City 500,Nasca,28.69
+D,Kyle Busch (42575409),Kyle Busch,42575409,D,7800,Food City 500,Nasca,19.01
+D,Ross Chastain (42575410),Ross Chastain,42575410,D,7600,Food City 500,Nasca,25.69
+D,Ryan Preece (42575411),Ryan Preece,42575411,D,7500,Food City 500,Nasca,40.53
+D,Bubba Wallace (42575412),Bubba Wallace,42575412,D,7300,Food City 500,Nasca,27.26
+D,Austin Cindric (42575413),Austin Cindric,42575413,D,7200,Food City 500,Nasca,20.91
+D,Josh Berry (42575414),Josh Berry,42575414,D,7100,Food City 500,Nasca,20.98
+D,Alex Bowman (42589024),Alex Bowman,42589024,D,7000,Food City 500,Nasca,15.7
+D,Connor Zilisch (42575415),Connor Zilisch,42575415,D,6900,Food City 500,Nasca,19.96
+D,Justin Allgaier (42575416),Justin Allgaier,42575416,D,6800,Food City 500,Nasca,15.73
+D,AJ Allmendinger (42575417),AJ Allmendinger,42575417,D,6600,Food City 500,Nasca,28.92
+D,Michael McDowell (42575418),Michael McDowell,42575418,D,6500,Food City 500,Nasca,30.42
+D,Erik Jones (42575419),Erik Jones,42575419,D,6300,Food City 500,Nasca,28.49
+D,Daniel Suarez (42575420),Daniel Suarez,42575420,D,6200,Food City 500,Nasca,31.71
+D,Zane Smith (42575421),Zane Smith,42575421,D,6100,Food City 500,Nasca,20.14
+D,John H. Nemechek (42575422),John H. Nemechek,42575422,D,6000,Food City 500,Nasca,23.02
+D,Shane Van Gisbergen (42575423),Shane Van Gisbergen,42575423,D,5900,Food City 500,Nasca,33.16
+D,Austin Dillon (42575424),Austin Dillon,42575424,D,5800,Food City 500,Nasca,24.11
+D,Noah Gragson (42575425),Noah Gragson,42575425,D,5600,Food City 500,Nasca,26.74
+D,Ricky Stenhouse Jr (42575426),Ricky Stenhouse Jr,42575426,D,5500,Food City 500,Nasca,18.24
+D,Todd Gilliland (42575427),Todd Gilliland,42575427,D,5300,Food City 500,Nasca,22.63
+D,Cole Custer (42575428),Cole Custer,42575428,D,5100,Food City 500,Nasca,17.52
+D,Ty Dillon (42575429),Ty Dillon,42575429,D,5000,Food City 500,Nasca,24.95
+D,Riley Herbst (42575430),Riley Herbst,42575430,D,4900,Food City 500,Nasca,16.51
+D,Cody Ware (42575431),Cody Ware,42575431,D,4700,Food City 500,Nasca,18.14
+D,Chad Finchum (42575432),Chad Finchum,42575432,D,4500,Food City 500,Nasca,0
