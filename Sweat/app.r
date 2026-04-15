@@ -492,6 +492,7 @@ server <- function(input, output, session) {
     switch(rv$sport,
            "CBB"    = 8L,
            "CBB-SD" = 6L,
+           "NBA"    = 8L,
            "NASCAR" = 6L,
            "F1"     = 6L,
            "MMA"    = 6L,
@@ -553,6 +554,22 @@ server <- function(input, output, session) {
         rest <- sub("^CPT ", "", lineup)
         parts <- unlist(strsplit(rest, " UTIL ", fixed = TRUE))
         players <- trimws(parts)
+      } else if (grepl(" UTIL ", lineup, fixed = TRUE) && grepl(" PF ", lineup, fixed = TRUE)) {
+        # NBA Classic: C <n> F <n> G <n> PF <n> PG <n> SF <n> SG <n> UTIL <n>
+        raw <- lineup
+        raw <- gsub(" PG ",   "|", raw, fixed = TRUE)
+        raw <- gsub(" SG ",   "|", raw, fixed = TRUE)
+        raw <- gsub(" SF ",   "|", raw, fixed = TRUE)
+        raw <- gsub(" PF ",   "|", raw, fixed = TRUE)
+        raw <- gsub(" UTIL ", "|", raw, fixed = TRUE)
+        raw <- gsub(" UTIL$", "|", raw)
+        raw <- gsub(" F ",    "|", raw, fixed = TRUE)
+        raw <- gsub(" G ",    "|", raw, fixed = TRUE)
+        raw <- sub("^C ",     "", raw)
+        raw <- sub("^F ",     "", raw)
+        raw <- sub("^G ",     "", raw)
+        players <- trimws(unlist(strsplit(raw, "|", fixed = TRUE)))
+        players <- players[nzchar(players) & players != "LOCKED"]
       } else if (grepl(" UTIL ", lineup, fixed = TRUE) || grepl(" UTIL$", lineup)) {
         # CBB: F p F p F p G p G p G p UTIL p UTIL p
         # Replace all position separators with a pipe then split
@@ -646,6 +663,18 @@ server <- function(input, output, session) {
       grep("^UTIL[0-9]+$", df_names, value = TRUE)
     )
     if (length(cbb_cols) > 0) return(cbb_cols)
+    # NBA sim: PG1, SG1, SF1, PF1, C1, F1, G1, UTIL1
+    nba_cols <- c(
+      grep("^PG[0-9]+$",   df_names, value = TRUE),
+      grep("^SG[0-9]+$",   df_names, value = TRUE),
+      grep("^SF[0-9]+$",   df_names, value = TRUE),
+      grep("^PF[0-9]+$",   df_names, value = TRUE),
+      grep("^C[0-9]+$",    df_names, value = TRUE),
+      grep("^F[0-9]+$",    df_names, value = TRUE),
+      grep("^G[0-9]+$",    df_names, value = TRUE),
+      grep("^UTIL[0-9]+$", df_names, value = TRUE)
+    )
+    if (length(nba_cols) > 0) return(unique(nba_cols))
     # Classic: Player[0-9], Driver[0-9], Golfer[0-9]
     grep("^(Player|Driver|Golfer)[0-9]", df_names, value = TRUE)
   }
@@ -659,12 +688,18 @@ server <- function(input, output, session) {
     # CBB: F, G, UTIL separators
     lineup <- gsub(" UTIL ", " | ", lineup, fixed = TRUE)
     lineup <- gsub("^UTIL ", "", lineup)
+    # NBA: PG, SG, SF, PF position separators (before generic G/F)
+    lineup <- gsub(" PG ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" SG ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" SF ", " | ", lineup, fixed = TRUE)
+    lineup <- gsub(" PF ", " | ", lineup, fixed = TRUE)
     # Remove other sport prefixes
     lineup <- gsub(" G ", " | ", lineup, fixed = TRUE)
     lineup <- gsub(" F ", " | ", lineup, fixed = TRUE)
     lineup <- gsub(" P ", " | ", lineup, fixed = TRUE)
     lineup <- gsub("^G ", "", lineup)
     lineup <- gsub("^F ", "", lineup)
+    lineup <- gsub("^C ", "", lineup)
     lineup <- gsub("^P ", "", lineup)
     return(lineup)
   }
@@ -699,6 +734,9 @@ server <- function(input, output, session) {
           rv$sport <- "CBB-SD"
         } else if (grepl("^CPT ", sample_lineup)) {
           rv$sport <- "MMA-SD"
+        } else if (grepl(" UTIL ", sample_lineup, fixed = TRUE) && grepl(" PF ", sample_lineup, fixed = TRUE)) {
+          # NBA Classic: C <n> F <n> G <n> PF <n> PG <n> SF <n> SG <n> UTIL <n>
+          rv$sport <- "NBA"
         } else if (grepl(" UTIL ", sample_lineup, fixed = TRUE) || grepl(" UTIL$", sample_lineup)) {
           rv$sport <- "CBB"
         } else if (grepl(" F ", sample_lineup, fixed = TRUE)) {
@@ -844,15 +882,15 @@ server <- function(input, output, session) {
             } else {
               rv$player_scores <- util_data[, .(FPTS = max(FPTS, na.rm = TRUE)), by = Player]
             }
-            # For CBB: players appear under F, G, UTIL positions — sum %Drafted for total ownership
-          } else if (rv$sport == "CBB" && "RosterPosition" %in% names(player_data)) {
+            # For CBB/NBA: players appear under multiple position rows — sum %Drafted for total ownership
+          } else if (rv$sport %in% c("CBB", "NBA") && "RosterPosition" %in% names(player_data)) {
             rv$cpt_score_lookup  <- NULL
             rv$util_score_lookup <- NULL
             
             if ("FieldExp" %in% names(player_data)) {
               rv$player_scores <- player_data[, .(
                 FPTS     = max(FPTS, na.rm = TRUE),
-                FieldExp = sum(FieldExp, na.rm = TRUE)  # sum across F/G/UTIL rows
+                FieldExp = sum(FieldExp, na.rm = TRUE)  # sum across all position rows
               ), by = Player]
             } else {
               rv$player_scores <- player_data[, .(
@@ -904,7 +942,7 @@ server <- function(input, output, session) {
         
         # Simple filtering - much faster than multiple passes
         usernames <- usernames[
-          !grepl("^F |^D |^CNSTR |^G |^CPT |^P ", usernames) &  # Not lineup data
+          !grepl("^F |^D |^CNSTR |^G |^CPT |^P |^C ", usernames) &  # Not lineup data
             !is.na(usernames) &              # Not NA
             nzchar(usernames)                # Not empty
         ]
@@ -955,6 +993,18 @@ server <- function(input, output, session) {
           cbb_f    <- grep("^F[0-9]+$",    names(sim_raw), value = TRUE)
           cbb_util <- grep("^UTIL[0-9]+$", names(sim_raw), value = TRUE)
           player_cols <- c(cbb_g, cbb_f, cbb_util)
+        }
+        # NBA sim format: PG1, SG1, SF1, PF1, C1, F1, G1, UTIL1
+        if (length(player_cols) == 0 && isolate(rv$sport) == "NBA") {
+          nba_pg   <- grep("^PG[0-9]+$",   names(sim_raw), value = TRUE)
+          nba_sg   <- grep("^SG[0-9]+$",   names(sim_raw), value = TRUE)
+          nba_sf   <- grep("^SF[0-9]+$",   names(sim_raw), value = TRUE)
+          nba_pf   <- grep("^PF[0-9]+$",   names(sim_raw), value = TRUE)
+          nba_c    <- grep("^C[0-9]+$",    names(sim_raw), value = TRUE)
+          nba_f    <- grep("^F[0-9]+$",    names(sim_raw), value = TRUE)
+          nba_g    <- grep("^G[0-9]+$",    names(sim_raw), value = TRUE)
+          nba_util <- grep("^UTIL[0-9]+$", names(sim_raw), value = TRUE)
+          player_cols <- unique(c(nba_pg, nba_sg, nba_sf, nba_pf, nba_c, nba_f, nba_g, nba_util))
         }
         
         # MMA-SD: detect Captain + Util columns
