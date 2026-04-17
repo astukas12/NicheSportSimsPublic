@@ -1,39 +1,38 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Kyle Larson (42575396),Kyle Larson,42575396,D,11500,Food City 500,Nasca,32.17
-D,Denny Hamlin (42575397),Denny Hamlin,42575397,D,11000,Food City 500,Nasca,55.82
-D,Ryan Blaney (42575398),Ryan Blaney,42575398,D,10700,Food City 500,Nasca,44.58
-D,Christopher Bell (42575399),Christopher Bell,42575399,D,10500,Food City 500,Nasca,46.11
-D,William Byron (42575400),William Byron,42575400,D,10000,Food City 500,Nasca,38.61
-D,Chase Elliott (42575401),Chase Elliott,42575401,D,9700,Food City 500,Nasca,40.76
-D,Ty Gibbs (42575402),Ty Gibbs,42575402,D,9500,Food City 500,Nasca,36
-D,Joey Logano (42575403),Joey Logano,42575403,D,9200,Food City 500,Nasca,31.64
-D,Chase Briscoe (42575404),Chase Briscoe,42575404,D,8900,Food City 500,Nasca,26.31
-D,Brad Keselowski (42575405),Brad Keselowski,42575405,D,8700,Food City 500,Nasca,48.24
-D,Tyler Reddick (42575406),Tyler Reddick,42575406,D,8500,Food City 500,Nasca,49.18
-D,Chris Buescher (42575407),Chris Buescher,42575407,D,8200,Food City 500,Nasca,33
-D,Carson Hocevar (42575408),Carson Hocevar,42575408,D,8000,Food City 500,Nasca,28.69
-D,Kyle Busch (42575409),Kyle Busch,42575409,D,7800,Food City 500,Nasca,19.01
-D,Ross Chastain (42575410),Ross Chastain,42575410,D,7600,Food City 500,Nasca,25.69
-D,Ryan Preece (42575411),Ryan Preece,42575411,D,7500,Food City 500,Nasca,40.53
-D,Bubba Wallace (42575412),Bubba Wallace,42575412,D,7300,Food City 500,Nasca,27.26
-D,Austin Cindric (42575413),Austin Cindric,42575413,D,7200,Food City 500,Nasca,20.91
-D,Josh Berry (42575414),Josh Berry,42575414,D,7100,Food City 500,Nasca,20.98
-D,Alex Bowman (42589024),Alex Bowman,42589024,D,7000,Food City 500,Nasca,15.7
-D,Connor Zilisch (42575415),Connor Zilisch,42575415,D,6900,Food City 500,Nasca,19.96
-D,Justin Allgaier (42575416),Justin Allgaier,42575416,D,6800,Food City 500,Nasca,15.73
-D,AJ Allmendinger (42575417),AJ Allmendinger,42575417,D,6600,Food City 500,Nasca,28.92
-D,Michael McDowell (42575418),Michael McDowell,42575418,D,6500,Food City 500,Nasca,30.42
-D,Erik Jones (42575419),Erik Jones,42575419,D,6300,Food City 500,Nasca,28.49
-D,Daniel Suarez (42575420),Daniel Suarez,42575420,D,6200,Food City 500,Nasca,31.71
-D,Zane Smith (42575421),Zane Smith,42575421,D,6100,Food City 500,Nasca,20.14
-D,John H. Nemechek (42575422),John H. Nemechek,42575422,D,6000,Food City 500,Nasca,23.02
-D,Shane Van Gisbergen (42575423),Shane Van Gisbergen,42575423,D,5900,Food City 500,Nasca,33.16
-D,Austin Dillon (42575424),Austin Dillon,42575424,D,5800,Food City 500,Nasca,24.11
-D,Noah Gragson (42575425),Noah Gragson,42575425,D,5600,Food City 500,Nasca,26.74
-D,Ricky Stenhouse Jr (42575426),Ricky Stenhouse Jr,42575426,D,5500,Food City 500,Nasca,18.24
-D,Todd Gilliland (42575427),Todd Gilliland,42575427,D,5300,Food City 500,Nasca,22.63
-D,Cole Custer (42575428),Cole Custer,42575428,D,5100,Food City 500,Nasca,17.52
-D,Ty Dillon (42575429),Ty Dillon,42575429,D,5000,Food City 500,Nasca,24.95
-D,Riley Herbst (42575430),Riley Herbst,42575430,D,4900,Food City 500,Nasca,16.51
-D,Cody Ware (42575431),Cody Ware,42575431,D,4700,Food City 500,Nasca,18.14
-D,Chad Finchum (42575432),Chad Finchum,42575432,D,4500,Food City 500,Nasca,0
+D,Denny Hamlin (42657720),Denny Hamlin,42657720,D,11000,AdventHealth 400,Nasca,54.79
+D,Christopher Bell (42657721),Christopher Bell,42657721,D,10700,AdventHealth 400,Nasca,42.56
+D,Kyle Larson (42657722),Kyle Larson,42657722,D,10500,AdventHealth 400,Nasca,44.02
+D,Ryan Blaney (42657723),Ryan Blaney,42657723,D,10200,AdventHealth 400,Nasca,54.28
+D,William Byron (42657724),William Byron,42657724,D,10000,AdventHealth 400,Nasca,36.34
+D,Chase Briscoe (42657725),Chase Briscoe,42657725,D,9800,AdventHealth 400,Nasca,28.37
+D,Tyler Reddick (42657726),Tyler Reddick,42657726,D,9500,AdventHealth 400,Nasca,48.78
+D,Ty Gibbs (42657727),Ty Gibbs,42657727,D,9200,AdventHealth 400,Nasca,39.5
+D,Chase Elliott (42657728),Chase Elliott,42657728,D,9000,AdventHealth 400,Nasca,38.52
+D,Joey Logano (42657729),Joey Logano,42657729,D,8700,AdventHealth 400,Nasca,33.56
+D,Bubba Wallace (42657730),Bubba Wallace,42657730,D,8500,AdventHealth 400,Nasca,28.06
+D,Chris Buescher (42657731),Chris Buescher,42657731,D,8300,AdventHealth 400,Nasca,32.37
+D,Ross Chastain (42657732),Ross Chastain,42657732,D,8100,AdventHealth 400,Nasca,24.3
+D,Brad Keselowski (42657733),Brad Keselowski,42657733,D,7900,AdventHealth 400,Nasca,47.53
+D,Carson Hocevar (42657734),Carson Hocevar,42657734,D,7700,AdventHealth 400,Nasca,30.12
+D,Alex Bowman (42657735),Alex Bowman,42657735,D,7600,AdventHealth 400,Nasca,12.08
+D,Ryan Preece (42657736),Ryan Preece,42657736,D,7500,AdventHealth 400,Nasca,41.65
+D,Kyle Busch (42657737),Kyle Busch,42657737,D,7300,AdventHealth 400,Nasca,19.25
+D,Austin Cindric (42657738),Austin Cindric,42657738,D,7200,AdventHealth 400,Nasca,21.04
+D,Josh Berry (42657739),Josh Berry,42657739,D,7000,AdventHealth 400,Nasca,19.35
+D,Corey Heim (42657740),Corey Heim,42657740,D,6900,AdventHealth 400,Nasca,18.62
+D,Connor Zilisch (42657741),Connor Zilisch,42657741,D,6800,AdventHealth 400,Nasca,18.06
+D,Daniel Suarez (42657742),Daniel Suarez,42657742,D,6700,AdventHealth 400,Nasca,31.74
+D,Erik Jones (42657743),Erik Jones,42657743,D,6600,AdventHealth 400,Nasca,28.04
+D,Zane Smith (42657744),Zane Smith,42657744,D,6500,AdventHealth 400,Nasca,20.23
+D,Shane Van Gisbergen (42657745),Shane Van Gisbergen,42657745,D,6400,AdventHealth 400,Nasca,30.49
+D,Michael McDowell (42657746),Michael McDowell,42657746,D,6200,AdventHealth 400,Nasca,28.49
+D,AJ Allmendinger (42657747),AJ Allmendinger,42657747,D,6100,AdventHealth 400,Nasca,29.99
+D,John H. Nemechek (42657748),John H. Nemechek,42657748,D,6000,AdventHealth 400,Nasca,20.83
+D,Todd Gilliland (42657749),Todd Gilliland,42657749,D,5800,AdventHealth 400,Nasca,28.06
+D,Austin Dillon (42657750),Austin Dillon,42657750,D,5700,AdventHealth 400,Nasca,24.8
+D,Ricky Stenhouse Jr (42657751),Ricky Stenhouse Jr,42657751,D,5600,AdventHealth 400,Nasca,19.97
+D,Noah Gragson (42657752),Noah Gragson,42657752,D,5400,AdventHealth 400,Nasca,24.53
+D,Riley Herbst (42657753),Riley Herbst,42657753,D,5200,AdventHealth 400,Nasca,15.47
+D,Cole Custer (42657754),Cole Custer,42657754,D,5100,AdventHealth 400,Nasca,17.36
+D,Ty Dillon (42657755),Ty Dillon,42657755,D,5000,AdventHealth 400,Nasca,23.96
+D,Cody Ware (42657756),Cody Ware,42657756,D,4800,AdventHealth 400,Nasca,17.79
