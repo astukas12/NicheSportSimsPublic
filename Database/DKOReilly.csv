@@ -1,38 +1,39 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,William Byron (42657880),William Byron,42657880,D,12500,Kansas Lottery 300,Nasca,24.8
-D,Justin Allgaier (42657881),Justin Allgaier,42657881,D,12000,Kansas Lottery 300,Nasca,53.91
-D,Brandon Jones (42657882),Brandon Jones,42657882,D,10500,Kansas Lottery 300,Nasca,25.26
-D,Brent Crews (42657883),Brent Crews,42657883,D,10000,Kansas Lottery 300,Nasca,34.28
-D,Sheldon Creed (42657884),Sheldon Creed,42657884,D,9500,Kansas Lottery 300,Nasca,41.27
-D,Carson Kvapil (42657885),Carson Kvapil,42657885,D,9200,Kansas Lottery 300,Nasca,28.87
-D,Sam Mayer (42657886),Sam Mayer,42657886,D,9000,Kansas Lottery 300,Nasca,12.4
-D,Corey Day (42657887),Corey Day,42657887,D,8700,Kansas Lottery 300,Nasca,43.07
-D,Jesse Love (42657888),Jesse Love,42657888,D,8500,Kansas Lottery 300,Nasca,41.44
-D,Taylor Gray (42657889),Taylor Gray,42657889,D,8400,Kansas Lottery 300,Nasca,21.2
-D,Austin Hill (42657890),Austin Hill,42657890,D,8200,Kansas Lottery 300,Nasca,36.86
-D,Sammy Smith (42657891),Sammy Smith,42657891,D,8000,Kansas Lottery 300,Nasca,38.09
-D,William Sawalich (42657892),William Sawalich,42657892,D,7800,Kansas Lottery 300,Nasca,26.33
-D,Harrison Burton (42657893),Harrison Burton,42657893,D,7700,Kansas Lottery 300,Nasca,15.11
-D,Cole Custer (42657894),Cole Custer,42657894,D,7500,Kansas Lottery 300,Nasca,23.45
-D,Parker Retzlaff (42657895),Parker Retzlaff,42657895,D,7400,Kansas Lottery 300,Nasca,37.04
-D,Ryan Sieg (42657896),Ryan Sieg,42657896,D,7200,Kansas Lottery 300,Nasca,27.03
-D,Rajah Caruth (42657897),Rajah Caruth,42657897,D,7000,Kansas Lottery 300,Nasca,29.43
-D,Anthony Alfredo (42657898),Anthony Alfredo,42657898,D,6900,Kansas Lottery 300,Nasca,19.8
-D,Dean Thompson (42657899),Dean Thompson,42657899,D,6700,Kansas Lottery 300,Nasca,19.01
-D,Jeremy Clements (42657900),Jeremy Clements,42657900,D,6600,Kansas Lottery 300,Nasca,16.96
-D,Jeb Burton (42657901),Jeb Burton,42657901,D,6500,Kansas Lottery 300,Nasca,24.27
-D,Brennan Poole (42657902),Brennan Poole,42657902,D,6300,Kansas Lottery 300,Nasca,32.04
-D,Kyle Sieg (42657903),Kyle Sieg,42657903,D,6200,Kansas Lottery 300,Nasca,11.21
-D,Patrick Staropoli (42657904),Patrick Staropoli,42657904,D,6100,Kansas Lottery 300,Nasca,21.47
-D,Austin Green (42657905),Austin Green,42657905,D,6000,Kansas Lottery 300,Nasca,12.5
-D,Blaine Perkins (42657906),Blaine Perkins,42657906,D,5900,Kansas Lottery 300,Nasca,22.88
-D,Ryan Ellis (42657907),Ryan Ellis,42657907,D,5800,Kansas Lottery 300,Nasca,19.45
-D,Luke Baldwin (42657908),Luke Baldwin,42657908,D,5700,Kansas Lottery 300,Nasca,-6
-D,Josh Williams (42657909),Josh Williams,42657909,D,5500,Kansas Lottery 300,Nasca,17.11
-D,Nick Leitz (42657910),Nick Leitz,42657910,D,5400,Kansas Lottery 300,Nasca,45
-D,Josh Bilicki (42657911),Josh Bilicki,42657911,D,5300,Kansas Lottery 300,Nasca,20.77
-D,Lavar Scott (42657912),Lavar Scott,42657912,D,5200,Kansas Lottery 300,Nasca,21.34
-D,Mason Maggio (42657913),Mason Maggio,42657913,D,5100,Kansas Lottery 300,Nasca,6
-D,Joey Gase (42657914),Joey Gase,42657914,D,5000,Kansas Lottery 300,Nasca,17.43
-D,Dawson Cram (42657915),Dawson Cram,42657915,D,4900,Kansas Lottery 300,Nasca,5
-D,Blake Lothian (42657916),Blake Lothian,42657916,D,4800,Kansas Lottery 300,Nasca,14.5
+D,Kyle Larson (42936024),Kyle Larson,42936024,D,16000,Andy's Frozen Custard 340,Nasca,95.45
+D,Justin Allgaier (42936025),Justin Allgaier,42936025,D,12000,Andy's Frozen Custard 340,Nasca,48.72
+D,Connor Zilisch (42936026),Connor Zilisch,42936026,D,11000,Andy's Frozen Custard 340,Nasca,45.05
+D,Jesse Love (42936027),Jesse Love,42936027,D,10000,Andy's Frozen Custard 340,Nasca,41.89
+D,Sheldon Creed (42936028),Sheldon Creed,42936028,D,9700,Andy's Frozen Custard 340,Nasca,43.87
+D,Brandon Jones (42936029),Brandon Jones,42936029,D,9500,Andy's Frozen Custard 340,Nasca,32.56
+D,Brent Crews (42936030),Brent Crews,42936030,D,9200,Andy's Frozen Custard 340,Nasca,39.18
+D,Carson Kvapil (42936031),Carson Kvapil,42936031,D,9000,Andy's Frozen Custard 340,Nasca,21.84
+D,Corey Day (42936032),Corey Day,42936032,D,8700,Andy's Frozen Custard 340,Nasca,44.36
+D,Taylor Gray (42936033),Taylor Gray,42936033,D,8500,Andy's Frozen Custard 340,Nasca,24.84
+D,Austin Hill (42936034),Austin Hill,42936034,D,8200,Andy's Frozen Custard 340,Nasca,31.26
+D,Sam Mayer (42936035),Sam Mayer,42936035,D,8000,Andy's Frozen Custard 340,Nasca,14.04
+D,Sammy Smith (42936036),Sammy Smith,42936036,D,7800,Andy's Frozen Custard 340,Nasca,37.96
+D,Ryan Sieg (42936037),Ryan Sieg,42936037,D,7500,Andy's Frozen Custard 340,Nasca,26.8
+D,Austin Dillon (42936038),Austin Dillon,42936038,D,7300,Andy's Frozen Custard 340,Nasca,0
+D,William Sawalich (42936039),William Sawalich,42936039,D,7100,Andy's Frozen Custard 340,Nasca,22.76
+D,Rajah Caruth (42936040),Rajah Caruth,42936040,D,7000,Andy's Frozen Custard 340,Nasca,24.38
+D,Parker Retzlaff (42936041),Parker Retzlaff,42936041,D,6900,Andy's Frozen Custard 340,Nasca,32.34
+D,Harrison Burton (42936042),Harrison Burton,42936042,D,6700,Andy's Frozen Custard 340,Nasca,15.06
+D,Jeb Burton (42936043),Jeb Burton,42936043,D,6600,Andy's Frozen Custard 340,Nasca,24.42
+D,Dean Thompson (42936044),Dean Thompson,42936044,D,6500,Andy's Frozen Custard 340,Nasca,23.96
+D,Anthony Alfredo (42936045),Anthony Alfredo,42936045,D,6400,Andy's Frozen Custard 340,Nasca,16.63
+D,Jeremy Clements (42936046),Jeremy Clements,42936046,D,6300,Andy's Frozen Custard 340,Nasca,21.36
+D,Austin Green (42936047),Austin Green,42936047,D,6200,Andy's Frozen Custard 340,Nasca,16.64
+D,Patrick Staropoli (42936048),Patrick Staropoli,42936048,D,6100,Andy's Frozen Custard 340,Nasca,19.38
+D,Kyle Sieg (42936049),Kyle Sieg,42936049,D,6000,Andy's Frozen Custard 340,Nasca,13.98
+D,Brennan Poole (42936050),Brennan Poole,42936050,D,5900,Andy's Frozen Custard 340,Nasca,32.6
+D,Blaine Perkins (42936051),Blaine Perkins,42936051,D,5800,Andy's Frozen Custard 340,Nasca,24.16
+D,Josh Bilicki (42936052),Josh Bilicki,42936052,D,5700,Andy's Frozen Custard 340,Nasca,22.8
+D,Josh Williams (42936053),Josh Williams,42936053,D,5600,Andy's Frozen Custard 340,Nasca,15.07
+D,Ryan Ellis (42936054),Ryan Ellis,42936054,D,5500,Andy's Frozen Custard 340,Nasca,17.58
+D,Lavar Scott (42936055),Lavar Scott,42936055,D,5400,Andy's Frozen Custard 340,Nasca,23.02
+D,David Starr (42936056),David Starr,42936056,D,5300,Andy's Frozen Custard 340,Nasca,-15
+D,Garrett Smithley (42936057),Garrett Smithley,42936057,D,5200,Andy's Frozen Custard 340,Nasca,19.57
+D,Joey Gase (42936058),Joey Gase,42936058,D,5100,Andy's Frozen Custard 340,Nasca,19.82
+D,Mason Maggio (42936059),Mason Maggio,42936059,D,5000,Andy's Frozen Custard 340,Nasca,8.35
+D,Dawson Cram (42936060),Dawson Cram,42936060,D,4900,Andy's Frozen Custard 340,Nasca,8.48
+D,Brad Perez (42936061),Brad Perez,42936061,D,4800,Andy's Frozen Custard 340,Nasca,34.9

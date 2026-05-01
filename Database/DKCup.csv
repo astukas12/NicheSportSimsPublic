@@ -1,38 +1,39 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Denny Hamlin (42657720),Denny Hamlin,42657720,D,11000,AdventHealth 400,Nasca,54.79
-D,Christopher Bell (42657721),Christopher Bell,42657721,D,10700,AdventHealth 400,Nasca,42.56
-D,Kyle Larson (42657722),Kyle Larson,42657722,D,10500,AdventHealth 400,Nasca,44.02
-D,Ryan Blaney (42657723),Ryan Blaney,42657723,D,10200,AdventHealth 400,Nasca,54.28
-D,William Byron (42657724),William Byron,42657724,D,10000,AdventHealth 400,Nasca,36.34
-D,Chase Briscoe (42657725),Chase Briscoe,42657725,D,9800,AdventHealth 400,Nasca,28.37
-D,Tyler Reddick (42657726),Tyler Reddick,42657726,D,9500,AdventHealth 400,Nasca,48.78
-D,Ty Gibbs (42657727),Ty Gibbs,42657727,D,9200,AdventHealth 400,Nasca,39.5
-D,Chase Elliott (42657728),Chase Elliott,42657728,D,9000,AdventHealth 400,Nasca,38.52
-D,Joey Logano (42657729),Joey Logano,42657729,D,8700,AdventHealth 400,Nasca,33.56
-D,Bubba Wallace (42657730),Bubba Wallace,42657730,D,8500,AdventHealth 400,Nasca,28.06
-D,Chris Buescher (42657731),Chris Buescher,42657731,D,8300,AdventHealth 400,Nasca,32.37
-D,Ross Chastain (42657732),Ross Chastain,42657732,D,8100,AdventHealth 400,Nasca,24.3
-D,Brad Keselowski (42657733),Brad Keselowski,42657733,D,7900,AdventHealth 400,Nasca,47.53
-D,Carson Hocevar (42657734),Carson Hocevar,42657734,D,7700,AdventHealth 400,Nasca,30.12
-D,Alex Bowman (42657735),Alex Bowman,42657735,D,7600,AdventHealth 400,Nasca,12.08
-D,Ryan Preece (42657736),Ryan Preece,42657736,D,7500,AdventHealth 400,Nasca,41.65
-D,Kyle Busch (42657737),Kyle Busch,42657737,D,7300,AdventHealth 400,Nasca,19.25
-D,Austin Cindric (42657738),Austin Cindric,42657738,D,7200,AdventHealth 400,Nasca,21.04
-D,Josh Berry (42657739),Josh Berry,42657739,D,7000,AdventHealth 400,Nasca,19.35
-D,Corey Heim (42657740),Corey Heim,42657740,D,6900,AdventHealth 400,Nasca,18.62
-D,Connor Zilisch (42657741),Connor Zilisch,42657741,D,6800,AdventHealth 400,Nasca,18.06
-D,Daniel Suarez (42657742),Daniel Suarez,42657742,D,6700,AdventHealth 400,Nasca,31.74
-D,Erik Jones (42657743),Erik Jones,42657743,D,6600,AdventHealth 400,Nasca,28.04
-D,Zane Smith (42657744),Zane Smith,42657744,D,6500,AdventHealth 400,Nasca,20.23
-D,Shane Van Gisbergen (42657745),Shane Van Gisbergen,42657745,D,6400,AdventHealth 400,Nasca,30.49
-D,Michael McDowell (42657746),Michael McDowell,42657746,D,6200,AdventHealth 400,Nasca,28.49
-D,AJ Allmendinger (42657747),AJ Allmendinger,42657747,D,6100,AdventHealth 400,Nasca,29.99
-D,John H. Nemechek (42657748),John H. Nemechek,42657748,D,6000,AdventHealth 400,Nasca,20.83
-D,Todd Gilliland (42657749),Todd Gilliland,42657749,D,5800,AdventHealth 400,Nasca,28.06
-D,Austin Dillon (42657750),Austin Dillon,42657750,D,5700,AdventHealth 400,Nasca,24.8
-D,Ricky Stenhouse Jr (42657751),Ricky Stenhouse Jr,42657751,D,5600,AdventHealth 400,Nasca,19.97
-D,Noah Gragson (42657752),Noah Gragson,42657752,D,5400,AdventHealth 400,Nasca,24.53
-D,Riley Herbst (42657753),Riley Herbst,42657753,D,5200,AdventHealth 400,Nasca,15.47
-D,Cole Custer (42657754),Cole Custer,42657754,D,5100,AdventHealth 400,Nasca,17.36
-D,Ty Dillon (42657755),Ty Dillon,42657755,D,5000,AdventHealth 400,Nasca,23.96
-D,Cody Ware (42657756),Cody Ware,42657756,D,4800,AdventHealth 400,Nasca,17.79
+D,Denny Hamlin (42936138),Denny Hamlin,42936138,D,11000,Würth 400 presented by LIQUI MOLY,Nasca,55.12
+D,Tyler Reddick (42936139),Tyler Reddick,42936139,D,10700,Würth 400 presented by LIQUI MOLY,Nasca,46.96
+D,Kyle Larson (42936140),Kyle Larson,42936140,D,10500,Würth 400 presented by LIQUI MOLY,Nasca,39.83
+D,Ryan Blaney (42936141),Ryan Blaney,42936141,D,10200,Würth 400 presented by LIQUI MOLY,Nasca,44.02
+D,Christopher Bell (42936142),Christopher Bell,42936142,D,10000,Würth 400 presented by LIQUI MOLY,Nasca,40.88
+D,William Byron (42936143),William Byron,42936143,D,9700,Würth 400 presented by LIQUI MOLY,Nasca,32.16
+D,Chase Elliott (42936144),Chase Elliott,42936144,D,9500,Würth 400 presented by LIQUI MOLY,Nasca,39.56
+D,Joey Logano (42936145),Joey Logano,42936145,D,9200,Würth 400 presented by LIQUI MOLY,Nasca,26.78
+D,Chase Briscoe (42936146),Chase Briscoe,42936146,D,9000,Würth 400 presented by LIQUI MOLY,Nasca,26.63
+D,Ty Gibbs (42936147),Ty Gibbs,42936147,D,8700,Würth 400 presented by LIQUI MOLY,Nasca,34.38
+D,Carson Hocevar (42936148),Carson Hocevar,42936148,D,8500,Würth 400 presented by LIQUI MOLY,Nasca,33.14
+D,Bubba Wallace (42936149),Bubba Wallace,42936149,D,8300,Würth 400 presented by LIQUI MOLY,Nasca,25.16
+D,Chris Buescher (42936150),Chris Buescher,42936150,D,8100,Würth 400 presented by LIQUI MOLY,Nasca,34.47
+D,Brad Keselowski (42936151),Brad Keselowski,42936151,D,8000,Würth 400 presented by LIQUI MOLY,Nasca,42.46
+D,Ross Chastain (42936152),Ross Chastain,42936152,D,7800,Würth 400 presented by LIQUI MOLY,Nasca,27.63
+D,Ryan Preece (42936153),Ryan Preece,42936153,D,7600,Würth 400 presented by LIQUI MOLY,Nasca,39.51
+D,Alex Bowman (42936154),Alex Bowman,42936154,D,7400,Würth 400 presented by LIQUI MOLY,Nasca,21.48
+D,Austin Cindric (42936155),Austin Cindric,42936155,D,7200,Würth 400 presented by LIQUI MOLY,Nasca,25.44
+D,Daniel Suarez (42936156),Daniel Suarez,42936156,D,7000,Würth 400 presented by LIQUI MOLY,Nasca,30.66
+D,Josh Berry (42936157),Josh Berry,42936157,D,6900,Würth 400 presented by LIQUI MOLY,Nasca,17.86
+D,Kyle Busch (42936158),Kyle Busch,42936158,D,6800,Würth 400 presented by LIQUI MOLY,Nasca,20.64
+D,Corey Heim (42936159),Corey Heim,42936159,D,6700,Würth 400 presented by LIQUI MOLY,Nasca,25.35
+D,Austin Dillon (42936160),Austin Dillon,42936160,D,6500,Würth 400 presented by LIQUI MOLY,Nasca,25.62
+D,Michael McDowell (42936161),Michael McDowell,42936161,D,6400,Würth 400 presented by LIQUI MOLY,Nasca,23.65
+D,Erik Jones (42936162),Erik Jones,42936162,D,6300,Würth 400 presented by LIQUI MOLY,Nasca,26.1
+D,Connor Zilisch (42936163),Connor Zilisch,42936163,D,6200,Würth 400 presented by LIQUI MOLY,Nasca,18.66
+D,AJ Allmendinger (42936164),AJ Allmendinger,42936164,D,6100,Würth 400 presented by LIQUI MOLY,Nasca,29.82
+D,Zane Smith (42936165),Zane Smith,42936165,D,5900,Würth 400 presented by LIQUI MOLY,Nasca,23.24
+D,John H. Nemechek (42936166),John H. Nemechek,42936166,D,5800,Würth 400 presented by LIQUI MOLY,Nasca,21.93
+D,Noah Gragson (42936167),Noah Gragson,42936167,D,5700,Würth 400 presented by LIQUI MOLY,Nasca,26.88
+D,Ricky Stenhouse Jr (42936168),Ricky Stenhouse Jr,42936168,D,5500,Würth 400 presented by LIQUI MOLY,Nasca,22.91
+D,Todd Gilliland (42936169),Todd Gilliland,42936169,D,5400,Würth 400 presented by LIQUI MOLY,Nasca,30.1
+D,Shane Van Gisbergen (42936170),Shane Van Gisbergen,42936170,D,5300,Würth 400 presented by LIQUI MOLY,Nasca,27.58
+D,Riley Herbst (42936171),Riley Herbst,42936171,D,5200,Würth 400 presented by LIQUI MOLY,Nasca,17
+D,Ty Dillon (42936172),Ty Dillon,42936172,D,5000,Würth 400 presented by LIQUI MOLY,Nasca,25.83
+D,Cole Custer (42936173),Cole Custer,42936173,D,4900,Würth 400 presented by LIQUI MOLY,Nasca,16.28
+D,Cody Ware (42936174),Cody Ware,42936174,D,4700,Würth 400 presented by LIQUI MOLY,Nasca,18.38
+D,Chad Finchum (42936175),Chad Finchum,42936175,D,4500,Würth 400 presented by LIQUI MOLY,Nasca,17.12
