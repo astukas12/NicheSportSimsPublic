@@ -1,39 +1,37 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Denny Hamlin (42936138),Denny Hamlin,42936138,D,11000,Würth 400 presented by LIQUI MOLY,Nasca,55.12
-D,Tyler Reddick (42936139),Tyler Reddick,42936139,D,10700,Würth 400 presented by LIQUI MOLY,Nasca,46.96
-D,Kyle Larson (42936140),Kyle Larson,42936140,D,10500,Würth 400 presented by LIQUI MOLY,Nasca,39.83
-D,Ryan Blaney (42936141),Ryan Blaney,42936141,D,10200,Würth 400 presented by LIQUI MOLY,Nasca,44.02
-D,Christopher Bell (42936142),Christopher Bell,42936142,D,10000,Würth 400 presented by LIQUI MOLY,Nasca,40.88
-D,William Byron (42936143),William Byron,42936143,D,9700,Würth 400 presented by LIQUI MOLY,Nasca,32.16
-D,Chase Elliott (42936144),Chase Elliott,42936144,D,9500,Würth 400 presented by LIQUI MOLY,Nasca,39.56
-D,Joey Logano (42936145),Joey Logano,42936145,D,9200,Würth 400 presented by LIQUI MOLY,Nasca,26.78
-D,Chase Briscoe (42936146),Chase Briscoe,42936146,D,9000,Würth 400 presented by LIQUI MOLY,Nasca,26.63
-D,Ty Gibbs (42936147),Ty Gibbs,42936147,D,8700,Würth 400 presented by LIQUI MOLY,Nasca,34.38
-D,Carson Hocevar (42936148),Carson Hocevar,42936148,D,8500,Würth 400 presented by LIQUI MOLY,Nasca,33.14
-D,Bubba Wallace (42936149),Bubba Wallace,42936149,D,8300,Würth 400 presented by LIQUI MOLY,Nasca,25.16
-D,Chris Buescher (42936150),Chris Buescher,42936150,D,8100,Würth 400 presented by LIQUI MOLY,Nasca,34.47
-D,Brad Keselowski (42936151),Brad Keselowski,42936151,D,8000,Würth 400 presented by LIQUI MOLY,Nasca,42.46
-D,Ross Chastain (42936152),Ross Chastain,42936152,D,7800,Würth 400 presented by LIQUI MOLY,Nasca,27.63
-D,Ryan Preece (42936153),Ryan Preece,42936153,D,7600,Würth 400 presented by LIQUI MOLY,Nasca,39.51
-D,Alex Bowman (42936154),Alex Bowman,42936154,D,7400,Würth 400 presented by LIQUI MOLY,Nasca,21.48
-D,Austin Cindric (42936155),Austin Cindric,42936155,D,7200,Würth 400 presented by LIQUI MOLY,Nasca,25.44
-D,Daniel Suarez (42936156),Daniel Suarez,42936156,D,7000,Würth 400 presented by LIQUI MOLY,Nasca,30.66
-D,Josh Berry (42936157),Josh Berry,42936157,D,6900,Würth 400 presented by LIQUI MOLY,Nasca,17.86
-D,Kyle Busch (42936158),Kyle Busch,42936158,D,6800,Würth 400 presented by LIQUI MOLY,Nasca,20.64
-D,Corey Heim (42936159),Corey Heim,42936159,D,6700,Würth 400 presented by LIQUI MOLY,Nasca,25.35
-D,Austin Dillon (42936160),Austin Dillon,42936160,D,6500,Würth 400 presented by LIQUI MOLY,Nasca,25.62
-D,Michael McDowell (42936161),Michael McDowell,42936161,D,6400,Würth 400 presented by LIQUI MOLY,Nasca,23.65
-D,Erik Jones (42936162),Erik Jones,42936162,D,6300,Würth 400 presented by LIQUI MOLY,Nasca,26.1
-D,Connor Zilisch (42936163),Connor Zilisch,42936163,D,6200,Würth 400 presented by LIQUI MOLY,Nasca,18.66
-D,AJ Allmendinger (42936164),AJ Allmendinger,42936164,D,6100,Würth 400 presented by LIQUI MOLY,Nasca,29.82
-D,Zane Smith (42936165),Zane Smith,42936165,D,5900,Würth 400 presented by LIQUI MOLY,Nasca,23.24
-D,John H. Nemechek (42936166),John H. Nemechek,42936166,D,5800,Würth 400 presented by LIQUI MOLY,Nasca,21.93
-D,Noah Gragson (42936167),Noah Gragson,42936167,D,5700,Würth 400 presented by LIQUI MOLY,Nasca,26.88
-D,Ricky Stenhouse Jr (42936168),Ricky Stenhouse Jr,42936168,D,5500,Würth 400 presented by LIQUI MOLY,Nasca,22.91
-D,Todd Gilliland (42936169),Todd Gilliland,42936169,D,5400,Würth 400 presented by LIQUI MOLY,Nasca,30.1
-D,Shane Van Gisbergen (42936170),Shane Van Gisbergen,42936170,D,5300,Würth 400 presented by LIQUI MOLY,Nasca,27.58
-D,Riley Herbst (42936171),Riley Herbst,42936171,D,5200,Würth 400 presented by LIQUI MOLY,Nasca,17
-D,Ty Dillon (42936172),Ty Dillon,42936172,D,5000,Würth 400 presented by LIQUI MOLY,Nasca,25.83
-D,Cole Custer (42936173),Cole Custer,42936173,D,4900,Würth 400 presented by LIQUI MOLY,Nasca,16.28
-D,Cody Ware (42936174),Cody Ware,42936174,D,4700,Würth 400 presented by LIQUI MOLY,Nasca,18.38
-D,Chad Finchum (42936175),Chad Finchum,42936175,D,4500,Würth 400 presented by LIQUI MOLY,Nasca,17.12
+D,Denny Hamlin (43056077),Denny Hamlin,43056077,D,11000,NASCAR All-Star Race,Nasca,53.91
+D,Kyle Larson (43056078),Kyle Larson,43056078,D,10500,NASCAR All-Star Race,Nasca,34.36
+D,Ryan Blaney (43056079),Ryan Blaney,43056079,D,10200,NASCAR All-Star Race,Nasca,44.17
+D,Chase Elliott (43056080),Chase Elliott,43056080,D,10000,NASCAR All-Star Race,Nasca,42.26
+D,Christopher Bell (43056081),Christopher Bell,43056081,D,9700,NASCAR All-Star Race,Nasca,34.36
+D,Tyler Reddick (43056082),Tyler Reddick,43056082,D,9500,NASCAR All-Star Race,Nasca,47.63
+D,William Byron (43056083),William Byron,43056083,D,9000,NASCAR All-Star Race,Nasca,29.41
+D,Chase Briscoe (43056084),Chase Briscoe,43056084,D,8700,NASCAR All-Star Race,Nasca,26.7
+D,Ty Gibbs (43056085),Ty Gibbs,43056085,D,8500,NASCAR All-Star Race,Nasca,32.36
+D,Alex Bowman (43056086),Alex Bowman,43056086,D,8300,NASCAR All-Star Race,Nasca,24.02
+D,Joey Logano (43056087),Joey Logano,43056087,D,8000,NASCAR All-Star Race,Nasca,20.3
+D,Chris Buescher (43056088),Chris Buescher,43056088,D,7800,NASCAR All-Star Race,Nasca,34.8
+D,Carson Hocevar (43056089),Carson Hocevar,43056089,D,7700,NASCAR All-Star Race,Nasca,31.86
+D,Ross Chastain (43056090),Ross Chastain,43056090,D,7600,NASCAR All-Star Race,Nasca,23.64
+D,Brad Keselowski (43056091),Brad Keselowski,43056091,D,7500,NASCAR All-Star Race,Nasca,39.99
+D,Kyle Busch (43056092),Kyle Busch,43056092,D,7300,NASCAR All-Star Race,Nasca,21.93
+D,Bubba Wallace (43056093),Bubba Wallace,43056093,D,7200,NASCAR All-Star Race,Nasca,26.24
+D,Ryan Preece (43056094),Ryan Preece,43056094,D,7100,NASCAR All-Star Race,Nasca,39.58
+D,Josh Berry (43056095),Josh Berry,43056095,D,7000,NASCAR All-Star Race,Nasca,16.66
+D,Connor Zilisch (43056096),Connor Zilisch,43056096,D,6800,NASCAR All-Star Race,Nasca,18.63
+D,Austin Cindric (43056097),Austin Cindric,43056097,D,6700,NASCAR All-Star Race,Nasca,25.74
+D,Michael McDowell (43056098),Michael McDowell,43056098,D,6600,NASCAR All-Star Race,Nasca,24.15
+D,Shane Van Gisbergen (43056099),Shane Van Gisbergen,43056099,D,6500,NASCAR All-Star Race,Nasca,32.02
+D,Noah Gragson (43056100),Noah Gragson,43056100,D,6400,NASCAR All-Star Race,Nasca,26.43
+D,Austin Dillon (43056101),Austin Dillon,43056101,D,6300,NASCAR All-Star Race,Nasca,29.31
+D,Daniel Suarez (43056102),Daniel Suarez,43056102,D,6200,NASCAR All-Star Race,Nasca,31.16
+D,Erik Jones (43056103),Erik Jones,43056103,D,6100,NASCAR All-Star Race,Nasca,27.71
+D,John H. Nemechek (43056104),John H. Nemechek,43056104,D,6000,NASCAR All-Star Race,Nasca,24.32
+D,Ricky Stenhouse Jr (43056105),Ricky Stenhouse Jr,43056105,D,5900,NASCAR All-Star Race,Nasca,22.15
+D,Zane Smith (43056106),Zane Smith,43056106,D,5700,NASCAR All-Star Race,Nasca,25.31
+D,Todd Gilliland (43056107),Todd Gilliland,43056107,D,5600,NASCAR All-Star Race,Nasca,28.58
+D,AJ Allmendinger (43056108),AJ Allmendinger,43056108,D,5500,NASCAR All-Star Race,Nasca,29.95
+D,Riley Herbst (43056109),Riley Herbst,43056109,D,5400,NASCAR All-Star Race,Nasca,19.27
+D,Cole Custer (43056110),Cole Custer,43056110,D,5300,NASCAR All-Star Race,Nasca,16.08
+D,Ty Dillon (43056111),Ty Dillon,43056111,D,5100,NASCAR All-Star Race,Nasca,24.55
+D,Cody Ware (43056112),Cody Ware,43056112,D,5000,NASCAR All-Star Race,Nasca,16.63

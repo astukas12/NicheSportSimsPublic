@@ -1,39 +1,37 @@
 Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
-D,Kyle Larson (42936024),Kyle Larson,42936024,D,16000,Andy's Frozen Custard 340,Nasca,95.45
-D,Justin Allgaier (42936025),Justin Allgaier,42936025,D,12000,Andy's Frozen Custard 340,Nasca,48.72
-D,Connor Zilisch (42936026),Connor Zilisch,42936026,D,11000,Andy's Frozen Custard 340,Nasca,45.05
-D,Jesse Love (42936027),Jesse Love,42936027,D,10000,Andy's Frozen Custard 340,Nasca,41.89
-D,Sheldon Creed (42936028),Sheldon Creed,42936028,D,9700,Andy's Frozen Custard 340,Nasca,43.87
-D,Brandon Jones (42936029),Brandon Jones,42936029,D,9500,Andy's Frozen Custard 340,Nasca,32.56
-D,Brent Crews (42936030),Brent Crews,42936030,D,9200,Andy's Frozen Custard 340,Nasca,39.18
-D,Carson Kvapil (42936031),Carson Kvapil,42936031,D,9000,Andy's Frozen Custard 340,Nasca,21.84
-D,Corey Day (42936032),Corey Day,42936032,D,8700,Andy's Frozen Custard 340,Nasca,44.36
-D,Taylor Gray (42936033),Taylor Gray,42936033,D,8500,Andy's Frozen Custard 340,Nasca,24.84
-D,Austin Hill (42936034),Austin Hill,42936034,D,8200,Andy's Frozen Custard 340,Nasca,31.26
-D,Sam Mayer (42936035),Sam Mayer,42936035,D,8000,Andy's Frozen Custard 340,Nasca,14.04
-D,Sammy Smith (42936036),Sammy Smith,42936036,D,7800,Andy's Frozen Custard 340,Nasca,37.96
-D,Ryan Sieg (42936037),Ryan Sieg,42936037,D,7500,Andy's Frozen Custard 340,Nasca,26.8
-D,Austin Dillon (42936038),Austin Dillon,42936038,D,7300,Andy's Frozen Custard 340,Nasca,0
-D,William Sawalich (42936039),William Sawalich,42936039,D,7100,Andy's Frozen Custard 340,Nasca,22.76
-D,Rajah Caruth (42936040),Rajah Caruth,42936040,D,7000,Andy's Frozen Custard 340,Nasca,24.38
-D,Parker Retzlaff (42936041),Parker Retzlaff,42936041,D,6900,Andy's Frozen Custard 340,Nasca,32.34
-D,Harrison Burton (42936042),Harrison Burton,42936042,D,6700,Andy's Frozen Custard 340,Nasca,15.06
-D,Jeb Burton (42936043),Jeb Burton,42936043,D,6600,Andy's Frozen Custard 340,Nasca,24.42
-D,Dean Thompson (42936044),Dean Thompson,42936044,D,6500,Andy's Frozen Custard 340,Nasca,23.96
-D,Anthony Alfredo (42936045),Anthony Alfredo,42936045,D,6400,Andy's Frozen Custard 340,Nasca,16.63
-D,Jeremy Clements (42936046),Jeremy Clements,42936046,D,6300,Andy's Frozen Custard 340,Nasca,21.36
-D,Austin Green (42936047),Austin Green,42936047,D,6200,Andy's Frozen Custard 340,Nasca,16.64
-D,Patrick Staropoli (42936048),Patrick Staropoli,42936048,D,6100,Andy's Frozen Custard 340,Nasca,19.38
-D,Kyle Sieg (42936049),Kyle Sieg,42936049,D,6000,Andy's Frozen Custard 340,Nasca,13.98
-D,Brennan Poole (42936050),Brennan Poole,42936050,D,5900,Andy's Frozen Custard 340,Nasca,32.6
-D,Blaine Perkins (42936051),Blaine Perkins,42936051,D,5800,Andy's Frozen Custard 340,Nasca,24.16
-D,Josh Bilicki (42936052),Josh Bilicki,42936052,D,5700,Andy's Frozen Custard 340,Nasca,22.8
-D,Josh Williams (42936053),Josh Williams,42936053,D,5600,Andy's Frozen Custard 340,Nasca,15.07
-D,Ryan Ellis (42936054),Ryan Ellis,42936054,D,5500,Andy's Frozen Custard 340,Nasca,17.58
-D,Lavar Scott (42936055),Lavar Scott,42936055,D,5400,Andy's Frozen Custard 340,Nasca,23.02
-D,David Starr (42936056),David Starr,42936056,D,5300,Andy's Frozen Custard 340,Nasca,-15
-D,Garrett Smithley (42936057),Garrett Smithley,42936057,D,5200,Andy's Frozen Custard 340,Nasca,19.57
-D,Joey Gase (42936058),Joey Gase,42936058,D,5100,Andy's Frozen Custard 340,Nasca,19.82
-D,Mason Maggio (42936059),Mason Maggio,42936059,D,5000,Andy's Frozen Custard 340,Nasca,8.35
-D,Dawson Cram (42936060),Dawson Cram,42936060,D,4900,Andy's Frozen Custard 340,Nasca,8.48
-D,Brad Perez (42936061),Brad Perez,42936061,D,4800,Andy's Frozen Custard 340,Nasca,34.9
+D,Kyle Busch (43055861),Kyle Busch,43055861,D,11700,ECOSAVE 200,Nasca,52.78
+D,Kaden Honeycutt (43055862),Kaden Honeycutt,43055862,D,11500,ECOSAVE 200,Nasca,39.27
+D,Christopher Bell (43055863),Christopher Bell,43055863,D,11000,ECOSAVE 200,Nasca,65.68
+D,Carson Hocevar (43055864),Carson Hocevar,43055864,D,10700,ECOSAVE 200,Nasca,20.88
+D,Layne Riggs (43055865),Layne Riggs,43055865,D,10500,ECOSAVE 200,Nasca,36.97
+D,Ross Chastain (43055866),Ross Chastain,43055866,D,10000,ECOSAVE 200,Nasca,46.32
+D,Chandler Smith (43055867),Chandler Smith,43055867,D,9500,ECOSAVE 200,Nasca,48.43
+D,Ty Majeski (43055868),Ty Majeski,43055868,D,9200,ECOSAVE 200,Nasca,21.49
+D,Giovanni Ruggiero (43055869),Giovanni Ruggiero,43055869,D,9000,ECOSAVE 200,Nasca,30.37
+D,Christian Eckes (43055870),Christian Eckes,43055870,D,8800,ECOSAVE 200,Nasca,40.88
+D,Brandon Jones (43055871),Brandon Jones,43055871,D,8500,ECOSAVE 200,Nasca,58.9
+D,Clint Bowyer (43055872),Clint Bowyer,43055872,D,8000,ECOSAVE 200,Nasca,0
+D,William Sawalich (43055873),William Sawalich,43055873,D,7800,ECOSAVE 200,Nasca,42.52
+D,Grant Enfinger (43055874),Grant Enfinger,43055874,D,7500,ECOSAVE 200,Nasca,12.22
+D,Tyler Ankrum (43055875),Tyler Ankrum,43055875,D,7300,ECOSAVE 200,Nasca,23.84
+D,Ben Rhodes (43055876),Ben Rhodes,43055876,D,7100,ECOSAVE 200,Nasca,30.72
+D,Tanner Gray (43055877),Tanner Gray,43055877,D,7000,ECOSAVE 200,Nasca,11.13
+D,Daniel Hemric (43055878),Daniel Hemric,43055878,D,6900,ECOSAVE 200,Nasca,31.48
+D,Stewart Friesen (43055879),Stewart Friesen,43055879,D,6700,ECOSAVE 200,Nasca,25.07
+D,Jake Garcia (43055880),Jake Garcia,43055880,D,6600,ECOSAVE 200,Nasca,18.48
+D,Justin Haley (43055881),Justin Haley,43055881,D,6500,ECOSAVE 200,Nasca,28.98
+D,Corey LaJoie (43055882),Corey LaJoie,43055882,D,6300,ECOSAVE 200,Nasca,20.97
+D,Andres Perez De Lara (43055883),Andres Perez De Lara,43055883,D,6200,ECOSAVE 200,Nasca,21.39
+D,Parker Eatmon (43055884),Parker Eatmon,43055884,D,6100,ECOSAVE 200,Nasca,-4
+D,Brenden Queen (43055885),Brenden Queen,43055885,D,6000,ECOSAVE 200,Nasca,33.86
+D,Cole Butcher (43055886),Cole Butcher,43055886,D,5900,ECOSAVE 200,Nasca,8.79
+D,Dawson Sutton (43055887),Dawson Sutton,43055887,D,5700,ECOSAVE 200,Nasca,25.87
+D,Kris Wright (43055888),Kris Wright,43055888,D,5600,ECOSAVE 200,Nasca,16.63
+D,Luke Baldwin (43055889),Luke Baldwin,43055889,D,5500,ECOSAVE 200,Nasca,13
+D,Mini Tyrrell (43055890),Mini Tyrrell,43055890,D,5400,ECOSAVE 200,Nasca,27.69
+D,Spencer Boyd (43055891),Spencer Boyd,43055891,D,5200,ECOSAVE 200,Nasca,23.67
+D,Caleb Costner (43055892),Caleb Costner,43055892,D,5100,ECOSAVE 200,Nasca,17
+D,Frankie Muniz (43055893),Frankie Muniz,43055893,D,5000,ECOSAVE 200,Nasca,22.14
+D,Dystany Spurlock (43055894),Dystany Spurlock,43055894,D,4800,ECOSAVE 200,Nasca,0
+D,Toni Breidinger (43055895),Toni Breidinger,43055895,D,4600,ECOSAVE 200,Nasca,34
+D,Natalie Decker (43055896),Natalie Decker,43055896,D,4500,ECOSAVE 200,Nasca,5
